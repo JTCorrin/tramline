@@ -7,7 +7,7 @@ bun.lockb
 
 # Generated
 **/drizzle/meta/
-**/.svelte-kit/
+**/.svelte-kit*/
 **/build/
 apps/web/src/lib/components/ui/
 

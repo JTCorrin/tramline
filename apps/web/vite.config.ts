@@ -5,6 +5,17 @@ import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { CSP_DIRECTIVES } from './src/lib/server/security.ts';
 
+/**
+ * Test runs generate SvelteKit's files in their own directory. Sharing
+ * `.svelte-kit` with a running `pnpm dev` makes the dev server reload its
+ * generated env module mid-run and lose its configuration.
+ */
+const outDir = process.env.VITEST
+	? '.svelte-kit-vitest'
+	: process.env.TRAMLINE_E2E
+		? '.svelte-kit-e2e'
+		: '.svelte-kit';
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
@@ -14,6 +25,8 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
+
+			outDir,
 
 			// Tramline is a long-lived process (reconciler, job queue, SSE, agent sockets), so it runs on Node.
 			adapter: adapter(),

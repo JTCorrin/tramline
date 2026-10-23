@@ -25,7 +25,9 @@ export default defineConfig({
 				TRAMLINE_SECRET_KEY: 'e2e-only-secret-key-not-for-production-use',
 				TRAMLINE_URL: 'http://localhost:4173',
 				TRAMLINE_INGRESS_PORT: String(INGRESS_PORT),
-				TRAMLINE_AUTH_RATE_LIMIT: 'false'
+				TRAMLINE_AUTH_RATE_LIMIT: 'false',
+				// builds into its own output directory, so a running `pnpm dev` is never disturbed
+				TRAMLINE_E2E: '1'
 			}
 		},
 		...(docker
