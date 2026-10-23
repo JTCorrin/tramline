@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import ProjectCard from '#lib/components/projects/project-card.svelte';
 	import ProjectDialog from '#lib/components/projects/project-dialog.svelte';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
@@ -15,7 +16,8 @@
 	// re-seeded whenever load data changes, e.g. after switching organization
 	const projects = $derived(projectCollection(data.projects));
 
-	let creating = $state(false);
+	// `/?new` (e.g. from the project switcher) opens the new-project dialog
+	let creating = $state(page.url.searchParams.has('new'));
 	let editing = $state<Project>();
 	let deleting = $state<Project>();
 </script>

@@ -28,3 +28,6 @@ playwright-report
 # Tramline local data (SQLite db, logs)
 /data
 apps/web/data
+
+# Coverage
+coverage

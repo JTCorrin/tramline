@@ -7,6 +7,9 @@ import * as schema from './schema';
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
+/** A database handle or an open transaction; helpers that may run inside `db.transaction` take this. */
+export type DbOrTx = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
+
 /** Migrations live in `apps/web/drizzle`; the app is always started from `apps/web`. */
 const MIGRATIONS_DIR = path.resolve('drizzle');
 

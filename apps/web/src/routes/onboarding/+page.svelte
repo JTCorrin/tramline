@@ -21,7 +21,12 @@
 		event.preventDefault();
 		pending = true;
 		error = '';
-		const created = await authClient.organization.create({ name, slug });
+		let created = await authClient.organization.create({ name, slug });
+		if (created.error) {
+			// slugs are unique across the install; fall back to a suffixed one
+			const suffix = Math.random().toString(36).slice(2, 6);
+			created = await authClient.organization.create({ name, slug: `${slug}-${suffix}` });
+		}
 		if (created.error) {
 			error = created.error.message ?? 'Could not create the organization';
 			pending = false;

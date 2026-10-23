@@ -1,3 +1,4 @@
+import type { Secrets } from '../crypto';
 import type { Db } from '../db/client';
 
 /**
@@ -6,6 +7,7 @@ import type { Db } from '../db/client';
  */
 export interface Ctx {
 	db: Db;
+	secrets: Secrets;
 	userId: string;
 	organizationId: string;
 }

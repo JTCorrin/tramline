@@ -1,6 +1,6 @@
 import type { ApiErrorBody, ErrorCode } from '@tramline/contracts';
 
-export type Query = Record<string, string | number | boolean | null | undefined>;
+export type Query = { [key: string]: string | number | boolean | null | undefined };
 
 export interface ClientOptions {
 	/** Base URL of the API, e.g. `/api/v1` in the browser or `https://tramline.example.com/api/v1` from the CLI. */

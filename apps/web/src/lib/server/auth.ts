@@ -2,6 +2,7 @@ import { getRequestEvent } from '$app/server';
 import {
 	GITHUB_CLIENT_ID,
 	GITHUB_CLIENT_SECRET,
+	TRAMLINE_AUTH_RATE_LIMIT,
 	TRAMLINE_SECRET_KEY,
 	TRAMLINE_URL
 } from '$app/env/private';
@@ -19,6 +20,8 @@ export const auth = betterAuth({
 	secret: TRAMLINE_SECRET_KEY,
 	database: drizzleAdapter(db, { provider: 'sqlite', schema }),
 	emailAndPassword: { enabled: true },
+	// better-auth enables this in production by default; the e2e suite turns it off
+	rateLimit: TRAMLINE_AUTH_RATE_LIMIT ? undefined : { enabled: false },
 	socialProviders: githubAuthEnabled
 		? { github: { clientId: GITHUB_CLIENT_ID!, clientSecret: GITHUB_CLIENT_SECRET! } }
 		: {},

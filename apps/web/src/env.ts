@@ -21,6 +21,11 @@ export const variables = defineEnvVars({
 		description: 'Public URL of this Tramline install, e.g. https://tramline.example.com.',
 		schema: optional
 	},
+	TRAMLINE_AUTH_RATE_LIMIT: {
+		description:
+			'Rate limit sign-in and sign-up attempts in production (default true). Only disable for automated tests.',
+		schema: (value) => value !== 'false'
+	},
 	GITHUB_CLIENT_ID: {
 		description: 'GitHub OAuth app client id. Enables "Continue with GitHub" when set.',
 		schema: optional

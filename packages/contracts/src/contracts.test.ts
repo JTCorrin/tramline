@@ -1,0 +1,89 @@
+import { describe, expect, it } from 'vitest';
+import {
+	CreateProject,
+	CreateService,
+	DEFAULT_SERVICE_CONFIG,
+	ServiceConfigPatch,
+	StageVariables,
+	UpdateProject,
+	mergeConfig,
+	parseReferences,
+	replaceReferences
+} from './index';
+
+describe('variable references', () => {
+	it('parses self, shared and cross-service references, tolerating spaces', () => {
+		expect(parseReferences('postgres://${{PGUSER}}@${{ Postgres.HOST }}:${{shared.PORT}}')).toEqual(
+			[
+				{ namespace: null, key: 'PGUSER' },
+				{ namespace: 'Postgres', key: 'HOST' },
+				{ namespace: 'shared', key: 'PORT' }
+			]
+		);
+	});
+
+	it('ignores malformed references', () => {
+		expect(parseReferences('${PLAIN} ${{ }} ${{1BAD}} {{X}}')).toEqual([]);
+	});
+
+	it('replaces references and blanks unknown ones', () => {
+		const lookup = ({ namespace, key }: { namespace: string | null; key: string }) =>
+			namespace === 'shared' && key === 'A' ? 'one' : undefined;
+		expect(replaceReferences('[${{shared.A}}|${{shared.B}}]', lookup)).toBe('[one|]');
+	});
+});
+
+describe('mergeConfig', () => {
+	it('merges sections shallowly and leaves the base untouched', () => {
+		const merged = mergeConfig(DEFAULT_SERVICE_CONFIG, {
+			deploy: { replicas: 3 },
+			networking: { publicDomain: true }
+		});
+		expect(merged.deploy).toEqual({ ...DEFAULT_SERVICE_CONFIG.deploy, replicas: 3 });
+		expect(merged.networking.publicDomain).toBe(true);
+		expect(DEFAULT_SERVICE_CONFIG.deploy.replicas).toBe(1);
+	});
+
+	it('distinguishes clearing the source from leaving it alone', () => {
+		const withImage = mergeConfig(DEFAULT_SERVICE_CONFIG, {
+			source: { type: 'image', image: 'nginx' }
+		});
+		expect(mergeConfig(withImage, {}).source).toEqual({ type: 'image', image: 'nginx' });
+		expect(mergeConfig(withImage, { source: null }).source).toBeNull();
+	});
+});
+
+describe('schemas', () => {
+	it('trims project names and rejects empty ones', () => {
+		expect(CreateProject.parse({ name: '  Shop ' }).name).toBe('Shop');
+		expect(CreateProject.safeParse({ name: '   ' }).success).toBe(false);
+		expect(UpdateProject.parse({ description: null })).toEqual({ description: null });
+	});
+
+	it('validates service names', () => {
+		const base = { projectId: 'prj_1', kind: 'empty' as const };
+		expect(CreateService.safeParse({ ...base, name: 'api-2_x' }).success).toBe(true);
+		expect(CreateService.safeParse({ ...base, name: 'has space' }).success).toBe(false);
+		expect(CreateService.safeParse({ ...base, name: '-leading' }).success).toBe(false);
+	});
+
+	it('turns blank optional config text into null', () => {
+		expect(ServiceConfigPatch.parse({ deploy: { startCommand: '  ' } })).toEqual({
+			deploy: { startCommand: null }
+		});
+		expect(ServiceConfigPatch.safeParse({ deploy: { replicas: 0 } }).success).toBe(false);
+		expect(ServiceConfigPatch.safeParse({ networking: { port: 70000 } }).success).toBe(false);
+	});
+
+	it('validates variable keys and defaults set/unset', () => {
+		expect(StageVariables.parse({ environmentId: 'env_1' })).toEqual({
+			environmentId: 'env_1',
+			set: {},
+			unset: []
+		});
+		expect(StageVariables.safeParse({ environmentId: 'e', set: { '1BAD': 'x' } }).success).toBe(
+			false
+		);
+		expect(StageVariables.safeParse({ environmentId: 'e', unset: ['OK_KEY'] }).success).toBe(true);
+	});
+});

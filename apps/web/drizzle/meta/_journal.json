@@ -8,6 +8,20 @@
       "when": 1792733302441,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792734746111,
+      "tag": "0001_services",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792735443224,
+      "tag": "0002_backfill_production_environments",
+      "breakpoints": true
     }
   ]
 }

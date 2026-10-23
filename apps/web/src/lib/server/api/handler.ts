@@ -1,9 +1,13 @@
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit';
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
+import { TRAMLINE_SECRET_KEY } from '$app/env/private';
+import { createSecrets } from '../crypto';
 import { db, schema } from '../db';
 import type { Ctx } from '../domain';
 import { AppError, validationFailed } from './errors';
+
+const secrets = createSecrets(TRAMLINE_SECRET_KEY);
 
 /**
  * Wraps an `/api/v1` handler: authenticates the caller, builds the domain
@@ -43,7 +47,14 @@ export function errorResponse(error: unknown) {
 	return Response.json(internal.toBody(), { status: internal.status });
 }
 
-function context(event: RequestEvent): Ctx {
+/** Reads a required query string parameter. */
+export function param(event: RequestEvent, name: string) {
+	const value = event.url.searchParams.get(name);
+	if (!value) throw new AppError('bad_request', `Missing ?${name}= query parameter`);
+	return value;
+}
+
+export function context(event: RequestEvent): Ctx {
 	const { user, session } = event.locals;
 	if (!user || !session) throw new AppError('unauthenticated', 'You need to sign in');
 
@@ -57,5 +68,5 @@ function context(event: RequestEvent): Ctx {
 		.get();
 	if (!membership) throw new AppError('forbidden', 'You are not a member of this organization');
 
-	return { db, userId: user.id, organizationId };
+	return { db, secrets, userId: user.id, organizationId };
 }

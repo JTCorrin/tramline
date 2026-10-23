@@ -4,6 +4,7 @@ import { notFound } from '../api/errors';
 import { project } from '../db/schema';
 import { newId } from '../ids';
 import type { Ctx } from './context';
+import { createDefault as createDefaultEnvironment } from './environments';
 
 type ProjectRow = typeof project.$inferSelect;
 
@@ -35,17 +36,22 @@ export function get(ctx: Ctx, id: string): Project {
 	return toDto(row);
 }
 
+/** Creates a project with its default `production` environment. */
 export function create(ctx: Ctx, input: CreateProject): Project {
-	const row = ctx.db
-		.insert(project)
-		.values({
-			id: newId('project'),
-			organizationId: ctx.organizationId,
-			name: input.name,
-			description: input.description || null
-		})
-		.returning()
-		.get();
+	const row = ctx.db.transaction((tx) => {
+		const created = tx
+			.insert(project)
+			.values({
+				id: newId('project'),
+				organizationId: ctx.organizationId,
+				name: input.name,
+				description: input.description || null
+			})
+			.returning()
+			.get();
+		createDefaultEnvironment(tx, created.id);
+		return created;
+	});
 	return toDto(row);
 }
 

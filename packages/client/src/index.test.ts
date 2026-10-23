@@ -73,3 +73,22 @@ describe('createClient', () => {
 		await expect(client.projects.getAll()).rejects.toMatchObject({ status: 502, code: 'internal' });
 	});
 });
+
+describe('nested resources', () => {
+	it('builds query strings and verb routes', async () => {
+		const fetch = mockFetch(200, {});
+		const client = createClient({ baseUrl: '/api/v1', fetch });
+
+		await client.services.getAll({ projectId: 'prj_1' });
+		await client.services.stageConfig('svc_1', 'env 1', { deploy: { replicas: 2 } });
+		await client.variables.getAll({ environmentId: 'env_1' });
+		await client.environments.deploy('env_1');
+
+		expect(fetch.mock.calls.map(([url, init]) => `${init?.method} ${url}`)).toEqual([
+			'GET /api/v1/services?projectId=prj_1',
+			'PATCH /api/v1/services/svc_1/config?environmentId=env%201',
+			'GET /api/v1/variables?environmentId=env_1',
+			'POST /api/v1/environments/env_1/deploy'
+		]);
+	});
+});
