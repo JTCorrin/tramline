@@ -179,4 +179,57 @@ describe('Converger', () => {
 		expect(runtime.containers.has('tl-dep_9-0')).toBe(true);
 		expect(converger.removalDue).toBe(false); // tl-dep_1-0 is draining
 	});
+
+	it('creates labelled volumes, and stops stateful workloads gracefully', async () => {
+		const { runtime, converger, clock } = setup();
+		const db = desiredContainer({
+			volumes: [{ name: 'tl-vol_1', target: '/var/lib/postgresql/data' }]
+		});
+		await converger.run(desiredState([db]));
+		expect(runtime.volumes.get('tl-vol_1')).toEqual({
+			[LABELS.managed]: 'true',
+			[LABELS.node]: 'node_1',
+			[LABELS.role]: 'volume'
+		});
+		const spec = runtime.containers.get('tl-dep_1-0')!.spec;
+		expect(spec.volumes).toEqual([{ name: 'tl-vol_1', target: '/var/lib/postgresql/data' }]);
+		expect(spec.labels[LABELS.stateful]).toBe('true');
+		expect(await converger.volumes()).toEqual(['tl-vol_1']);
+
+		// no longer wanted: drained, then stopped with time to flush before it is removed
+		await converger.run(desiredState([]));
+		clock.now += 60_000;
+		await converger.run(desiredState([]));
+		expect(runtime.calls).toContain('stop tl-dep_1-0 30');
+		expect(runtime.containers.has('tl-dep_1-0')).toBe(false);
+		// the data stays
+		expect(runtime.volumes.has('tl-vol_1')).toBe(true);
+	});
+
+	it('removes deleted volumes of this node once nothing uses them', async () => {
+		const { runtime, converger, clock } = setup();
+		const db = desiredContainer({ volumes: [{ name: 'tl-vol_1', target: '/data' }] });
+		await converger.run(desiredState([db]));
+		runtime.volumes.set('tl-vol_other', { [LABELS.managed]: 'true', [LABELS.node]: 'node_2' });
+
+		// still mounted while the container drains
+		const deleted = { ...desiredState([]), deletedVolumes: ['tl-vol_1', 'tl-vol_other'] };
+		await converger.run(deleted);
+		expect(runtime.volumes.has('tl-vol_1')).toBe(true);
+
+		clock.now += 60_000;
+		await converger.run(deleted);
+		expect(runtime.volumes.has('tl-vol_1')).toBe(false);
+		// another node's volume is never touched
+		expect(runtime.volumes.has('tl-vol_other')).toBe(true);
+	});
+
+	it('gives stateless workloads a shorter stop timeout', async () => {
+		const { runtime, converger, clock } = setup();
+		await converger.run(desiredState());
+		await converger.run(desiredState([]));
+		clock.now += 60_000;
+		await converger.run(desiredState([]));
+		expect(runtime.calls).toContain('stop tl-dep_1-0 10');
+	});
 });

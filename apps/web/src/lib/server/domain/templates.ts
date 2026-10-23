@@ -12,11 +12,18 @@ export interface DatabaseTemplate {
 	variables: () => Record<string, string>;
 }
 
-const image = (name: string, port: number, startCommand: string | null = null): ServiceConfig => ({
+/** A database image whose data lives on a volume at `mountPath`. */
+const image = (
+	name: string,
+	port: number,
+	mountPath: string,
+	startCommand: string | null = null
+): ServiceConfig => ({
 	...DEFAULT_SERVICE_CONFIG,
 	source: { type: 'image', image: name },
 	deploy: { ...DEFAULT_SERVICE_CONFIG.deploy, startCommand, restartPolicy: 'always' },
-	networking: { port, publicDomain: false }
+	networking: { port, publicDomain: false },
+	volume: { mountPath }
 });
 
 const HOST = '${{TRAMLINE_PRIVATE_DOMAIN}}';
@@ -24,7 +31,7 @@ const HOST = '${{TRAMLINE_PRIVATE_DOMAIN}}';
 export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	postgres: {
 		name: 'Postgres',
-		config: image('postgres:17', 5432),
+		config: image('postgres:17', 5432, '/var/lib/postgresql/data'),
 		variables: () => ({
 			PGUSER: 'postgres',
 			POSTGRES_USER: '${{PGUSER}}',
@@ -39,7 +46,7 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	},
 	mysql: {
 		name: 'MySQL',
-		config: image('mysql:8.4', 3306),
+		config: image('mysql:8.4', 3306, '/var/lib/mysql'),
 		variables: () => ({
 			MYSQL_ROOT_PASSWORD: randomSecret(),
 			MYSQL_DATABASE: 'app',
@@ -50,7 +57,13 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	},
 	redis: {
 		name: 'Redis',
-		config: image('redis:7', 6379, 'redis-server --requirepass $REDIS_PASSWORD'),
+		config: image(
+			'redis:7',
+			6379,
+			'/data',
+			// append-only, so every write survives a restart
+			'redis-server --requirepass $REDIS_PASSWORD --appendonly yes'
+		),
 		variables: () => ({
 			REDIS_PASSWORD: randomSecret(),
 			REDISHOST: HOST,
@@ -60,7 +73,7 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	},
 	mongo: {
 		name: 'MongoDB',
-		config: image('mongo:8', 27017),
+		config: image('mongo:8', 27017, '/data/db'),
 		variables: () => ({
 			MONGO_INITDB_ROOT_USERNAME: 'mongo',
 			MONGO_INITDB_ROOT_PASSWORD: randomSecret(),

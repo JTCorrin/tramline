@@ -92,7 +92,13 @@ export function deployCommit(
 				id: svc.service.id,
 				name: svc.service.name,
 				variables: svc.appliedVariables,
-				builtins: builtinVariables(svc.service, env, config.networking.port, svc.domain)
+				builtins: builtinVariables(
+					svc.service,
+					env,
+					config.networking.port,
+					svc.domain,
+					config.volume?.mountPath ?? null
+				)
 			};
 		})
 	});

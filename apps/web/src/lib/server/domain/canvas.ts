@@ -35,6 +35,7 @@ export function get(ctx: Ctx, environmentId: string): Canvas {
 			status: statuses.get(svc.service.id) ?? 'undeployed',
 			staged: hasStaged(svc.staged),
 			publicDomain: svc.effective.networking.publicDomain,
+			volumeMountPath: svc.effective.volume.mountPath,
 			url: svc.domain ? publicUrl(ctx.settings, svc.domain) : null
 		})),
 		edges

@@ -357,10 +357,33 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
 
 ### Phase 4: Data, variables and networking depth
 
-- Database templates (Postgres/MySQL/Redis/Mongo): image, volume, generated credentials, connection vars, and a canvas "Data" tab with a simple table browser for Postgres.
-- Volumes (attach, size, mount path), sticky placement, and scheduled backups to S3-compatible storage.
-- Full reference-variable resolution snapshotted at deploy time; custom domains (CNAME verification, certs); TCP proxy for databases; duplicate environment.
-- **Exit:** add Postgres + an app that references `${{Postgres.DATABASE_URL}}`. The edge appears, the app connects over private networking, and data survives a redeploy.
+Database templates with generated credentials and connection variables, `${{Service.KEY}}` references with canvas edges, and resolution snapshotted at deploy time already landed in Phase 1. Phase 4 is split in three.
+
+**4a: volumes ✅** (verified on Docker; e2e in CI)
+
+- **One volume per service and environment**, set as a mount path in Settings → Volume (Railway's model). It is a named Docker volume created by the agent and labelled with its node. The path is exposed to the service as `TRAMLINE_VOLUME_MOUNT_PATH`.
+- **Database templates come with one:** Postgres (`/var/lib/postgresql/data`), MySQL (`/var/lib/mysql`), Redis (`/data`, now append-only) and MongoDB (`/data/db`).
+- **Recreate, not swap:** two containers must never share a data directory. For a service with a volume:
+  - The old deployment stops first ("Stopping for dep_…"), and the new one waits until the agent reports the old container gone.
+  - That means a few seconds of downtime per deploy, as on Railway. If the new deployment fails, the old one runs again.
+  - Such a service runs a single replica.
+- **Clean shutdown:** workloads are stopped with SIGTERM before removal, with 30s for services with a volume (10s otherwise), so databases flush to disk.
+- **Sticky placement:** the volume is pinned to the node the service first ran on, and later deployments wait for that node.
+- **Lifecycle:** detaching a volume (clearing the mount path) keeps its data for later. Deleting the service or environment deletes the volume: the agent removes it once no container uses it, and the control plane forgets it when the node stops reporting it.
+- **Exit:** `e2e/data.e2e.ts`: PostgREST connects to Postgres through `${{Postgres.DATABASE_URL}}` over the private network; Postgres is redeployed, finds its existing data ("Skipping initialization"), and PostgREST reconnects.
+- **Deferred:** volume size limits and usage (Docker's local volumes don't enforce a size); volumes for non-root images whose mount path doesn't exist in the image (Docker creates it owned by root).
+
+**4b: backups (next)**
+
+- Scheduled backups of volumes and databases to S3-compatible storage, with restore.
+- Litestream for the control plane's SQLite (moved forward from Phase 9), and restore drills.
+
+**4c: networking and environments**
+
+- Custom domains (CNAME verification, certificates), a TCP proxy for databases, duplicating an environment.
+- Cron services (deferred from Phase 2), watch paths (deferred from Phase 3b), and a "Data" tab with a table browser for Postgres.
+
+- **Exit:** add Postgres + an app that references `${{Postgres.DATABASE_URL}}`. The edge appears, the app connects over private networking, and data survives a redeploy. ✅ (4a)
 
 ### Phase 5: Agent access: API tokens + MCP server
 

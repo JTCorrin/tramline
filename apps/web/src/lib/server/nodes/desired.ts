@@ -11,8 +11,9 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { deployment, serviceInstance } from '../db/schema';
+import { container, deployment, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
+import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
 /** Deployments whose containers should exist. */
 export const RUNNING_STATUSES = ['deploying', 'active', 'crashed'] as const;
@@ -54,6 +55,19 @@ export function buildDesiredState(
 		)
 		.orderBy(deployment.id)
 		.all();
+
+	const reported = new Set(
+		db
+			.select({ deploymentId: container.deploymentId })
+			.from(container)
+			.where(eq(container.nodeId, nodeId))
+			.all()
+			.map((row) => row.deploymentId)
+	);
+	const recreate = recreatePlan(
+		rows.map((row) => row.deployment),
+		reported
+	);
 
 	const containers: DesiredContainer[] = [];
 	const builds: DesiredBuild[] = [];
@@ -97,6 +111,11 @@ export function buildDesiredState(
 		// a built image, or the configured one
 		const image = dep.image ?? (config.source?.type === 'image' ? config.source.image : null);
 		if (!image) continue;
+		// volume services: the old deployment stops before the new one starts
+		if (recreate.stopped.has(dep.id) || recreate.waiting.has(dep.id)) continue;
+		const mountPath = config.volume.mountPath;
+		const vol = mountPath ? volumeFor(db, dep.serviceId, dep.environmentId) : undefined;
+		const volumes = vol && mountPath ? [{ name: volumeName(vol.id), target: mountPath }] : [];
 		const network = networkName(dep.environmentId);
 		networks.add(network);
 		const aliases = [env.TRAMLINE_PRIVATE_DOMAIN, deploymentAlias(dep.id)].filter(
@@ -119,7 +138,8 @@ export function buildDesiredState(
 				port: config.networking.port,
 				healthcheckPath: config.deploy.healthcheckPath,
 				memoryMb: config.deploy.memoryMb,
-				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem
+				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
+				volumes
 			});
 		}
 
@@ -139,6 +159,7 @@ export function buildDesiredState(
 		containers,
 		builds,
 		scans,
+		deletedVolumes: deletedVolumes(db, nodeId),
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

@@ -231,6 +231,7 @@ export class Agent {
 		}
 
 		const desired = this.desired;
+		let volumes: string[] | undefined;
 		if (desired && !this.dockerError) {
 			const heal = Date.now() - this.#lastHeal >= (this.options.healIntervalMs ?? 15_000);
 			if (heal || this.converger.removalDue) {
@@ -241,6 +242,7 @@ export class Agent {
 			await this.health.check(desired, containers);
 			this.logs.sync(containers);
 			this.#startBuilds(desired);
+			volumes = await this.converger.volumes().catch(() => undefined);
 		}
 
 		await this.options.client.report({
@@ -249,6 +251,7 @@ export class Agent {
 					? observe(desired, containers, this.converger, this.health)
 					: [],
 			builds: [...this.builds.values()],
+			volumes,
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError
 		});

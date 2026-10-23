@@ -70,6 +70,32 @@ export class FakeRuntime implements ContainerRuntime {
 		this.#guard(`remove ${name}`);
 		this.containers.delete(name);
 	}
+	stopped: string[] = [];
+	async stop(name: string, timeoutSeconds: number) {
+		this.#guard(`stop ${name} ${timeoutSeconds}`);
+		this.stopped.push(name);
+		const container = this.containers.get(name);
+		if (container) container.status = 'exited';
+	}
+	volumes = new Map<string, Record<string, string>>();
+	async ensureVolume(name: string, labels: Record<string, string>) {
+		if (!this.volumes.has(name)) {
+			this.#guard(`volume ${name}`);
+			this.volumes.set(name, labels);
+		}
+	}
+	async listVolumes() {
+		return [...this.volumes].map(([name, labels]) => ({ name, labels }));
+	}
+	async removeVolume(name: string) {
+		const used = [...this.containers.values()].some((c) =>
+			c.spec.volumes?.some((v) => v.name === name)
+		);
+		if (used) return false;
+		this.#guard(`rm volume ${name}`);
+		this.volumes.delete(name);
+		return true;
+	}
 	async connect(container: string, network: string) {
 		this.#guard(`connect ${container} ${network}`);
 		this.containers.get(container)?.networks.push(network);
@@ -151,6 +177,7 @@ export function desiredContainer(overrides: Partial<DesiredContainer> = {}): Des
 		healthcheckPath: null,
 		memoryMb: null,
 		readOnlyRootFilesystem: false,
+		volumes: [],
 		...overrides
 	};
 }
@@ -166,6 +193,7 @@ export function desiredState(
 		containers,
 		builds,
 		scans: [],
+		deletedVolumes: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

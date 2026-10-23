@@ -9,7 +9,8 @@ export const ID_PREFIXES = {
 	deployment: 'dep',
 	variable: 'var',
 	node: 'node',
-	change: 'chg'
+	change: 'chg',
+	volume: 'vol'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

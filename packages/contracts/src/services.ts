@@ -81,11 +81,28 @@ export const NetworkingConfig = z.object({
 	publicDomain: z.boolean()
 });
 
+/** Absolute path inside the container, e.g. `/var/lib/postgresql/data`. */
+const mountPath = z
+	.string()
+	.trim()
+	.regex(/^\/[^\0]*$/, 'Use an absolute path, like /data')
+	.refine((path) => !['/', '/proc', '/sys', '/dev'].includes(path.replace(/\/+$/, '') || '/'), {
+		message: 'Choose a directory for the data, like /data'
+	})
+	.nullable();
+
+/**
+ * One persistent volume per service and environment. Its data survives
+ * deploys; detaching it (a null mount path) keeps the data for later.
+ */
+export const VolumeConfig = z.object({ mountPath });
+
 export const ServiceConfig = z.object({
 	source: ServiceSource.nullable(),
 	build: BuildConfig,
 	deploy: DeployConfig,
-	networking: NetworkingConfig
+	networking: NetworkingConfig,
+	volume: VolumeConfig
 });
 
 export type ServiceConfig = z.infer<typeof ServiceConfig>;
@@ -95,7 +112,8 @@ export const ServiceConfigPatch = z.object({
 	source: ServiceSource.nullable().optional(),
 	build: BuildConfig.partial().optional(),
 	deploy: DeployConfig.partial().optional(),
-	networking: NetworkingConfig.partial().optional()
+	networking: NetworkingConfig.partial().optional(),
+	volume: VolumeConfig.partial().optional()
 });
 
 export type ServiceConfigPatch = z.infer<typeof ServiceConfigPatch>;
@@ -112,7 +130,8 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		memoryMb: null,
 		readOnlyRootFilesystem: false
 	},
-	networking: { port: null, publicDomain: false }
+	networking: { port: null, publicDomain: false },
+	volume: { mountPath: null }
 };
 
 /** Applies a patch to a config. Used by the server and for optimistic UI. */
@@ -121,7 +140,8 @@ export function mergeConfig(base: ServiceConfig, patch: ServiceConfigPatch): Ser
 		source: patch.source !== undefined ? patch.source : base.source,
 		build: { ...base.build, ...patch.build },
 		deploy: { ...base.deploy, ...patch.deploy },
-		networking: { ...base.networking, ...patch.networking }
+		networking: { ...base.networking, ...patch.networking },
+		volume: { ...base.volume, ...patch.volume }
 	};
 }
 

@@ -45,7 +45,9 @@ export const DesiredContainer = z.object({
 	port: z.number().int().nullable(),
 	healthcheckPath: z.string().nullable(),
 	memoryMb: z.number().int().nullable(),
-	readOnlyRootFilesystem: z.boolean()
+	readOnlyRootFilesystem: z.boolean(),
+	/** Named volumes the agent creates (labelled as its own) and mounts. */
+	volumes: z.array(z.object({ name: z.string(), target: z.string() })).default([])
 });
 
 export type DesiredContainer = z.infer<typeof DesiredContainer>;
@@ -103,6 +105,8 @@ export const DesiredState = z.object({
 	containers: z.array(DesiredContainer),
 	builds: z.array(DesiredBuild),
 	scans: z.array(DesiredScan).default([]),
+	/** Volumes of deleted services and environments; the agent removes them once nothing uses them. */
+	deletedVolumes: z.array(z.string()).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -157,6 +161,8 @@ export type BuildReport = z.infer<typeof BuildReport>;
 export const AgentReport = z.object({
 	containers: z.array(ActualContainer),
 	builds: z.array(BuildReport).default([]),
+	/** Volumes this node's agent manages that exist on the node; absent when Docker can't be asked. */
+	volumes: z.array(z.string()).optional(),
 	/** The desired revision the agent last converged to. */
 	revision: z.string().nullable(),
 	dockerError: z.string().nullable().optional()

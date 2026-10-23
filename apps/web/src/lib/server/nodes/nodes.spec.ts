@@ -14,6 +14,7 @@ import * as variables from '../domain/variables';
 import { seedCtx, testSecrets } from '../testing';
 import { buildDesiredState, containerName } from './desired';
 import { readLogs } from './logs';
+import { volumeFor, volumeName } from './volumes';
 import { BUILD_TIMEOUT_MS, DEPLOY_TIMEOUT_MS, reconcile, STABLE_AFTER_MS } from './reconciler';
 import {
 	authenticate,
@@ -41,6 +42,7 @@ function setup(
 		healthcheck?: string;
 		replicas?: number;
 		scan?: ScanMode;
+		mountPath?: string;
 	} = {}
 ) {
 	const ctx = seedCtx();
@@ -57,7 +59,8 @@ function setup(
 		networking: { port: 80, publicDomain: options.publicDomain ?? false },
 		deploy: { healthcheckPath: options.healthcheck ?? null, replicas: options.replicas ?? 1 },
 		// most tests are about deploying; scanning has its own
-		build: { scan: options.scan ?? 'off' }
+		build: { scan: options.scan ?? 'off' },
+		volume: { mountPath: options.mountPath ?? null }
 	});
 	return { ctx, local, tokenFile, env: env!, svc };
 }
@@ -644,5 +647,130 @@ describe('image scanning', () => {
 		reconcile(ctx.db, ctx.settings);
 		expect(statusOf(ctx, dep!.id).status).toBe('deploying');
 		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).scans).toEqual([]);
+	});
+});
+
+describe('volumes', () => {
+	const live = (ctx: ReturnType<typeof setup>['ctx'], localId: string, ids: string[]) =>
+		recordReport(ctx.db, localId, { revision: null, containers: ids.map((id) => report(id)) });
+
+	it('creates a volume on first deploy, pinned to the node, and mounts it', () => {
+		const { ctx, local, env, svc } = setup({ mountPath: '/data' });
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+
+		const vol = volumeFor(ctx.db, svc.id, env.id)!;
+		expect(vol.nodeId).toBe(local.id);
+		const [c] = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers;
+		expect(c!.deploymentId).toBe(dep!.id);
+		expect(c!.volumes).toEqual([{ name: volumeName(vol.id), target: '/data' }]);
+		expect(c!.env.TRAMLINE_VOLUME_MOUNT_PATH).toBe('/data');
+	});
+
+	it('stops the old deployment before the new one starts, then keeps the same volume', () => {
+		const { ctx, local, env } = setup({ mountPath: '/data' });
+		recordHello(ctx.db, local.id, hello);
+		const [first] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		live(ctx, local.id, [first!.id]);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, first!.id).status).toBe('active');
+
+		const second = deployments.redeploy(ctx, first!.id);
+		reconcile(ctx.db, ctx.settings);
+		// neither runs while the old container is still on the node
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers).toEqual([]);
+		expect(statusOf(ctx, second.id).message).toBe('Waiting for the previous deployment to stop');
+		expect(statusOf(ctx, first!.id).message).toBe(`Stopping for ${second.id}`);
+
+		// once the agent reports it gone, the new one starts on the same volume
+		live(ctx, local.id, []);
+		reconcile(ctx.db, ctx.settings);
+		const desired = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id);
+		expect(desired.containers.map((c) => c.deploymentId)).toEqual([second.id]);
+		expect(statusOf(ctx, second.id).message).toBe('Pulling image');
+
+		live(ctx, local.id, [second.id]);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, second.id).status).toBe('active');
+		expect(statusOf(ctx, first!.id).status).toBe('removed');
+	});
+
+	it('gives up when the previous deployment never stops', () => {
+		const { ctx, local, env } = setup({ mountPath: '/data' });
+		recordHello(ctx.db, local.id, hello);
+		const [first] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		live(ctx, local.id, [first!.id]);
+		reconcile(ctx.db, ctx.settings);
+		const second = deployments.redeploy(ctx, first!.id);
+		reconcile(ctx.db, ctx.settings);
+		live(ctx, local.id, [first!.id]);
+		reconcile(ctx.db, ctx.settings, Date.now() + DEPLOY_TIMEOUT_MS + 1000);
+		expect(statusOf(ctx, second.id)).toMatchObject({
+			status: 'failed',
+			message: 'Timed out waiting for the previous deployment to stop'
+		});
+		// the old deployment runs again
+		reconcile(ctx.db, ctx.settings, Date.now() + DEPLOY_TIMEOUT_MS + 2000);
+		expect(
+			buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers.map(
+				(c) => c.deploymentId
+			)
+		).toEqual([first!.id]);
+	});
+
+	it('runs a service with a volume as a single replica', () => {
+		const { ctx, env } = setup({ mountPath: '/data', replicas: 2 });
+		expect(() => changes.deploy(ctx, env.id)).toThrow('has a volume, so it runs a single replica');
+	});
+
+	it('waits for the node that holds the volume', () => {
+		const { ctx, local, env } = setup({ mountPath: '/data' });
+		recordHello(ctx.db, local.id, hello);
+		const [first] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const second = deployments.redeploy(ctx, first!.id);
+		ctx.db
+			.update(node)
+			.set({ lastSeenAt: new Date(0) })
+			.where(eq(node.id, local.id))
+			.run();
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, second.id)).toMatchObject({
+			status: 'queued',
+			message: "Waiting for local, which holds this service's volume"
+		});
+	});
+
+	it('removes the volumes of deleted services once the node reports them gone', () => {
+		const { ctx, local, env, svc } = setup({ mountPath: '/data' });
+		recordHello(ctx.db, local.id, hello);
+		changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const name = volumeName(volumeFor(ctx.db, svc.id, env.id)!.id);
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual(
+			[]
+		);
+
+		services.remove(ctx, svc.id);
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual([
+			name
+		]);
+		// still there: keep asking
+		recordReport(ctx.db, local.id, { revision: null, containers: [], volumes: [name] });
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual([
+			name
+		]);
+		// a report that couldn't list volumes changes nothing
+		recordReport(ctx.db, local.id, { revision: null, containers: [] });
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual([
+			name
+		]);
+		recordReport(ctx.db, local.id, { revision: null, containers: [], volumes: [] });
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual(
+			[]
+		);
 	});
 });

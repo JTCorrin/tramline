@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	VolumeConfig,
 	CreateProject,
 	CreateService,
 	DEFAULT_SERVICE_CONFIG,
@@ -104,5 +105,26 @@ describe('schemas', () => {
 			false
 		);
 		expect(StageVariables.safeParse({ environmentId: 'e', unset: ['OK_KEY'] }).success).toBe(true);
+	});
+});
+
+describe('VolumeConfig', () => {
+	const mount = (mountPath: string | null) => VolumeConfig.safeParse({ mountPath });
+
+	it('takes an absolute data directory, or none', () => {
+		expect(mount('/var/lib/postgresql/data').data).toEqual({
+			mountPath: '/var/lib/postgresql/data'
+		});
+		expect(mount(' /data ').data).toEqual({ mountPath: '/data' });
+		expect(mount(null).success).toBe(true);
+	});
+
+	it('refuses relative paths and system directories', () => {
+		expect(mount('data').error?.issues[0]?.message).toBe('Use an absolute path, like /data');
+		for (const path of ['/', '//', '/proc', '/sys/', '/dev']) {
+			expect(mount(path).error?.issues[0]?.message).toBe(
+				'Choose a directory for the data, like /data'
+			);
+		}
 	});
 });

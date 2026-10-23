@@ -162,3 +162,24 @@ export const deployment = sqliteTable(
 	},
 	(table) => [index('deployment_instance_idx').on(table.serviceId, table.environmentId)]
 );
+
+/**
+ * A service's persistent volume in one environment, on the node that holds
+ * its data. Outlives the service: when the service or environment is deleted
+ * its ids are cleared, and the row stays until the node reports the Docker
+ * volume gone.
+ */
+export const volume = sqliteTable(
+	'volume',
+	{
+		id: text('id').primaryKey(),
+		serviceId: text('service_id').references(() => service.id, { onDelete: 'set null' }),
+		environmentId: text('environment_id').references(() => environment.id, {
+			onDelete: 'set null'
+		}),
+		/** Where the data lives; deployments of the service are pinned to this node. */
+		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		...timestamps
+	},
+	(table) => [uniqueIndex('volume_instance_idx').on(table.serviceId, table.environmentId)]
+);

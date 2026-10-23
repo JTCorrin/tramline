@@ -8,6 +8,7 @@
 <script lang="ts">
 	import { cn } from '#lib/utils.js';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
+	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import ServiceIcon from './service-icon.svelte';
 	import StatusBadge from './status-badge.svelte';
@@ -41,7 +42,18 @@
 		</div>
 	</div>
 	<div class="mt-4 flex items-center justify-between gap-2">
-		<StatusBadge status={service.status} />
+		<div class="flex items-center gap-2">
+			<StatusBadge status={service.status} />
+			{#if service.volumeMountPath}
+				<span
+					class="flex items-center gap-1 text-xs text-muted-foreground"
+					title="Volume at {service.volumeMountPath}"
+					data-testid="volume-badge"
+				>
+					<HardDriveIcon class="size-3.5" />
+				</span>
+			{/if}
+		</div>
 		{#if service.url}
 			<a
 				href={service.url}

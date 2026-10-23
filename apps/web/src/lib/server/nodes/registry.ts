@@ -7,6 +7,7 @@ import type { DbOrTx } from '../db/client';
 import { build, container, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
+import { recordVolumes } from './volumes';
 
 /** A node counts as online if its agent reported within this window. */
 export const ONLINE_WINDOW_MS = 30_000;
@@ -103,6 +104,7 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 				})
 				.run();
 		}
+		if (report.volumes) recordVolumes(tx, nodeId, report.volumes);
 		tx.delete(build).where(eq(build.nodeId, nodeId)).run();
 		for (const b of report.builds ?? []) {
 			tx.insert(build)

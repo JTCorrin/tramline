@@ -79,7 +79,7 @@ export function effectiveConfig(applied: ServiceConfig | null, staged: StagedPay
 	return mergeConfig(applied ?? DEFAULT_SERVICE_CONFIG, staged.config ?? {});
 }
 
-const SECTIONS = ['build', 'deploy', 'networking'] as const;
+const SECTIONS = ['build', 'deploy', 'networking', 'volume'] as const;
 
 /** The smallest patch that turns `base` into `target`. */
 export function diffConfig(base: ServiceConfig, target: ServiceConfig): ServiceConfigPatch {

@@ -6,6 +6,7 @@ import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
 import { isOnline, ONLINE_WINDOW_MS } from './registry';
+import { ensureVolume, recreatePlan, volumeFor } from './volumes';
 
 /** A replica must stay up this long before a deployment without a healthcheck counts as live. */
 export const STABLE_AFTER_MS = 3_000;
@@ -45,7 +46,8 @@ interface Transition {
  *
  * A deployment going live marks the previous live deployment of the same
  * service and environment `removed`, so its containers are torn down only
- * after the replacement is healthy.
+ * after the replacement is healthy. Services with a volume are the exception:
+ * the old deployment stops first, then the new one starts (see recreatePlan).
  */
 export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) {
 	const changed = new Map<string, DeploymentRow>();
@@ -99,14 +101,30 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 			.map((row) => [row.deploymentId, row])
 	);
 
-	for (const dep of active) {
+	// schedule first, so the recreate plan below sees what was just scheduled
+	for (const dep of active.filter((d) => d.status === 'queued')) {
+		const t = schedule(db, dep, online, nodes, now);
+		apply(dep, t);
+		// the volume lives on the node the service first ran on
+		if (t.nodeId && dep.config.volume?.mountPath) {
+			ensureVolume(db, dep.serviceId, dep.environmentId, t.nodeId);
+		}
+	}
+	const current = active.map((dep) => changed.get(dep.id) ?? dep);
+	const recreate = recreatePlan(current, new Set(containers.keys()));
+
+	for (const dep of current) {
 		const replicas = containers.get(dep.id) ?? [];
-		if (dep.status === 'queued') apply(dep, schedule(dep, online, nodes, now));
-		else if (dep.status === 'building') apply(dep, building(dep, builds.get(dep.id), now));
+		if (dep.status === 'queued') continue;
+		if (dep.status === 'building') apply(dep, building(dep, builds.get(dep.id), now));
 		else if (dep.status === 'deploying') {
-			const t = progress(dep, replicas, now);
+			const t = recreate.waiting.has(dep.id)
+				? waitForPrevious(dep, now)
+				: progress(dep, replicas, now);
 			apply(dep, { ...t, set: pin(dep, replicas) });
 			if (t.status === 'active') supersede(db, dep, apply);
+		} else if (recreate.stopped.has(dep.id)) {
+			apply(dep, { message: `Stopping for ${recreate.stopped.get(dep.id)}` });
 		} else apply(dep, { ...health(dep, replicas), set: pin(dep, replicas) });
 	}
 
@@ -118,13 +136,26 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 }
 
 function schedule(
+	db: Db,
 	dep: DeploymentRow,
 	online: (typeof node.$inferSelect)[],
 	all: (typeof node.$inferSelect)[],
 	now: number
 ): Transition {
+	// a service with a volume runs where its data is
+	const pinned = dep.config.volume?.mountPath
+		? volumeFor(db, dep.serviceId, dep.environmentId)?.nodeId
+		: null;
+	if (pinned) {
+		const home = all.find((n) => n.id === pinned);
+		if (!online.some((n) => n.id === pinned)) {
+			return {
+				message: `Waiting for ${home?.name ?? 'the node'}, which holds this service's volume`
+			};
+		}
+	}
 	// Phase 6 brings real scheduling; until then the first healthy node takes everything
-	const target = online[0];
+	const target = pinned ? online.find((n) => n.id === pinned) : online[0];
 	if (!target) {
 		// a node whose agent is connected but can't run containers is the most useful thing to point at
 		const broken = all.find(
@@ -212,6 +243,15 @@ function pin(dep: DeploymentRow, replicas: ContainerRow[]): Transition['set'] {
 	if (dep.resolvedImage || dep.config.source?.type !== 'image') return undefined;
 	const digest = replicas.find((c) => c.imageDigest)?.imageDigest;
 	return digest ? { resolvedImage: digest } : undefined;
+}
+
+/** A volume service's new deployment waits for the old one's containers to stop. */
+function waitForPrevious(dep: DeploymentRow, now: number): Transition {
+	if (now - (dep.startedAt ?? dep.createdAt).getTime() > DEPLOY_TIMEOUT_MS) {
+		const message = 'Timed out waiting for the previous deployment to stop';
+		return { status: 'failed', message, log: message };
+	}
+	return { message: 'Waiting for the previous deployment to stop' };
 }
 
 function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Transition {

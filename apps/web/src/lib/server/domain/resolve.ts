@@ -95,7 +95,8 @@ export function builtinVariables(
 	service: { id: string; name: string },
 	environment: { id: string; name: string },
 	port: number | null,
-	publicDomain: string | null = null
+	publicDomain: string | null = null,
+	mountPath: string | null = null
 ): Record<string, string> {
 	const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 	return {
@@ -105,6 +106,7 @@ export function builtinVariables(
 		TRAMLINE_ENVIRONMENT_NAME: environment.name,
 		TRAMLINE_PRIVATE_DOMAIN: `${slug(service.name)}.${slug(environment.name)}.tramline.internal`,
 		...(port ? { PORT: String(port) } : {}),
-		...(publicDomain ? { TRAMLINE_PUBLIC_DOMAIN: publicDomain } : {})
+		...(publicDomain ? { TRAMLINE_PUBLIC_DOMAIN: publicDomain } : {}),
+		...(mountPath ? { TRAMLINE_VOLUME_MOUNT_PATH: mountPath } : {})
 	};
 }

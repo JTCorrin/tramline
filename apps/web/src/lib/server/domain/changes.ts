@@ -94,6 +94,13 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 	}
 
 	for (const svc of affected) {
+		if (svc.effective.volume?.mountPath && svc.effective.deploy.replicas > 1) {
+			// replicas would share one directory, which corrupts most databases
+			throw new AppError(
+				'conflict',
+				`${svc.service.name} has a volume, so it runs a single replica`
+			);
+		}
 		const { publicDomain, port } = svc.effective.networking;
 		if (publicDomain && !port) {
 			throw new AppError(
@@ -124,7 +131,8 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 				svc.service,
 				env,
 				svc.effective.networking.port,
-				domains.get(svc.service.id) ?? null
+				domains.get(svc.service.id) ?? null,
+				svc.effective.volume?.mountPath ?? null
 			)
 		}))
 	});

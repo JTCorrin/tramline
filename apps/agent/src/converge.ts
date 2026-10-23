@@ -21,6 +21,10 @@ export interface ConvergeOptions {
 
 export const DEFAULT_DRAIN_MS = 10_000;
 
+/** How long a workload gets to shut down after SIGTERM; more for ones with data on a volume. */
+export const STOP_TIMEOUT_SECONDS = 10;
+export const STATEFUL_STOP_TIMEOUT_SECONDS = 30;
+
 /**
  * Makes the container runtime match a desired state. Idempotent and safe to
  * call repeatedly: it only removes containers Tramline manages, and replaces
@@ -114,7 +118,7 @@ export class Converger {
 			else {
 				// same name, different spec: replace in place
 				log(`replacing ${container.name}`);
-				await this.runtime.remove(container.name);
+				await this.#stop(container);
 			}
 		}
 
@@ -128,6 +132,13 @@ export class Converger {
 					this.pulling.add(name);
 					log(`pulling ${spec.image}`);
 					await this.runtime.pull(spec.image);
+				}
+				for (const volume of spec.volumes ?? []) {
+					await this.runtime.ensureVolume(volume.name, {
+						[LABELS.managed]: 'true',
+						[LABELS.node]: nodeId,
+						[LABELS.role]: 'volume'
+					});
 				}
 				log(`starting ${name}`);
 				await this.runtime.run(spec);
@@ -152,9 +163,37 @@ export class Converger {
 			this.#leaving.set(container.name, since);
 			if (now - since < this.#drainMs) continue;
 			log(`removing ${container.name}`);
-			await this.runtime.remove(container.name);
+			await this.#stop(container);
 			this.#leaving.delete(container.name);
 		}
+
+		// 4. volumes of deleted services, once no container uses them
+		if (desired.deletedVolumes.length) {
+			const deleted = new Set(desired.deletedVolumes);
+			for (const volume of await this.runtime.listVolumes()) {
+				if (!deleted.has(volume.name) || volume.labels[LABELS.node] !== nodeId) continue;
+				if (await this.runtime.removeVolume(volume.name)) log(`removed volume ${volume.name}`);
+			}
+		}
+	}
+
+	/** Stops a workload gracefully (databases flush to disk), then removes it. */
+	async #stop(container: ManagedContainer) {
+		const stateful = container.labels[LABELS.stateful] === 'true';
+		await this.runtime.stop(
+			container.name,
+			stateful ? STATEFUL_STOP_TIMEOUT_SECONDS : STOP_TIMEOUT_SECONDS
+		);
+		await this.runtime.remove(container.name);
+	}
+
+	/** Volumes this node manages, for the agent's report. */
+	async volumes() {
+		const nodeId = this.#node();
+		return (await this.runtime.listVolumes())
+			.filter((v) => v.labels[LABELS.node] === nodeId)
+			.map((v) => v.name)
+			.sort();
 	}
 
 	get #ingressDir() {

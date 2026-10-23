@@ -13,6 +13,14 @@ export interface ContainerRuntime {
 	run(spec: RunSpec): Promise<void>;
 	/** Force-removes a container; missing containers are ignored. */
 	remove(name: string): Promise<void>;
+	/** Asks a container to stop (SIGTERM), killing it after `timeoutSeconds`; missing containers are ignored. */
+	stop(name: string, timeoutSeconds: number): Promise<void>;
+	/** Creates a named volume with these labels unless it exists. */
+	ensureVolume(name: string, labels: Record<string, string>): Promise<void>;
+	/** Volumes carrying the `tramline.managed` label. */
+	listVolumes(): Promise<{ name: string; labels: Record<string, string> }[]>;
+	/** Removes a volume; false when a container still uses it. Missing volumes count as removed. */
+	removeVolume(name: string): Promise<boolean>;
 	connect(container: string, network: string): Promise<void>;
 	exec(container: string, cmd: string[]): Promise<{ exitCode: number; output: string }>;
 	/**
@@ -96,5 +104,7 @@ export const LABELS = {
 	service: 'tramline.service',
 	spec: 'tramline.spec',
 	deployment: 'tramline.deployment',
+	/** Set on workloads with a volume: they get longer to shut down cleanly. */
+	stateful: 'tramline.stateful',
 	replica: 'tramline.replica'
 } as const;

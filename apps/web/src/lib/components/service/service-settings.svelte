@@ -33,7 +33,7 @@
 	const config = $derived(view.effective);
 	let confirmDelete = $state(false);
 
-	type Section = 'build' | 'deploy' | 'networking';
+	type Section = 'build' | 'deploy' | 'networking' | 'volume';
 
 	/** Whether a field differs from the last deploy. */
 	function staged<S extends Section>(section: S, key: keyof ServiceConfig[S]) {
@@ -353,10 +353,33 @@
 		</p>
 	</section>
 
+	{#if config.source}
+		<section class="space-y-4">
+			<h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Volume</h3>
+			<Setting
+				label="Mount path"
+				for="volume-mount"
+				staged={staged('volume', 'mountPath')}
+				description={config.volume.mountPath
+					? `Data written here survives deploys and restarts. Deploys stop the running container before starting the new one, and the service runs a single replica. Exposed as $TRAMLINE_VOLUME_MOUNT_PATH.`
+					: 'Add a volume to keep data across deploys, e.g. /data.'}
+			>
+				<CommitInput
+					id="volume-mount"
+					mono
+					placeholder="No volume"
+					value={config.volume.mountPath}
+					onsave={(v) => stage('volume', { mountPath: v })}
+				/>
+			</Setting>
+		</section>
+	{/if}
+
 	<section class="space-y-3 rounded-lg border border-destructive/40 p-4">
 		<h3 class="text-sm font-medium">Delete service</h3>
 		<p class="text-xs text-muted-foreground">
-			Removes the service from every environment, along with its variables and deployments.
+			Removes the service from every environment, along with its variables, deployments and any
+			volume data.
 		</p>
 		<Button variant="destructive" size="sm" onclick={() => (confirmDelete = true)}>
 			Delete {service.name}

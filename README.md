@@ -2,7 +2,7 @@
 
 An open-source, self-hosted, slimmed-down [Railway](https://railway.com): projects are a canvas of services you deploy onto compute you choose: local Docker, Proxmox, or a cloud provider.
 
-> **Status:** Phase 3 complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
+> **Status:** Phases 0–3.5 and 4a complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Images are scanned for vulnerabilities before they run, and databases keep their data on volumes. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
 
 ## Repository layout
 
@@ -72,7 +72,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
    - 2.5 **Secure-by-default hardening** ✅: container defaults, sealed variables, log redaction, CSP and security headers, CI security scanning (see [SECURITY.md](SECURITY.md))
 3. **Builds from source**: rootless BuildKit, Railpack or Dockerfile, GitHub App, push webhooks and polling ✅
    - 3.5 **Image vulnerability scanning** ✅: Trivy scans every built and pulled image before it runs; warn or block per service
-4. Databases, volumes, reference variable depth, domains
+4. **Data and networking**: databases and references (Phase 1), volumes ✅ (4a), backups (4b), domains, TCP proxy and cron (4c)
 5. Agent access: API tokens + MCP server
 6. Multi-node, adapter SDK, Proxmox adapter
 7. Cloud adapters (Hetzner, AWS, GCP, Azure) + node pools

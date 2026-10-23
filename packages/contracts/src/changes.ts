@@ -31,6 +31,8 @@ export const CanvasService = z.object({
 	status: z.enum([...DEPLOYMENT_STATUSES, 'undeployed']),
 	staged: z.boolean(),
 	publicDomain: z.boolean(),
+	/** Where its volume is mounted, when it has one. */
+	volumeMountPath: z.string().nullable(),
 	/** Public URL once a domain has been generated. */
 	url: z.string().nullable()
 });

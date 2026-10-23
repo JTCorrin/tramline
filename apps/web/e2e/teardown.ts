@@ -57,6 +57,17 @@ export default function teardown() {
 	} catch {
 		// never created
 	}
+	// volumes the agent created for this run's services
+	const volumes = docker(
+		'volume',
+		'ls',
+		'-q',
+		'--filter',
+		`label=tramline.node=${node.id}`,
+		'--filter',
+		'label=tramline.role=volume'
+	);
+	if (volumes) docker('volume', 'rm', '-f', ...volumes.split('\n'));
 	for (const { id } of services) {
 		const images = docker('images', '-q', `tramline/${id}`);
 		if (images)

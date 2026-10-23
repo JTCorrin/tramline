@@ -35,6 +35,7 @@ export function toRunSpec(container: DesiredContainer, nodeId: string): RunSpec 
 		cmd: container.command ? ['/bin/sh', '-c', container.command] : undefined,
 		env: container.env,
 		network: container.network,
+		volumes: container.volumes,
 		// workloads never get host mounts, so the Docker socket can't leak into them
 		security: {
 			capabilities: WORKLOAD_CAPABILITIES,
@@ -56,7 +57,8 @@ export function toRunSpec(container: DesiredContainer, nodeId: string): RunSpec 
 			// a container is replaced, never mutated, when anything about it changes
 			[LABELS.spec]: hash(container),
 			[LABELS.deployment]: container.deploymentId,
-			[LABELS.replica]: String(container.replica)
+			[LABELS.replica]: String(container.replica),
+			...(container.volumes.length ? { [LABELS.stateful]: 'true' } : {})
 		}
 	};
 }

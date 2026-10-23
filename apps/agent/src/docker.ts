@@ -135,6 +135,42 @@ export class DockerRuntime implements ContainerRuntime {
 		}
 	}
 
+	async stop(name: string, timeoutSeconds: number) {
+		try {
+			await this.docker.getContainer(name).stop({ t: timeoutSeconds });
+		} catch (error) {
+			// 304: already stopped; 404: gone
+			if (![304, 404].includes(statusCode(error) ?? 0)) throw error;
+		}
+	}
+
+	async ensureVolume(name: string, labels: Record<string, string>) {
+		try {
+			await this.docker.getVolume(name).inspect();
+		} catch (error) {
+			if (statusCode(error) !== 404) throw error;
+			await this.docker.createVolume({ Name: name, Labels: labels });
+		}
+	}
+
+	async listVolumes() {
+		const { Volumes } = await this.docker.listVolumes({
+			filters: { label: [`${LABELS.managed}=true`] }
+		});
+		return (Volumes ?? []).map((v) => ({ name: v.Name, labels: v.Labels ?? {} }));
+	}
+
+	async removeVolume(name: string) {
+		try {
+			await this.docker.getVolume(name).remove();
+			return true;
+		} catch (error) {
+			if (statusCode(error) === 404) return true;
+			if (statusCode(error) === 409) return false;
+			throw error;
+		}
+	}
+
 	async connect(container: string, network: string) {
 		await this.docker.getNetwork(network).connect({ Container: container });
 	}
