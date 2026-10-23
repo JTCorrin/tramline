@@ -245,7 +245,8 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
     - The deploy timeout counts from scheduling, not from queueing.
     - A rejected agent token now backs off and re-reads the token file instead of stopping the agent.
     - Deploy waits for in-flight edits, and forms can't submit before the page has hydrated.
-- **Phase 3:** BuildKit secret mounts, image digest pinning, vulnerability scan on deploy.
+- **Phase 3 ✅ (3a):** BuildKit secret mounts, image digest pinning, a rootless builder, and pinned and verified build tools.
+- **Phase 3.5:** optional image vulnerability scanning (Trivy), warning by default or blocking on critical findings.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
 - **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
 - **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
@@ -299,10 +300,31 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
 
 ### Phase 3: Builds from source
 
-- GitHub App (install, repo picker, push webhooks → auto-deploy on the chosen branch), plus public Git URLs.
-- Builds run on the node's BuildKit: **Railpack** by default, Dockerfile when present, root-directory/watch-paths support, and build cache.
-- Internal registry (`registry:2` managed by Tramline) and image retention/GC.
-- **Exit:** connect a GitHub repo (Node/Python/Go sample) → push → it builds and deploys automatically with live build logs.
+**3a: build pipeline ✅** (verified end to end on Docker, e2e in CI)
+
+- **Builder:** one **rootless BuildKit** container per node (`tramline-builder-<node>`), never `--privileged`. It runs as uid 1000 with a persistent cache volume.
+  - The trade-off: its user namespace needs Docker's seccomp and AppArmor profiles relaxed, and it keeps Docker's default capabilities.
+  - It is separate from workloads, which keep the hardened defaults.
+- **Pipeline:** shallow clone of a branch or exact commit → **Railpack** (`prepare` + its BuildKit frontend), or a Dockerfile when one is present or chosen → image streamed straight into the node's Docker → deploy.
+  - The root directory can't escape the repository.
+  - Build output streams live into the deployment log as its own stream, with secrets redacted.
+- **Supply chain:** the Railpack CLI is downloaded from the official release and checked against a pinned sha256. The Railpack frontend and BuildKit images are pinned by digest (`apps/agent/src/pins.ts`).
+- **Build secrets:** every service variable is a **BuildKit secret**, passed only in the build process's environment. Verified with a canary on a real build: absent from the image's environment, its layer history, its raw bytes and the build log, yet available at runtime.
+- **Reconciler:** `queued → building → deploying`, with a 30-minute build timeout. The image ID and commit are recorded, and the commit shows in the UI.
+  - **Redeploy and rollback reuse the built image** (no clone, no rebuild).
+  - Image deployments **pin the digest they first pulled**, so a rollback runs exactly that image.
+- **Housekeeping:** the newest 3 built images per service are kept and older ones removed.
+- **Deferred:** the internal registry moves to Phase 6, since images load directly into the node's Docker until there are several nodes. The job queue turned out to be unnecessary: builds are driven by desired state like everything else.
+- **Found while verifying on real Docker:**
+  - dockerode's `followProgress` ignores `{"error": …}` lines, so failed pulls and loads looked successful. These now fail properly.
+  - Ending the image stream early truncated large images under backpressure.
+
+**3b: GitHub (next)**
+
+- A GitHub App created in one click via GitHub's manifest flow, a repo picker, and private repos through 1-hour installation tokens.
+- Signed push webhooks → auto-deploy on the chosen branch, honouring root directory and watch paths.
+- Polling as a fallback for installs GitHub can't reach.
+- **Exit:** connect a GitHub repo → push → it builds and deploys automatically, with live build logs.
 
 ### Phase 4: Data, variables and networking depth
 

@@ -1,16 +1,27 @@
 import type { DesiredContainer, DesiredState } from '@tramline/contracts';
-import type { ContainerRuntime, ManagedContainer, OnLogLine, RunSpec } from './runtime';
+import type {
+	ContainerRuntime,
+	ExecStreamOptions,
+	ManagedContainer,
+	OnLogLine,
+	RunSpec
+} from './runtime';
 
 /** In-memory ContainerRuntime for tests. */
 export class FakeRuntime implements ContainerRuntime {
 	containers = new Map<string, ManagedContainer & { spec: RunSpec }>();
 	networks = new Set<string>();
-	images = new Set<string>();
+	pulled = new Set<string>();
 	calls: string[] = [];
 	failPull = new Map<string, string>();
 	execExit = 0;
 	down = false;
 	followers = new Map<string, { since: number; onLine: OnLogLine; onEnd: () => void }>();
+	images = new Map<string, { id: string; created: number }>();
+	files = new Map<string, Buffer>();
+	execs: { container: string; cmd: string[]; env?: Record<string, string> }[] = [];
+	/** Decides how each exec behaves; defaults to success with no output. */
+	onExec: (cmd: string[], options: ExecStreamOptions) => number | Promise<number> = () => 0;
 
 	#guard(call: string) {
 		if (this.down) throw new Error('connect ENOENT /var/run/docker.sock');
@@ -30,13 +41,13 @@ export class FakeRuntime implements ContainerRuntime {
 		return [...this.containers.values()].map(({ spec: _, ...c }) => ({ ...c }));
 	}
 	async hasImage(image: string) {
-		return this.images.has(image);
+		return this.pulled.has(image);
 	}
 	async pull(image: string) {
 		this.#guard(`pull ${image}`);
 		const error = this.failPull.get(image);
 		if (error) throw new Error(error);
-		this.images.add(image);
+		this.pulled.add(image);
 	}
 	async run(spec: RunSpec) {
 		this.#guard(`run ${spec.name}`);
@@ -62,6 +73,38 @@ export class FakeRuntime implements ContainerRuntime {
 	async exec(container: string, cmd: string[]) {
 		this.#guard(`exec ${container} ${cmd.at(-1)}`);
 		return { exitCode: this.execExit, output: '' };
+	}
+	async execStream(container: string, cmd: string[], options: ExecStreamOptions) {
+		this.#guard(`exec ${container} ${cmd[0]}`);
+		this.execs.push({ container, cmd, env: options.env });
+		const code = await this.onExec(cmd, options);
+		// like Docker, the output stream ends when the process does
+		options.stdout?.end();
+		return code;
+	}
+	async arch() {
+		return 'aarch64';
+	}
+	async putFile(container: string, path: string, content: Buffer) {
+		this.files.set(`${container}:${path}`, content);
+	}
+	async loadImage(tarball: NodeJS.ReadableStream) {
+		for await (const _ of tarball) {
+			// drain
+		}
+	}
+	async imageId(reference: string) {
+		return this.images.get(reference)?.id ?? null;
+	}
+	async listImages(repository: string) {
+		return [...this.images.entries()]
+			.filter(([tag]) => tag.startsWith(`${repository}:`))
+			.map(([tag, image]) => ({ id: image.id, tags: [tag], created: image.created }))
+			.sort((a, b) => b.created - a.created);
+	}
+	async removeImage(id: string) {
+		this.calls.push(`rmi ${id}`);
+		for (const [tag, image] of this.images) if (image.id === id) this.images.delete(tag);
 	}
 	logs(name: string, since: number, onLine: OnLogLine, onEnd: () => void) {
 		this.followers.set(name, { since, onLine, onEnd });
@@ -92,12 +135,14 @@ export function desiredContainer(overrides: Partial<DesiredContainer> = {}): Des
 
 export function desiredState(
 	containers: DesiredContainer[] = [desiredContainer()],
-	routes: DesiredState['ingress']['routes'] = []
+	routes: DesiredState['ingress']['routes'] = [],
+	builds: DesiredState['builds'] = []
 ): DesiredState {
 	return {
 		revision: `rev-${containers.map((c) => c.name).join(',')}-${routes.length}`,
 		networks: [...new Set(containers.map((c) => c.network))],
 		containers,
+		builds,
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

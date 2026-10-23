@@ -71,7 +71,14 @@
 						/>
 						<StatusBadge status={deployment.status} class="w-24 shrink-0" />
 						<div class="min-w-0 flex-1">
-							<div class="truncate font-mono text-xs">{deployment.source}</div>
+							<div class="truncate font-mono text-xs">
+								{deployment.source}
+								{#if deployment.commit}
+									<span class="text-muted-foreground" title={deployment.commit}>
+										· {deployment.commit.slice(0, 7)}
+									</span>
+								{/if}
+							</div>
 							<div class="truncate text-xs text-muted-foreground">
 								{timeAgo(deployment.createdAt)} · {deployment.id.slice(4, 12)}
 							</div>

@@ -1,6 +1,7 @@
 import {
 	DEFAULT_SERVICE_CONFIG,
 	mergeConfig,
+	type DesiredBuild,
 	type DesiredContainer,
 	type DesiredState,
 	type IngressRoute
@@ -14,6 +15,10 @@ import { usesTls, type PlatformSettings } from '../settings';
 
 /** Deployments whose containers should exist. */
 export const RUNNING_STATUSES = ['deploying', 'active', 'crashed'] as const;
+
+/** Local tag for an image built from source. */
+export const builtImageTag = (serviceId: string, deploymentId: string) =>
+	`tramline/${serviceId}:${deploymentId}`;
 
 export const networkName = (environmentId: string) => `tl-${environmentId}`;
 export const deploymentAlias = (deploymentId: string) => `${deploymentId}.tramline.internal`;
@@ -40,20 +45,49 @@ export function buildDesiredState(
 				eq(serviceInstance.environmentId, deployment.environmentId)
 			)
 		)
-		.where(and(eq(deployment.nodeId, nodeId), inArray(deployment.status, [...RUNNING_STATUSES])))
+		.where(
+			and(
+				eq(deployment.nodeId, nodeId),
+				inArray(deployment.status, [...RUNNING_STATUSES, 'building'])
+			)
+		)
 		.orderBy(deployment.id)
 		.all();
 
 	const containers: DesiredContainer[] = [];
+	const builds: DesiredBuild[] = [];
 	const routes: IngressRoute[] = [];
 	const networks = new Set<string>();
 
 	for (const { deployment: dep, domain } of rows) {
 		// snapshots taken before a field existed pick up its default
 		const config = mergeConfig(DEFAULT_SERVICE_CONFIG, dep.config);
-		if (config.source?.type !== 'image') continue; // repo sources need a build first (Phase 3)
-
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
+
+		if (dep.status === 'building') {
+			if (config.source?.type !== 'repo') continue;
+			builds.push({
+				deploymentId: dep.id,
+				serviceId: dep.serviceId,
+				repo: config.source.repo,
+				ref: config.source.branch,
+				commit: dep.commit,
+				token: null,
+				rootDirectory: config.source.rootDirectory,
+				builder: config.build.builder,
+				dockerfilePath: config.build.dockerfilePath,
+				buildCommand: config.build.buildCommand,
+				startCommand: config.deploy.startCommand,
+				image: builtImageTag(dep.serviceId, dep.id),
+				// every variable is available to the build, as on Railway, but only as a BuildKit secret
+				secrets: env
+			});
+			continue;
+		}
+
+		// a built image, or the configured one
+		const image = dep.image ?? (config.source?.type === 'image' ? config.source.image : null);
+		if (!image) continue;
 		const network = networkName(dep.environmentId);
 		networks.add(network);
 		const aliases = [env.TRAMLINE_PRIVATE_DOMAIN, deploymentAlias(dep.id)].filter(
@@ -67,7 +101,7 @@ export function buildDesiredState(
 				serviceId: dep.serviceId,
 				environmentId: dep.environmentId,
 				replica,
-				image: config.source.image,
+				image,
 				command: config.deploy.startCommand,
 				env,
 				network,
@@ -94,6 +128,7 @@ export function buildDesiredState(
 	const document = {
 		networks: [...networks].sort(),
 		containers,
+		builds,
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

@@ -1,4 +1,4 @@
-import { test as base, expect, type Page } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 export { expect };
 
@@ -40,4 +40,21 @@ export async function createProject(page: Page, name: string) {
 	await page.getByTestId('project-card').filter({ hasText: name }).getByRole('link').click();
 	await expect(page).toHaveTitle(`${name} · Tramline`);
 	await expect(page.getByTestId('environment-switcher')).toContainText('production');
+}
+
+/**
+ * GET through the ingress with the service's hostname. Each deploy reloads
+ * Caddy, which closes idle keep-alive connections; like a browser, retry a
+ * reset connection instead of failing. Returns status 0 if it never connects.
+ */
+export async function viaIngress(request: APIRequestContext, port: number, host: string) {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			const response = await request.get(`http://127.0.0.1:${port}/`, { headers: { host } });
+			return { status: response.status(), text: await response.text() };
+		} catch (error) {
+			if (attempt >= 3) return { status: 0, text: String(error) };
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+	}
 }

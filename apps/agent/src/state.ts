@@ -42,7 +42,8 @@ export function observe(
 			exitCode: current?.exitCode ?? null,
 			restartCount: current?.restartCount ?? 0,
 			error,
-			startedAt: current?.status === 'running' ? current.startedAt : null
+			startedAt: current?.status === 'running' ? current.startedAt : null,
+			imageDigest: current?.imageDigest ?? null
 		};
 	});
 }

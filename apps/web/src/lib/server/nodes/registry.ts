@@ -1,10 +1,10 @@
-import type { AgentHello, AgentReport } from '@tramline/contracts';
+import type { AgentHello, AgentReportInput } from '@tramline/contracts';
 import { eq } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DbOrTx } from '../db/client';
-import { container, node } from '../db/schema';
+import { build, container, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
 
@@ -83,7 +83,7 @@ export function recordHello(db: DbOrTx, nodeId: string, hello: AgentHello) {
 }
 
 /** Replaces the node's container rows with what the agent just observed. */
-export function recordReport(db: DbOrTx, nodeId: string, report: AgentReport) {
+export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInput) {
 	db.transaction((tx) => {
 		tx.delete(container).where(eq(container.nodeId, nodeId)).run();
 		for (const c of report.containers) {
@@ -98,7 +98,21 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReport) {
 					exitCode: c.exitCode,
 					restartCount: c.restartCount,
 					error: c.error,
-					startedAt: c.startedAt ? new Date(c.startedAt) : null
+					startedAt: c.startedAt ? new Date(c.startedAt) : null,
+					imageDigest: c.imageDigest ?? null
+				})
+				.run();
+		}
+		tx.delete(build).where(eq(build.nodeId, nodeId)).run();
+		for (const b of report.builds ?? []) {
+			tx.insert(build)
+				.values({
+					deploymentId: b.deploymentId,
+					nodeId,
+					state: b.state,
+					image: b.image,
+					commit: b.commit,
+					error: b.error
 				})
 				.run();
 		}

@@ -49,6 +49,30 @@ export const DesiredContainer = z.object({
 
 export type DesiredContainer = z.infer<typeof DesiredContainer>;
 
+/** Build a deployment's image from source. The agent reports progress in `AgentReport.builds`. */
+export const DesiredBuild = z.object({
+	deploymentId: z.string(),
+	serviceId: z.string(),
+	/** Clone URL without credentials. */
+	repo: z.string(),
+	/** Branch to build, or the commit to check out when known (e.g. from a push). */
+	ref: z.string(),
+	commit: z.string().nullable(),
+	/** Short-lived credential for private repositories (a GitHub installation token). */
+	token: z.string().nullable(),
+	rootDirectory: z.string(),
+	builder: z.enum(['railpack', 'dockerfile']),
+	dockerfilePath: z.string().nullable(),
+	buildCommand: z.string().nullable(),
+	startCommand: z.string().nullable(),
+	/** Tag for the resulting image, e.g. `tramline/svc_1:dep_1`. */
+	image: z.string(),
+	/** Passed as BuildKit secrets: available to build steps, never stored in the image or logs. */
+	secrets: z.record(z.string(), z.string())
+});
+
+export type DesiredBuild = z.infer<typeof DesiredBuild>;
+
 export const IngressRoute = z.object({
 	host: z.string(),
 	/** `alias:port` reachable on one of the environment networks. */
@@ -63,6 +87,7 @@ export const DesiredState = z.object({
 	revision: z.string(),
 	networks: z.array(z.string()),
 	containers: z.array(DesiredContainer),
+	builds: z.array(DesiredBuild),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -93,26 +118,43 @@ export const ActualContainer = z.object({
 	restartCount: z.number().int(),
 	/** e.g. an image pull failure. */
 	error: z.string().nullable(),
-	startedAt: z.iso.datetime().nullable()
+	startedAt: z.iso.datetime().nullable(),
+	/** `repo@sha256:…` of the image the container runs, when the registry provided one. */
+	imageDigest: z.string().nullable().optional()
 });
 
 export type ActualContainer = z.infer<typeof ActualContainer>;
 
+export const BuildReport = z.object({
+	deploymentId: z.string(),
+	state: z.enum(['running', 'succeeded', 'failed']),
+	/** Image ID (`sha256:…`) once built. */
+	image: z.string().nullable(),
+	/** The commit that was built. */
+	commit: z.string().nullable(),
+	error: z.string().nullable()
+});
+
+export type BuildReport = z.infer<typeof BuildReport>;
+
 /** What the agent observed; replaces the previous report for the node. */
 export const AgentReport = z.object({
 	containers: z.array(ActualContainer),
+	builds: z.array(BuildReport).default([]),
 	/** The desired revision the agent last converged to. */
 	revision: z.string().nullable(),
 	dockerError: z.string().nullable().optional()
 });
 
 export type AgentReport = z.infer<typeof AgentReport>;
+/** A report before defaults are applied (e.g. `builds` may be omitted). */
+export type AgentReportInput = z.input<typeof AgentReport>;
 
 export const LogLine = z.object({
 	deploymentId: z.string(),
 	/** ISO timestamp from Docker. */
 	ts: z.string(),
-	stream: z.enum(['stdout', 'stderr', 'system']),
+	stream: z.enum(['stdout', 'stderr', 'build', 'system']),
 	line: z.string()
 });
 

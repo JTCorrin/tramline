@@ -10,10 +10,11 @@ import * as deployments from '../domain/deployments';
 import * as environments from '../domain/environments';
 import * as projects from '../domain/projects';
 import * as services from '../domain/services';
+import * as variables from '../domain/variables';
 import { seedCtx, testSecrets } from '../testing';
 import { buildDesiredState, containerName } from './desired';
 import { readLogs } from './logs';
-import { DEPLOY_TIMEOUT_MS, reconcile, STABLE_AFTER_MS } from './reconciler';
+import { BUILD_TIMEOUT_MS, DEPLOY_TIMEOUT_MS, reconcile, STABLE_AFTER_MS } from './reconciler';
 import {
 	authenticate,
 	ensureLocalNode,
@@ -330,24 +331,166 @@ describe('reconciler and desired state', () => {
 		});
 	});
 
-	it('leaves source builds queued until Phase 3', () => {
+	it('builds source deployments, then runs the built image', () => {
 		const ctx = seedCtx();
 		ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-cp-')) };
 		const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
 		recordHello(ctx.db, local.id, hello);
 		const project = projects.create(ctx, { name: 'Repo' });
 		const [env] = environments.list(ctx, project.id);
-		services.create(ctx, {
+		const svc = services.create(ctx, {
 			projectId: project.id,
 			kind: 'repo',
-			source: { type: 'repo', repo: 'acme/api', branch: 'main', rootDirectory: '/' }
+			source: {
+				type: 'repo',
+				repo: 'https://github.com/acme/api',
+				branch: 'main',
+				rootDirectory: '/'
+			}
+		});
+		services.stageConfig(ctx, svc.id, env!.id, { networking: { port: 8080 } });
+		variables.stage(ctx, {
+			environmentId: env!.id,
+			serviceId: svc.id,
+			set: { NPM_TOKEN: 'npm_secret_123' },
+			unset: []
 		});
 		const [dep] = changes.deploy(ctx, env!.id);
 		reconcile(ctx.db, ctx.settings);
 		expect(statusOf(ctx, dep!.id)).toMatchObject({
-			status: 'queued',
-			message: expect.stringContaining('Phase 3')
+			status: 'building',
+			message: 'Waiting for the builder',
+			nodeId: local.id
 		});
+
+		const desired = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id);
+		expect(desired.containers).toEqual([]);
+		expect(desired.builds).toEqual([
+			expect.objectContaining({
+				deploymentId: dep!.id,
+				repo: 'https://github.com/acme/api',
+				ref: 'main',
+				commit: null,
+				token: null,
+				builder: 'railpack',
+				image: `tramline/${svc.id}:${dep!.id}`,
+				secrets: expect.objectContaining({ NPM_TOKEN: 'npm_secret_123', PORT: '8080' })
+			})
+		]);
+
+		const reportBuild = (b: Partial<AgentReport['builds'][number]>) =>
+			recordReport(ctx.db, local.id, {
+				revision: null,
+				containers: [],
+				builds: [
+					{ deploymentId: dep!.id, state: 'running', image: null, commit: null, error: null, ...b }
+				]
+			});
+		reportBuild({ state: 'running' });
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({ status: 'building', message: 'Building' });
+
+		reportBuild({ state: 'succeeded', image: 'sha256:abc', commit: 'deadbeefcafe' });
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'deploying',
+			image: 'sha256:abc',
+			commit: 'deadbeefcafe'
+		});
+		const next = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id);
+		expect(next.builds).toEqual([]);
+		expect(next.containers[0]).toMatchObject({ image: 'sha256:abc', port: 8080 });
+		expect(deployments.get(ctx, dep!.id).commit).toBe('deadbeefcafe');
+		expect(readLogs(ctx.settings.dataDir, dep!.id).map((l) => l.line)).toContain(
+			'Build succeeded (deadbee)'
+		);
+
+		// a redeploy reuses the image instead of rebuilding
+		const again = deployments.redeploy(ctx, dep!.id);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, again.id)).toMatchObject({
+			status: 'deploying',
+			image: 'sha256:abc',
+			commit: 'deadbeefcafe'
+		});
+	});
+
+	it('fails builds that fail or take too long', () => {
+		const ctx = seedCtx();
+		ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-cp-')) };
+		const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
+		recordHello(ctx.db, local.id, hello);
+		const project = projects.create(ctx, { name: 'Broken' });
+		const [env] = environments.list(ctx, project.id);
+		services.create(ctx, {
+			projectId: project.id,
+			kind: 'repo',
+			source: {
+				type: 'repo',
+				repo: 'https://github.com/acme/api',
+				branch: 'main',
+				rootDirectory: '/'
+			}
+		});
+		const [dep] = changes.deploy(ctx, env!.id);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id).message).toBe('Waiting for the builder');
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [],
+			builds: [
+				{
+					deploymentId: dep!.id,
+					state: 'failed',
+					image: null,
+					commit: 'abc',
+					error: 'No start command was found'
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'failed',
+			message: 'No start command was found'
+		});
+
+		services.stageConfig(ctx, dep!.serviceId, env!.id, { deploy: { replicas: 2 } });
+		const [slow] = changes.deploy(ctx, env!.id);
+		reconcile(ctx.db, ctx.settings);
+		reconcile(ctx.db, ctx.settings, Date.now() + BUILD_TIMEOUT_MS + 1_000);
+		expect(statusOf(ctx, slow!.id)).toMatchObject({
+			status: 'failed',
+			message: 'Timed out building'
+		});
+	});
+
+	it('pins the digest an image deployment pulled, and rolls back to exactly that image', () => {
+		const { ctx, local, env } = setup();
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const digest = 'traefik/whoami@sha256:1111';
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [report(dep!.id, { imageDigest: digest })]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'active',
+			resolvedImage: digest,
+			image: null
+		});
+		// the running container keeps its spec (no restart because a digest appeared)
+		expect(
+			buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers[0]!.image
+		).toBe('traefik/whoami');
+
+		const rollback = deployments.redeploy(ctx, dep!.id);
+		reconcile(ctx.db, ctx.settings);
+		const images = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers.map(
+			(c) => [c.deploymentId, c.image]
+		);
+		expect(images).toContainEqual([rollback.id, digest]);
 	});
 
 	it('requires a port for public domains and keeps the generated domain across deploys', () => {

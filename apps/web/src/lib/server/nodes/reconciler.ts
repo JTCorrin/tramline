@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { container, deployment, node, service } from '../db/schema';
+import { build, container, deployment, node, service } from '../db/schema';
 import { publish } from '../events';
 import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
@@ -11,11 +11,14 @@ import { isOnline, ONLINE_WINDOW_MS } from './registry';
 export const STABLE_AFTER_MS = 3_000;
 /** Give up on a deployment that hasn't gone live after this long. */
 export const DEPLOY_TIMEOUT_MS = 10 * 60_000;
+/** Give up on a build that hasn't finished after this long. */
+export const BUILD_TIMEOUT_MS = 30 * 60_000;
 /** Restarts tolerated while deploying before it counts as failed. */
 export const STARTUP_RESTARTS = 3;
 
 type DeploymentRow = typeof deployment.$inferSelect;
 type ContainerRow = typeof container.$inferSelect;
+type BuildRow = typeof build.$inferSelect;
 type Status = DeploymentRow['status'];
 
 interface Transition {
@@ -23,6 +26,8 @@ interface Transition {
 	message: string | null;
 	nodeId?: string;
 	startedAt?: Date;
+	/** Other columns to update, e.g. the built image. */
+	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit'>>;
 	/** Written to the deployment's log. */
 	log?: string;
 }
@@ -31,8 +36,11 @@ interface Transition {
  * Moves deployments through their lifecycle based on node availability and
  * what agents report:
  *
- *   queued → deploying → active ⇄ crashed
- *                     ↘ failed
+ *   queued → building → deploying → active ⇄ crashed
+ *                  ↘ failed     ↘ failed
+ *
+ * Source deployments build first; redeploys of a built or pinned image skip
+ * straight to deploying.
  *
  * A deployment going live marks the previous live deployment of the same
  * service and environment `removed`, so its containers are torn down only
@@ -42,10 +50,14 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	const changed = new Map<string, DeploymentRow>();
 	const apply = (dep: DeploymentRow, t: Transition) => {
 		const status = t.status ?? dep.status;
+		const extra = Object.entries(t.set ?? {}).filter(
+			([key, value]) => dep[key as keyof DeploymentRow] !== value
+		);
 		if (
 			status === dep.status &&
 			t.message === dep.message &&
-			(t.nodeId ?? dep.nodeId) === dep.nodeId
+			(t.nodeId ?? dep.nodeId) === dep.nodeId &&
+			!extra.length
 		) {
 			return;
 		}
@@ -55,7 +67,8 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 				status,
 				message: t.message,
 				nodeId: t.nodeId ?? dep.nodeId,
-				startedAt: t.startedAt ?? dep.startedAt
+				startedAt: t.startedAt ?? dep.startedAt,
+				...Object.fromEntries(extra)
 			})
 			.where(eq(deployment.id, dep.id))
 			.returning()
@@ -70,22 +83,30 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	const active = db
 		.select()
 		.from(deployment)
-		.where(inArray(deployment.status, ['queued', 'deploying', 'active', 'crashed']))
+		.where(inArray(deployment.status, ['queued', 'building', 'deploying', 'active', 'crashed']))
 		.orderBy(asc(deployment.createdAt), asc(deployment.id))
 		.all();
 	const containers = Map.groupBy(
 		db.select().from(container).all(),
 		(row: ContainerRow) => row.deploymentId
 	);
+	const builds = new Map(
+		db
+			.select()
+			.from(build)
+			.all()
+			.map((row) => [row.deploymentId, row])
+	);
 
 	for (const dep of active) {
 		const replicas = containers.get(dep.id) ?? [];
 		if (dep.status === 'queued') apply(dep, schedule(dep, online, nodes, now));
+		else if (dep.status === 'building') apply(dep, building(dep, builds.get(dep.id), now));
 		else if (dep.status === 'deploying') {
 			const t = progress(dep, replicas, now);
-			apply(dep, t);
+			apply(dep, { ...t, set: pin(dep, replicas) });
 			if (t.status === 'active') supersede(db, dep, apply);
-		} else apply(dep, health(dep, replicas));
+		} else apply(dep, { ...health(dep, replicas), set: pin(dep, replicas) });
 	}
 
 	if (changed.size) {
@@ -101,9 +122,6 @@ function schedule(
 	all: (typeof node.$inferSelect)[],
 	now: number
 ): Transition {
-	if (dep.config.source?.type !== 'image') {
-		return { message: 'Building from source arrives in Phase 3' };
-	}
 	// Phase 6 brings real scheduling; until then the first healthy node takes everything
 	const target = online[0];
 	if (!target) {
@@ -117,6 +135,15 @@ function schedule(
 				: 'Waiting for a node to come online'
 		};
 	}
+	if (dep.config.source?.type === 'repo' && !dep.image) {
+		return {
+			status: 'building',
+			nodeId: target.id,
+			startedAt: new Date(now),
+			message: 'Waiting for the builder',
+			log: `Building on node ${target.name}`
+		};
+	}
 	return {
 		status: 'deploying',
 		nodeId: target.id,
@@ -124,6 +151,33 @@ function schedule(
 		message: 'Pulling image',
 		log: `Scheduled on node ${target.name}`
 	};
+}
+
+function building(dep: DeploymentRow, report: BuildRow | undefined, now: number): Transition {
+	if (report?.state === 'succeeded' && report.image) {
+		return {
+			status: 'deploying',
+			startedAt: new Date(now),
+			message: 'Starting',
+			set: { image: report.image, commit: report.commit },
+			log: `Build succeeded${report.commit ? ` (${report.commit.slice(0, 7)})` : ''}`
+		};
+	}
+	if (report?.state === 'failed') {
+		const message = report.error ?? 'Build failed';
+		return { status: 'failed', message, log: `Build failed: ${message}` };
+	}
+	if (now - (dep.startedAt ?? dep.createdAt).getTime() > BUILD_TIMEOUT_MS) {
+		return { status: 'failed', message: 'Timed out building', log: 'Build timed out' };
+	}
+	return { message: report ? 'Building' : 'Waiting for the builder' };
+}
+
+/** Records the digest an image deployment actually runs, so rollbacks reuse that exact image. */
+function pin(dep: DeploymentRow, replicas: ContainerRow[]): Transition['set'] {
+	if (dep.resolvedImage || dep.config.source?.type !== 'image') return undefined;
+	const digest = replicas.find((c) => c.imageDigest)?.imageDigest;
+	return digest ? { resolvedImage: digest } : undefined;
 }
 
 function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Transition {
@@ -189,7 +243,7 @@ function supersede(db: Db, dep: DeploymentRow, apply: (dep: DeploymentRow, t: Tr
 				eq(deployment.serviceId, dep.serviceId),
 				eq(deployment.environmentId, dep.environmentId),
 				ne(deployment.id, dep.id),
-				inArray(deployment.status, ['queued', 'deploying', 'active', 'crashed'])
+				inArray(deployment.status, ['queued', 'building', 'deploying', 'active', 'crashed'])
 			)
 		)
 		.all()

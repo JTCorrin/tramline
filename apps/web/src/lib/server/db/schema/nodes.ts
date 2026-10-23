@@ -20,6 +20,19 @@ export const node = sqliteTable('node', {
 	...timestamps
 });
 
+/** Builds as last reported by a node's agent. Replaced wholesale on every report. */
+export const build = sqliteTable('build', {
+	deploymentId: text('deployment_id').primaryKey(),
+	nodeId: text('node_id')
+		.notNull()
+		.references(() => node.id, { onDelete: 'cascade' }),
+	state: text('state', { enum: ['running', 'succeeded', 'failed'] }).notNull(),
+	image: text('image'),
+	commit: text('commit'),
+	error: text('error'),
+	updatedAt: timestamps.updatedAt
+});
+
 /** Containers as last reported by a node's agent. Replaced wholesale on every report. */
 export const container = sqliteTable(
 	'container',
@@ -38,6 +51,7 @@ export const container = sqliteTable(
 		restartCount: integer('restart_count').notNull().default(0),
 		error: text('error'),
 		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+		imageDigest: text('image_digest'),
 		updatedAt: timestamps.updatedAt
 	},
 	(table) => [index('container_deployment_idx').on(table.deploymentId)]

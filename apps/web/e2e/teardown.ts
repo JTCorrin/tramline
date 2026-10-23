@@ -38,6 +38,7 @@ export default function teardown() {
 	const node = db.prepare("select id from node where name = 'local'").get() as
 		{ id: string } | undefined;
 	const environments = db.prepare('select id from environment').all() as { id: string }[];
+	const services = db.prepare('select id from service').all() as { id: string }[];
 	db.close();
 	if (!node) return;
 
@@ -48,6 +49,19 @@ export default function teardown() {
 	const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8' }).trim();
 	const containers = docker('ps', '-aq', '--filter', `label=tramline.node=${node.id}`);
 	if (containers) docker('rm', '-f', ...containers.split('\n'));
+	// the builder's cache volume and the images built for this run's services
+	try {
+		execFileSync('docker', ['volume', 'rm', '-f', `tramline-buildkit-${node.id}`], {
+			stdio: 'ignore'
+		});
+	} catch {
+		// never created
+	}
+	for (const { id } of services) {
+		const images = docker('images', '-q', `tramline/${id}`);
+		if (images)
+			execFileSync('docker', ['rmi', '-f', ...new Set(images.split('\n'))], { stdio: 'ignore' });
+	}
 	// only this run's environments; another install on the same host may use the same naming scheme
 	for (const { id } of environments) {
 		try {

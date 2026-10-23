@@ -51,6 +51,11 @@ export class LogShipper {
 		this.#followers.set(container.name, stop);
 	}
 
+	/** Queues lines that don't come from a container, e.g. build output. */
+	push(line: LogLine) {
+		this.#buffer.push(line);
+	}
+
 	/** Sends buffered lines; on failure they are kept for the next attempt (up to a cap). */
 	async flush() {
 		if (!this.#buffer.length) return;

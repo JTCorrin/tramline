@@ -20,6 +20,7 @@ export const toDto = (row: DeploymentRow): Deployment => ({
 	status: row.status,
 	source: sourceLabel(row.config),
 	message: row.message,
+	commit: row.commit,
 	createdBy: row.createdBy,
 	createdAt: row.createdAt.toISOString(),
 	updatedAt: row.updatedAt.toISOString()
@@ -88,6 +89,9 @@ export function redeploy(ctx: Ctx, id: string): Deployment {
 			status: 'queued',
 			config: source.config,
 			variables: source.variables,
+			// the exact image again: the built one, or the digest the original pulled
+			image: source.image ?? source.resolvedImage,
+			commit: source.commit,
 			createdBy: ctx.userId
 		})
 		.returning()

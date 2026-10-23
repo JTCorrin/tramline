@@ -125,7 +125,9 @@
 					onValueChange={(v) => stage('build', { builder: v as 'railpack' | 'dockerfile' })}
 				>
 					<Select.Trigger class="w-full">
-						{config.build.builder === 'railpack' ? 'Railpack (zero config)' : 'Dockerfile'}
+						{config.build.builder === 'railpack'
+							? 'Railpack (a Dockerfile is used if present)'
+							: 'Dockerfile'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="railpack">Railpack (zero config)</Select.Item>

@@ -21,6 +21,8 @@ export const Deployment = z.object({
 	source: z.string().nullable(),
 	/** Why it is in its current status, e.g. "Waiting for a node" or an image pull error. */
 	message: z.string().nullable(),
+	/** The commit built, for source deployments. */
+	commit: z.string().nullable(),
 	createdBy: z.string().nullable(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime()

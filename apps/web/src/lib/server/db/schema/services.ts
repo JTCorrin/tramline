@@ -148,8 +148,14 @@ export const deployment = sqliteTable(
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
 		/** Why it is in its current status, shown in the UI. */
 		message: text('message'),
-		/** When it was scheduled onto a node; the deploy timeout counts from here, not from queueing. */
+		/** When the current stage (build, then deploy) started; timeouts count from here, not from queueing. */
 		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+		/** The image to run when it isn't the configured one: a built image, or a pinned digest. */
+		image: text('image'),
+		/** `repo@sha256:…` observed when the image was first pulled; rollbacks reuse it. */
+		resolvedImage: text('resolved_image'),
+		/** The commit built, for source deployments. */
+		commit: text('commit'),
 		...timestamps
 	},
 	(table) => [index('deployment_instance_idx').on(table.serviceId, table.environmentId)]

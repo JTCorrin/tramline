@@ -1,10 +1,11 @@
 import type { AgentHello, AgentReport, DesiredState, LogLine } from '@tramline/contracts';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { Agent } from './agent';
 import { ControlPlane, ControlPlaneError } from './client';
+import { RAILPACK } from './pins';
 import { desiredState, FakeRuntime } from './testing';
 
 function fakeClient(desired: (DesiredState | null)[] = []) {
@@ -128,6 +129,79 @@ describe('Agent', () => {
 		expect(agent.stopped).toBe(false);
 		agent.stop();
 		expect(agent.stopped).toBe(true);
+	});
+});
+
+describe('Agent builds', () => {
+	const build = (deploymentId: string) => ({
+		deploymentId,
+		serviceId: 'svc_1',
+		repo: 'https://github.com/acme/api',
+		ref: 'main',
+		commit: null,
+		token: null,
+		rootDirectory: '/',
+		builder: 'railpack' as const,
+		dockerfilePath: null,
+		buildCommand: null,
+		startCommand: null,
+		image: `tramline/svc_1:${deploymentId}`,
+		secrets: {}
+	});
+
+	function setup(desired: DesiredState[]) {
+		const runtime = new FakeRuntime();
+		const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
+		const cached = path.join(stateDir, 'railpack', RAILPACK.version, 'aarch64');
+		mkdirSync(cached, { recursive: true });
+		writeFileSync(path.join(cached, 'railpack'), 'binary');
+		runtime.onExec = (cmd, { onLine }) => {
+			if (cmd[0] === 'sh') onLine('stdout', 'c'.repeat(40));
+			if (cmd[0] === 'test') return 1;
+			if (cmd[0] === 'buildctl' && cmd[1] === 'build') {
+				const name = cmd.at(-1)!.replace('type=docker,name=', '');
+				runtime.images.set(name, { id: `sha256:${name.split(':')[1]}`, created: Date.now() });
+			}
+			return 0;
+		};
+		const { client, calls } = fakeClient(desired);
+		const agent = new Agent({ runtime, client, stateDir, version: 'test', log: () => {} });
+		return { agent, runtime, calls };
+	}
+
+	it('builds what the control plane asks for and reports the result', async () => {
+		const withBuild = { ...desiredState([]), revision: 'b1', builds: [build('dep_7')] };
+		const { agent, calls } = setup([withBuild, { ...desiredState([]), revision: 'b2' }]);
+		await agent.hello();
+		await agent.sync();
+		await vi.waitFor(() => expect(agent.builds.get('dep_7')?.state).toBe('succeeded'));
+		await agent.tick();
+		expect(calls.reports.at(-1)!.builds).toEqual([
+			{
+				deploymentId: 'dep_7',
+				state: 'succeeded',
+				image: 'sha256:dep_7',
+				commit: 'c'.repeat(40),
+				error: null
+			}
+		]);
+
+		// once the control plane moves on, the agent forgets it
+		await agent.sync();
+		await agent.tick();
+		expect(calls.reports.at(-1)!.builds).toEqual([]);
+	});
+
+	it('skips builds cancelled while waiting their turn', async () => {
+		const both = { ...desiredState([]), revision: 'b1', builds: [build('dep_1'), build('dep_2')] };
+		const onlyFirst = { ...desiredState([]), revision: 'b2', builds: [build('dep_1')] };
+		const { agent, runtime } = setup([both, onlyFirst]);
+		await agent.hello();
+		await agent.sync();
+		await agent.sync(); // dep_2 removed before its turn
+		await vi.waitFor(() => expect(agent.builds.get('dep_1')?.state).toBe('succeeded'));
+		await vi.waitFor(() => expect(agent.builds.has('dep_2')).toBe(false));
+		expect(runtime.images.has('tramline/svc_1:dep_2')).toBe(false);
 	});
 });
 

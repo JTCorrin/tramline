@@ -1,6 +1,12 @@
-import { AGENT_PROTOCOL_VERSION, type AgentHello, type DesiredState } from '@tramline/contracts';
+import {
+	AGENT_PROTOCOL_VERSION,
+	type AgentHello,
+	type BuildReport,
+	type DesiredState
+} from '@tramline/contracts';
 import os from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { Builder } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
 import { HealthChecker } from './health';
@@ -38,6 +44,11 @@ export class Agent {
 	readonly converger: Converger;
 	readonly health: HealthChecker;
 	readonly logs: LogShipper;
+	readonly builder: Builder;
+	/** Builds this agent has started, by deployment, until the control plane stops asking for them. */
+	readonly builds = new Map<string, BuildReport>();
+	/** Builds run one at a time; they are CPU and memory hungry. */
+	#buildQueue: Promise<void> = Promise.resolve();
 
 	#abort = new AbortController();
 	#lastHeal = 0;
@@ -48,6 +59,16 @@ export class Agent {
 		this.converger = new Converger(options.runtime, { stateDir: options.stateDir, log: this.#log });
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
+		this.builder = new Builder(options.runtime, {
+			stateDir: options.stateDir,
+			nodeId: () => {
+				if (!this.converger.nodeId) throw new Error('nodeId is not known yet');
+				return this.converger.nodeId;
+			},
+			onLine: (deploymentId, line) =>
+				this.logs.push({ deploymentId, ts: new Date().toISOString(), stream: 'build', line }),
+			log: this.#log
+		});
 	}
 
 	get stopped() {
@@ -141,8 +162,38 @@ export class Agent {
 		if (!next) return;
 		this.desired = next;
 		if (!this.dockerError) {
+			this.#startBuilds(next);
 			await this.converger.run(next);
 			this.#lastHeal = Date.now();
+		}
+	}
+
+	/** Queues builds the control plane wants and forgets ones it has moved past. */
+	#startBuilds(desired: DesiredState) {
+		const wanted = new Set(desired.builds.map((b) => b.deploymentId));
+		for (const [id, build] of this.builds) {
+			if (!wanted.has(id) && build.state !== 'running') this.builds.delete(id);
+		}
+		for (const job of desired.builds) {
+			if (this.builds.has(job.deploymentId)) continue;
+			this.builds.set(job.deploymentId, {
+				deploymentId: job.deploymentId,
+				state: 'running',
+				image: null,
+				commit: null,
+				error: null
+			});
+			this.#buildQueue = this.#buildQueue.then(async () => {
+				// it may have been cancelled (e.g. removed) while waiting its turn
+				if (!this.desired?.builds.some((b) => b.deploymentId === job.deploymentId)) {
+					this.builds.delete(job.deploymentId);
+					return;
+				}
+				this.#log(`building ${job.deploymentId}`);
+				const result = await this.builder.build(job);
+				this.#log(`build ${job.deploymentId} ${result.state}`);
+				this.builds.set(job.deploymentId, result);
+			});
 		}
 	}
 
@@ -172,6 +223,7 @@ export class Agent {
 			}
 			await this.health.check(desired, containers);
 			this.logs.sync(containers);
+			this.#startBuilds(desired);
 		}
 
 		await this.options.client.report({
@@ -179,6 +231,7 @@ export class Agent {
 				desired && !this.dockerError
 					? observe(desired, containers, this.converger, this.health)
 					: [],
+			builds: [...this.builds.values()],
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError
 		});

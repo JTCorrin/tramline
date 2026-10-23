@@ -45,7 +45,8 @@
 			class={cn(
 				'flex gap-2 whitespace-pre-wrap',
 				line.stream === 'stderr' && 'text-red-300',
-				line.stream === 'system' && 'text-sky-300'
+				line.stream === 'system' && 'text-sky-300',
+				line.stream === 'build' && 'text-muted-foreground'
 			)}
 		>
 			<span class="shrink-0 text-muted-foreground select-none">{time(line.ts)}</span>

@@ -15,11 +15,35 @@ export interface ContainerRuntime {
 	remove(name: string): Promise<void>;
 	connect(container: string, network: string): Promise<void>;
 	exec(container: string, cmd: string[]): Promise<{ exitCode: number; output: string }>;
+	/**
+	 * Runs a command and streams its output. `env` is given to that process only
+	 * (never stored on the container), which is how build secrets are passed.
+	 * With `stdout` set, standard output is piped there instead of `onLine`.
+	 */
+	execStream(container: string, cmd: string[], options: ExecStreamOptions): Promise<number>;
+	/** CPU architecture of the Docker host, e.g. `aarch64` or `x86_64`. */
+	arch(): Promise<string>;
+	/** Writes a file into a container. */
+	putFile(container: string, path: string, content: Buffer, mode: number): Promise<void>;
+	/** Loads an image tarball (`docker save` format). */
+	loadImage(tarball: NodeJS.ReadableStream): Promise<void>;
+	/** Image ID (`sha256:…`) for a reference, or null when missing. */
+	imageId(reference: string): Promise<string | null>;
+	/** Images whose repository is `repository`, newest first. */
+	listImages(repository: string): Promise<{ id: string; tags: string[]; created: number }[]>;
+	/** Removes an image; images in use are left alone. */
+	removeImage(id: string): Promise<void>;
 	/** Follows a container's logs from `since` (epoch seconds) until it stops. Returns a cancel function. */
 	logs(name: string, since: number, onLine: OnLogLine, onEnd: () => void): () => void;
 }
 
 export type OnLogLine = (stream: 'stdout' | 'stderr', ts: string, line: string) => void;
+
+export interface ExecStreamOptions {
+	env?: Record<string, string>;
+	onLine: (stream: 'stdout' | 'stderr', line: string) => void;
+	stdout?: NodeJS.WritableStream;
+}
 
 export interface ManagedContainer {
 	name: string;
@@ -29,6 +53,8 @@ export interface ManagedContainer {
 	exitCode: number | null;
 	restartCount: number;
 	startedAt: string | null;
+	/** `repo@sha256:…` of the container's image, when the registry provided one. */
+	imageDigest?: string | null;
 }
 
 export interface RunSpec {
@@ -42,15 +68,21 @@ export interface RunSpec {
 	restart: { name: 'no' | 'always' | 'on-failure'; maxRetries: number };
 	ports?: { container: number; host: number }[];
 	binds?: string[];
+	/** Named Docker volumes. */
+	volumes?: { name: string; target: string }[];
 	security: SecurityOptions;
 }
 
 export interface SecurityOptions {
-	/** Linux capabilities to keep; everything else is dropped. */
-	capabilities: string[];
+	/** Linux capabilities to keep (everything else is dropped), or Docker's default set. */
+	capabilities: string[] | 'docker-default';
 	pidsLimit: number;
 	memoryMb: number | null;
 	readOnlyRootFilesystem: boolean;
+	/** Defaults to true. Only the rootless builder turns it off (its user namespace setup needs setuid helpers). */
+	noNewPrivileges?: boolean;
+	/** Defaults to false. Only the rootless builder needs Docker's seccomp and AppArmor profiles relaxed. */
+	unconfined?: boolean;
 }
 
 export const LABELS = {
@@ -58,6 +90,8 @@ export const LABELS = {
 	/** The node whose agent owns the container; agents never touch other nodes' containers. */
 	node: 'tramline.node',
 	role: 'tramline.role',
+	/** Built images record the service they belong to, for garbage collection. */
+	service: 'tramline.service',
 	spec: 'tramline.spec',
 	deployment: 'tramline.deployment',
 	replica: 'tramline.replica'

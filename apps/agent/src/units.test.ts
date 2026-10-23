@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { caddyConfig } from './caddy';
-import { withTag } from './docker';
+import { follow, withTag } from './docker';
 import { LABELS } from './runtime';
 import { toRunSpec } from './spec';
 import { desiredContainer } from './testing';
@@ -124,5 +124,33 @@ describe('caddyConfig', () => {
 				{ handler: 'reverse_proxy' }
 			]
 		});
+	});
+});
+
+describe('follow', () => {
+	const docker = (lines: object[]) =>
+		({
+			modem: {
+				followProgress: (_: unknown, done: (e: Error | null, out: object[]) => void) =>
+					done(null, lines)
+			}
+		}) as never;
+
+	it('resolves when Docker reports progress only', async () => {
+		await expect(
+			follow(docker([{ status: 'Pulling' }, { stream: 'Loaded image: x' }]), null as never)
+		).resolves.toBeUndefined();
+	});
+
+	it('rejects when Docker reports an error inside the stream', async () => {
+		await expect(
+			follow(
+				docker([
+					{ status: 'Pulling' },
+					{ errorDetail: { message: 'unexpected EOF' }, error: 'unexpected EOF' }
+				]),
+				null as never
+			)
+		).rejects.toThrow('unexpected EOF');
 	});
 });

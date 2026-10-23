@@ -1,4 +1,4 @@
-import type { AgentHello, AgentReport, DesiredState, LogLine } from '@tramline/contracts';
+import type { AgentHello, AgentReportInput, DesiredState, LogLine } from '@tramline/contracts';
 
 export class ControlPlaneError extends Error {
 	constructor(
@@ -53,7 +53,7 @@ export class ControlPlane {
 		return response.status === 204 ? null : ((await response.json()) as DesiredState);
 	}
 
-	async report(report: AgentReport) {
+	async report(report: AgentReportInput) {
 		await this.#request('/report', { method: 'POST', body: JSON.stringify(report) });
 	}
 
