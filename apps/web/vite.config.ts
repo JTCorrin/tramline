@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { CSP_DIRECTIVES } from './src/lib/server/security';
+import { CSP_DIRECTIVES } from './src/lib/server/security.ts';
 
 export default defineConfig({
 	plugins: [

@@ -5,6 +5,7 @@
 	import * as Avatar from '#lib/components/ui/avatar/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import { mode, toggleMode } from 'mode-watcher';
@@ -39,6 +40,9 @@
 			<div class="truncate text-xs text-muted-foreground">{user.email}</div>
 		</DropdownMenu.Label>
 		<DropdownMenu.Separator />
+		<DropdownMenu.Item onSelect={() => goto(resolve('/(app)/settings'))}>
+			<SettingsIcon /> Settings
+		</DropdownMenu.Item>
 		<DropdownMenu.Item onSelect={toggleMode}>
 			{#if mode.current === 'dark'}<SunIcon /> Light mode{:else}<MoonIcon /> Dark mode{/if}
 		</DropdownMenu.Item>

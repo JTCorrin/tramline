@@ -48,6 +48,10 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['deployments.redeploy', (c) => c.deployments.redeploy('d'), 'POST /deployments/d/redeploy'],
 	['deployments.remove', (c) => c.deployments.remove('d'), 'POST /deployments/d/remove'],
 	['nodes.getAll', (c) => c.nodes.getAll(), 'GET /nodes'],
+	['github.status', (c) => c.github.status(), 'GET /github'],
+	['github.manifest', (c) => c.github.manifest('acme'), 'POST /github/manifest'],
+	['github.repos', (c) => c.github.repos(), 'GET /github/repos'],
+	['github.disconnect', (c) => c.github.disconnect('42'), 'DELETE /github/installations/42'],
 	[
 		'deployments.getAll',
 		(c) => c.deployments.getAll({ serviceId: 's', environmentId: 'e' }),

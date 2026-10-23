@@ -43,7 +43,11 @@ export const ServiceSource = z.discriminatedUnion('type', [
 		type: z.literal('repo'),
 		repo: z.string().trim().min(1, 'Repository is required'),
 		branch: z.string().trim().min(1),
-		rootDirectory: z.string().trim().min(1)
+		rootDirectory: z.string().trim().min(1),
+		/** GitHub App installation that grants access to a private repository. */
+		installationId: z.string().nullable().optional(),
+		/** Deploy every push to `branch` (default true). */
+		autoDeploy: z.boolean().optional()
 	})
 ]);
 

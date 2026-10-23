@@ -19,6 +19,8 @@
 	const client = api();
 	let deployments = $state<Deployment[]>();
 	let open = $state<string | null>(null);
+	/** Set once the user opens or closes logs themselves; until then, follow the newest deployment. */
+	let chosen = $state(false);
 
 	$effect(() => {
 		void version;
@@ -26,8 +28,8 @@
 			.getAll({ serviceId, environmentId })
 			.then((list) => {
 				deployments = list;
-				// show the newest deployment's logs by default
-				if (open === null && list[0]) open = list[0].id;
+				// new deployments (e.g. from a push) take over the log view unless the user picked one
+				if (!chosen && list[0]) open = list[0].id;
 			})
 			.catch(reportError);
 	});
@@ -61,7 +63,10 @@
 						class="flex min-w-0 flex-1 items-center gap-3 text-left"
 						aria-expanded={open === deployment.id}
 						aria-label="Logs for {deployment.id}"
-						onclick={() => (open = open === deployment.id ? null : deployment.id)}
+						onclick={() => {
+							chosen = true;
+							open = open === deployment.id ? null : deployment.id;
+						}}
 					>
 						<ChevronRightIcon
 							class={cn(

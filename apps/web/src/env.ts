@@ -36,6 +36,16 @@ export const variables = defineEnvVars({
 			return port;
 		}
 	},
+	TRAMLINE_GIT_POLL_SECONDS: {
+		description:
+			'How often to check GitHub for new commits when webhooks can’t reach this install (default 60; 0 turns polling off). With webhooks it runs 5× less often as a safety net.',
+		schema: (value) => {
+			const seconds = Number(value ?? 60);
+			if (!Number.isInteger(seconds) || seconds < 0)
+				throw new Error('TRAMLINE_GIT_POLL_SECONDS must be a whole number');
+			return seconds;
+		}
+	},
 	TRAMLINE_URL: {
 		description: 'Public URL of this Tramline install, e.g. https://tramline.example.com.',
 		schema: optional

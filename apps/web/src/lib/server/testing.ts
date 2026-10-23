@@ -12,7 +12,8 @@ let seq = 0;
 export const testSettings: PlatformSettings = {
 	baseDomain: 'localhost',
 	ingressPort: 8080,
-	dataDir: 'data/test'
+	dataDir: 'data/test',
+	publicUrl: 'http://localhost:5173'
 };
 
 export const testSecrets = createSecrets('test-secret-key-that-is-long-enough-123');

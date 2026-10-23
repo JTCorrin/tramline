@@ -2,7 +2,7 @@
 
 An open-source, self-hosted, slimmed-down [Railway](https://railway.com): projects are a canvas of services you deploy onto compute you choose: local Docker, Proxmox, or a cloud provider.
 
-> **Status:** Phase 2 complete. `pnpm dev` runs the control plane and a local agent; Docker image services deploy to your machine behind a Caddy ingress with live logs. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
+> **Status:** Phase 3 complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
 
 ## Repository layout
 
@@ -46,6 +46,8 @@ pnpm dev
 
 The SQLite database is created at `apps/web/data/tramline.db`, and migrations run automatically on start. `pnpm dev` also starts the agent, which needs a running Docker daemon (Docker Desktop, OrbStack or Colima). Deployed services are served at `http://<service>-<id>.localhost` through the ingress on port 80 (set `TRAMLINE_INGRESS_PORT` to change it). To run the e2e test that deploys real containers: `TRAMLINE_E2E_DOCKER=1 pnpm test:e2e`.
 
+To deploy private repositories and redeploy on push, open **Settings → GitHub** and create the GitHub App (set `TRAMLINE_URL` first). GitHub sends push webhooks when the install is reachable over HTTPS; otherwise Tramline polls tracked branches every `TRAMLINE_GIT_POLL_SECONDS`.
+
 | Command                                   | What it does                                  |
 | ----------------------------------------- | --------------------------------------------- |
 | `pnpm dev`                                | Start the web app on http://localhost:5173    |
@@ -68,7 +70,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
 1. **Canvas and configuration**: Svelte Flow canvas, service panel, variables and references, environments, staged changes ✅
 2. **Agent + local Docker deploys**: node agent, reconciler, Caddy ingress, live logs, zero-downtime swaps ✅
    - 2.5 **Secure-by-default hardening** ✅: container defaults, sealed variables, log redaction, CSP and security headers, CI security scanning (see [SECURITY.md](SECURITY.md))
-3. Builds from source (GitHub, Railpack)
+3. **Builds from source**: rootless BuildKit, Railpack or Dockerfile, GitHub App, push webhooks and polling ✅
 4. Databases, volumes, reference variable depth, domains
 5. Agent access: API tokens + MCP server
 6. Multi-node, adapter SDK, Proxmox adapter

@@ -8,6 +8,10 @@ import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { securityHeaders } from '#lib/server/security.js';
 import { settings } from '#lib/server/settings.server.js';
+import { reachableFromInternet } from '#lib/server/settings.js';
+import { secrets } from '#lib/server/api/handler.js';
+import { pollRepositories } from '#lib/server/github/poll.js';
+import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
 import { createInitialModeExpression } from 'mode-watcher';
 
 const RECONCILE_INTERVAL_MS = 2_000;
@@ -29,8 +33,22 @@ export const init: ServerInit = () => {
 	};
 	const timer = setInterval(run, RECONCILE_INTERVAL_MS);
 	const unsubscribe = onChange(() => queueMicrotask(run));
+
+	// with webhooks, polling is only a safety net for missed deliveries
+	const pollEvery = (reachableFromInternet(settings) ? 5 : 1) * TRAMLINE_GIT_POLL_SECONDS * 1000;
+	let polling = false;
+	const poll = setInterval(
+		async () => {
+			if (polling) return;
+			polling = true;
+			await pollRepositories(db, secrets, settings).finally(() => (polling = false));
+		},
+		pollEvery || 2 ** 31 - 1
+	);
+
 	g.__tramlineReconciler = () => {
 		clearInterval(timer);
+		clearInterval(poll);
 		unsubscribe();
 	};
 };

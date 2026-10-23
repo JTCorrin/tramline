@@ -79,6 +79,20 @@
 					onsave={(v) => v && onstage({ source: { ...source, repo: v } })}
 				/>
 			</Setting>
+			<div class="flex items-center justify-between gap-4 rounded-lg border p-3">
+				<div>
+					<div class="text-sm font-medium">Deploy on push</div>
+					<p class="text-xs text-muted-foreground">
+						Build and deploy every new commit on {source.branch}.
+						{source.installationId ? 'Connected through the GitHub App.' : ''}
+					</p>
+				</div>
+				<Switch
+					checked={source.autoDeploy !== false}
+					onCheckedChange={(checked) => onstage({ source: { ...source, autoDeploy: checked } })}
+					aria-label="Deploy on push"
+				/>
+			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<Setting label="Branch" for="source-branch">
 					<CommitInput

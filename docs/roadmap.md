@@ -245,7 +245,9 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
     - The deploy timeout counts from scheduling, not from queueing.
     - A rejected agent token now backs off and re-reads the token file instead of stopping the agent.
     - Deploy waits for in-flight edits, and forms can't submit before the page has hydrated.
-- **Phase 3 ✅ (3a):** BuildKit secret mounts, image digest pinning, a rootless builder, and pinned and verified build tools.
+- **Phase 3 ✅:** BuildKit secret mounts, image digest pinning, a rootless builder, and pinned and verified build tools.
+  - GitHub: a private, read-only app (`contents` and `metadata` only) whose private key and webhook secret are encrypted at rest. Installation tokens last an hour, are cached in memory only and are handed to the builder through git's environment, never in a URL.
+  - Webhooks are HMAC-verified in constant time; the manifest, install and setup redirects are bound to a state cookie; installations are verified with GitHub before they're connected and never shared across organizations.
 - **Phase 3.5:** optional image vulnerability scanning (Trivy), warning by default or blocking on critical findings.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
 - **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
@@ -319,12 +321,20 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
   - dockerode's `followProgress` ignores `{"error": …}` lines, so failed pulls and loads looked successful. These now fail properly.
   - Ending the image stream early truncated large images under backpressure.
 
-**3b: GitHub (next)**
+**3b: GitHub ✅** (verified against the real GitHub API; signed-push e2e in CI)
 
-- A GitHub App created in one click via GitHub's manifest flow, a repo picker, and private repos through 1-hour installation tokens.
-- Signed push webhooks → auto-deploy on the chosen branch, honouring root directory and watch paths.
-- Polling as a fallback for installs GitHub can't reach.
-- **Exit:** connect a GitHub repo → push → it builds and deploys automatically, with live build logs.
+- **GitHub App in one click** via GitHub's manifest flow, from **Settings → GitHub**, on a personal account or a GitHub organization. Only owners and admins can connect it.
+  - Read-only `contents` and `metadata` permissions. Push webhooks are requested only when `TRAMLINE_URL` is https and reachable from the internet.
+  - Credentials are encrypted at rest. Installations are checked with GitHub before they're connected to an organization.
+- **Repo picker** in the source dialog, listing every repository the organization's installations can read; picking one fills in the URL and default branch.
+- **Private repos** clone with 1-hour installation tokens, attached to each build when the agent fetches its desired state and never stored. Services added by URL before the app was connected use the organization's installation on the repository's owner.
+- **Auto-deploy:** a "Deploy on push" switch per service (on by default).
+  - **Webhooks:** signed `push` events deploy the pushed commit to every matching service and branch, skipping deletions, tags and commits already deployed. With a root directory set, only pushes that touch it deploy.
+  - **Polling** when GitHub can't reach the install: every `TRAMLINE_GIT_POLL_SECONDS` (5× slower when webhooks work, as a safety net), using ETags so unchanged branches cost nothing. Public repositories without the app are checked every 5 minutes to stay inside GitHub's anonymous rate limit.
+  - Auto-deploys use the applied configuration and variables; staged edits stay staged.
+- The deployment log follows the newest deployment, so a push's build log appears without a click.
+- **Deferred:** watch paths beyond the root directory move to Phase 4 alongside config-as-code.
+- **Exit:** `e2e/github.e2e.ts`: create the app through the manifest flow (GitHub stubbed), then a signed push webhook deploys the pushed commit.
 
 ### Phase 4: Data, variables and networking depth
 

@@ -30,6 +30,7 @@ export const CSP_DIRECTIVES = {
 	'connect-src': ['self'],
 	'object-src': ['none'],
 	'base-uri': ['self'],
-	'form-action': ['self'],
+	// the GitHub App is created by posting its manifest to github.com
+	'form-action': ['self', 'https://github.com'],
 	'frame-ancestors': ['none']
 } as const;

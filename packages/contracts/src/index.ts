@@ -3,6 +3,7 @@ export * from './changes';
 export * from './deployments';
 export * from './environments';
 export * from './errors';
+export * from './github';
 export * from './ids';
 export * from './projects';
 export * from './services';

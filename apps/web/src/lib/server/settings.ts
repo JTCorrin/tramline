@@ -6,7 +6,21 @@ export interface PlatformSettings {
 	ingressPort: number;
 	/** Where deployment logs and the local agent token are written. */
 	dataDir: string;
+	/** Public URL of this install (TRAMLINE_URL), for GitHub callbacks and webhooks. */
+	publicUrl: string | null;
 }
+
+/** GitHub can only deliver webhooks to an address it can reach. */
+export const reachableFromInternet = (settings: PlatformSettings) => {
+	if (!settings.publicUrl) return false;
+	const { protocol, hostname } = new URL(settings.publicUrl);
+	return (
+		protocol === 'https:' &&
+		!['localhost', '127.0.0.1', '[::1]'].includes(hostname) &&
+		!hostname.endsWith('.localhost') &&
+		!hostname.endsWith('.local')
+	);
+};
 
 /** `localhost` style domains are served over plain HTTP; real domains get automatic HTTPS. */
 export const usesTls = (settings: PlatformSettings) =>

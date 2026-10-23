@@ -165,7 +165,13 @@ function building(dep: DeploymentRow, report: BuildRow | undefined, now: number)
 	}
 	if (report?.state === 'failed') {
 		const message = report.error ?? 'Build failed';
-		return { status: 'failed', message, log: `Build failed: ${message}` };
+		// keep the commit so polling doesn't rebuild the same broken commit
+		return {
+			status: 'failed',
+			message,
+			set: { commit: report.commit },
+			log: `Build failed: ${message}`
+		};
 	}
 	if (now - (dep.startedAt ?? dep.createdAt).getTime() > BUILD_TIMEOUT_MS) {
 		return { status: 'failed', message: 'Timed out building', log: 'Build timed out' };
