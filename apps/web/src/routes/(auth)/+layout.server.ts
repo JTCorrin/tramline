@@ -1,0 +1,8 @@
+import { githubAuthEnabled } from '#lib/server/auth.js';
+import { redirect } from '@sveltejs/kit';
+import type { LayoutServerLoad } from './$types';
+
+export const load: LayoutServerLoad = ({ locals }) => {
+	if (locals.user) redirect(303, '/');
+	return { githubAuthEnabled };
+};

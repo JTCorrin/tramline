@@ -1,0 +1,18 @@
+{
+	"name": "@tramline/client",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Typed Tramline API client and resource definitions (used by the web app and CLI)",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit",
+		"lint": "tsc --noEmit",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@tramline/contracts": "workspace:*"
+	}
+}

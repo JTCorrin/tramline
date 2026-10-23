@@ -1,0 +1,26 @@
+{
+	"name": "tramline",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"packageManager": "pnpm@10.23.0",
+	"engines": {
+		"node": ">=22.13"
+	},
+	"scripts": {
+		"dev": "pnpm --filter @tramline/web dev",
+		"build": "pnpm --filter @tramline/web build",
+		"check": "pnpm -r check",
+		"lint": "prettier --check . && pnpm -r lint",
+		"format": "prettier --write .",
+		"test": "pnpm -r test",
+		"test:e2e": "pnpm --filter @tramline/web test:e2e"
+	},
+	"devDependencies": {
+		"prettier": "^3.8.3",
+		"prettier-plugin-svelte": "^4.1.0",
+		"prettier-plugin-tailwindcss": "^0.8.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.8"
+	}
+}
