@@ -1,0 +1,26 @@
+{
+	"name": "@tramline/agent",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Runs on every node: converges the local Docker daemon to the control plane's desired state",
+	"scripts": {
+		"dev": "tsx watch src/main.ts",
+		"start": "tsx src/main.ts",
+		"check": "tsc --noEmit",
+		"lint": "tsc --noEmit",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage"
+	},
+	"dependencies": {
+		"@tramline/contracts": "workspace:*",
+		"dockerode": "^5.0.1"
+	},
+	"devDependencies": {
+		"@types/dockerode": "^4.0.2",
+		"@types/node": "^22.20.5",
+		"@vitest/coverage-v8": "^4.1.12",
+		"tsx": "^4.23.15",
+		"vitest": "^4.1.12"
+	}
+}

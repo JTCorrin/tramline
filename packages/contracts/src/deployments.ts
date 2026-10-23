@@ -19,6 +19,8 @@ export const Deployment = z.object({
 	status: z.enum(DEPLOYMENT_STATUSES),
 	/** Image or repo@branch, for display. */
 	source: z.string().nullable(),
+	/** Why it is in its current status, e.g. "Waiting for a node" or an image pull error. */
+	message: z.string().nullable(),
 	createdBy: z.string().nullable(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime()

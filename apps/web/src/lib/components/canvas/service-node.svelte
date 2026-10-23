@@ -40,10 +40,21 @@
 			</div>
 		</div>
 	</div>
-	<div class="mt-4 flex items-center justify-between">
+	<div class="mt-4 flex items-center justify-between gap-2">
 		<StatusBadge status={service.status} />
-		{#if service.publicDomain}
-			<GlobeIcon class="size-3.5 text-muted-foreground" aria-label="Public domain" />
+		{#if service.url}
+			<a
+				href={service.url}
+				target="_blank"
+				rel="external noreferrer"
+				class="nodrag flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				onclick={(event) => event.stopPropagation()}
+			>
+				<GlobeIcon class="size-3.5 shrink-0" />
+				<span class="truncate">{service.url.replace(/^https?:\/\//, '')}</span>
+			</a>
+		{:else if service.publicDomain}
+			<GlobeIcon class="size-3.5 text-muted-foreground" aria-label="Public domain on next deploy" />
 		{/if}
 	</div>
 	<Handle type="target" position={Position.Left} class="opacity-0" isConnectable={false} />

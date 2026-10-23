@@ -77,7 +77,20 @@
 		<ServiceIcon kind={service.kind} icon={service.icon} />
 		<div class="min-w-0 flex-1">
 			<h2 class="truncate font-semibold">{service.name}</h2>
-			<StatusBadge status={service.status} />
+			<div class="flex items-center gap-3">
+				<StatusBadge status={service.status} />
+				{#if service.url}
+					<a
+						href={service.url}
+						target="_blank"
+						rel="external noreferrer"
+						class="truncate text-xs text-muted-foreground underline-offset-2 hover:underline"
+						data-testid="service-url"
+					>
+						{service.url}
+					</a>
+				{/if}
+			</div>
 		</div>
 		<Button variant="ghost" size="icon-sm" aria-label="Close panel" onclick={onclose}>
 			<XIcon />

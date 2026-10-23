@@ -22,6 +22,13 @@
       "when": 1792735443224,
       "tag": "0002_backfill_production_environments",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792737272476,
+      "tag": "0003_nodes",
+      "breakpoints": true
     }
   ]
 }

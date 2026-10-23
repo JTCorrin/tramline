@@ -94,7 +94,8 @@ export function referencedServices(variables: Record<string, string>, self: stri
 export function builtinVariables(
 	service: { id: string; name: string },
 	environment: { id: string; name: string },
-	port: number | null
+	port: number | null,
+	publicDomain: string | null = null
 ): Record<string, string> {
 	const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 	return {
@@ -103,6 +104,7 @@ export function builtinVariables(
 		TRAMLINE_ENVIRONMENT_ID: environment.id,
 		TRAMLINE_ENVIRONMENT_NAME: environment.name,
 		TRAMLINE_PRIVATE_DOMAIN: `${slug(service.name)}.${slug(environment.name)}.tramline.internal`,
-		...(port ? { PORT: String(port) } : {})
+		...(port ? { PORT: String(port) } : {}),
+		...(publicDomain ? { TRAMLINE_PUBLIC_DOMAIN: publicDomain } : {})
 	};
 }

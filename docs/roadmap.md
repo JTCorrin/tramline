@@ -160,6 +160,60 @@ export interface ComputeAdapter<Creds = unknown> {
 
 ---
 
+## Secure by default
+
+Security is a core reason for Tramline to exist, so every default should be the safe one, and anything less safe should be an explicit, visible opt-out. The checklist people apply by hand to a fresh VPS (key-only SSH, a non-root user, a closed firewall, fail2ban, everything in a repo behind Caddy, off-server backups) should simply be **what Tramline does** to every node it creates or enrolls.
+
+**Already in place**
+
+- Variable values and deployment snapshots are encrypted at rest (AES-256-GCM, key derived from `TRAMLINE_SECRET_KEY`), masked in the UI, and sent only to the node that runs the deployment.
+- Agents dial out with per-node bearer tokens (stored hashed), so nodes need no inbound control port. An agent can only write logs for its own deployments.
+- One isolated network per environment. Caddy's admin API is never exposed. Sign-in is rate limited, and org data is scoped in every query (with tests that check it).
+
+**Nodes (VMs and Proxmox guests)**: a hardening baseline applied by cloud-init or the `manual` install script, reported back by the agent:
+
+- **SSH:** key-only, no root login, no passwords. Tramline itself never needs SSH (the agent dials out), so by default port 22 is closed or limited to an admin IP, with an emergency "open SSH for 1 hour" switch in the UI.
+- **Non-root:** a dedicated `tramline` system user runs the agent. Rootless Docker or `userns-remap` is offered where supported, because membership of the `docker` group is effectively root.
+- **Firewall:** nftables default-deny inbound. Only 80/443 are open on ingress nodes, plus the WireGuard UDP port between nodes. Adapters also configure the provider firewall or security group (two layers).
+- **Brute force:** fail2ban or sshguard whenever SSH is open. Unattended security upgrades, time sync, and minimal base images (Ubuntu LTS or Debian, Flatcar later).
+- **Posture view:** each node shows a checklist (SSH, firewall, updates, Docker mode, disk encryption) with a score, and the control plane warns when a node drifts.
+
+**Workloads**
+
+- **Container defaults:** `no-new-privileges`, all capabilities dropped except a small allowlist, PID and memory limits, `/var/run/docker.sock` never mountable into user containers, and an optional read-only root filesystem.
+- **Images:** tags resolved to a digest at deploy time and pinned in the snapshot, so a rollback really is the same image. A vulnerability scan (Trivy or Grype) runs on deploy, with warnings or optional blocking. SBOMs are stored.
+- **Secrets:**
+  - "Sealed" variables (write-only, never shown again after saving).
+  - Known secret values redacted from deployment logs.
+  - Envelope encryption: a key per environment, wrapped by the master key, so the master key can be rotated without redeploying.
+  - Secrets optionally mounted as tmpfs files instead of env vars.
+  - Build secrets passed as BuildKit secret mounts, never as `ARG`.
+  - External secret stores later (1Password, Vault, AWS or GCP Secrets Manager).
+
+**Control plane and account security**
+
+- 2FA and passkeys (better-auth plugins), scoped and expiring API tokens, an audit log (including who revealed a secret), and RBAC.
+- Security headers and CSP on by default; HSTS on generated domains.
+- Agent ↔ control plane over TLS. mTLS and token rotation arrive with remote nodes.
+- Signed agent binaries and a checksum-verified install script.
+
+**Recoverability (the "no backup is a gamble" rule)**
+
+- Litestream streams the control-plane SQLite database to S3-compatible storage.
+- Scheduled database and volume backups go **off the node**, with restore drills run in CI.
+- Config-as-code and project export, so an install can be rebuilt from a repo plus a backup.
+
+**CI supply chain:** CodeQL, `pnpm audit`, gitleaks secret scanning, Dependabot or Renovate, and pinned GitHub Actions.
+
+**Where it lands**
+
+- **Phase 2.5** (small, next): container hardening defaults, log redaction of secret values, sealed variables, security headers and CSP, CI security scanning.
+- **Phase 3:** BuildKit secret mounts, image digest pinning, vulnerability scan on deploy.
+- **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
+- **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9).
+- **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view.
+- **Phase 7:** provider firewalls and security groups, no public SSH by default on cloud nodes.
+
 ## Phases
 
 Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
@@ -183,14 +237,27 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
 - SSE event bus `/api/v1/events?projectId=` wired into resource-cache invalidation.
 - **Exit:** the whole Railway experience works in "design mode". Deploy creates a `queued` deployment record. Playwright covers right-click → add → configure → stage → deploy.
 
-### Phase 2: Agent and local Docker deploys (image services)
+### Phase 2: Agent and local Docker deploys (image services) ✅ (real-Docker e2e runs in CI)
 
-- `packages/contracts` agent protocol: `hello/auth`, `desiredState`, `actualState`, `logChunk`, `stats`, `exec` (later).
-- `apps/agent`: wss connection with node token, a dockerode-based local convergence loop, log streaming, a Docker events watcher, and a Caddy sidecar driven over its admin API.
-- Control plane: SQLite job queue, agent gateway, **reconciler** (one node for now), deployment state machine, healthchecks, zero-downtime swap, rollback, restart policy.
-- Networking v1: one Docker network per environment with aliases as `<service>.<env>.tramline.internal`. A generated public domain `<svc>-<hash>.<baseDomain>` (wildcard DNS, falling back to `sslip.io`) goes through Caddy with automatic TLS.
-- Deployments tab: live status, build/deploy logs (append-only files per deployment, tailed over SSE), redeploy/rollback/remove.
-- **Exit:** right-click → Docker Image `traefik/whoami` → Deploy. Status moves queued → deploying → active, logs stream, and the generated URL returns 200. Killing the container triggers a restart.
+- **Agent protocol** (`packages/contracts/src/agent.ts`): `hello`, the node's full desired state, an actual-state report, and log batches.
+  - **Transport:** HTTPS with long-polling rather than WebSockets. The agent still dials out (so NAT is fine), it works through any proxy, and every exchange is idempotent. WebSockets can come later for interactive `exec`.
+- **`apps/agent`:**
+  - Uses dockerode, behind a `ContainerRuntime` interface so it can be tested with a fake.
+  - Runs three loops: a sync loop (long-poll, then converge), a report loop (observe, health-check, report, and re-converge periodically to repair drift), and a log shipper.
+  - Detects Docker outages and reports them.
+- **Ingress:** a `tramline-ingress` Caddy container. Its config file is rewritten and Caddy runs with `--watch`, so the admin port is never exposed. It joins every environment network, which lets it run healthchecks too.
+- **Control plane:**
+  - Registry for the built-in `local` node; its token is written to `data/local-agent.token`.
+  - A deterministic desired-state builder with a revision hash.
+  - A **reconciler** state machine (queued → deploying → active ⇄ crashed, or → failed), with stability and healthcheck gates, startup crash-loop detection and a 10-minute timeout.
+  - Zero-downtime swaps: public routes point at a per-deployment alias, and the old deployment is removed only once the new one is live.
+  - Redeploy, rollback and remove.
+- **Networking v1:**
+  - One Docker network per environment, with `<service>.<env>.tramline.internal` aliases.
+  - A stable generated domain `<svc>-<hex>.<baseDomain>`, also exposed as `TRAMLINE_PUBLIC_DOMAIN`. `localhost` serves plain HTTP; real domains get automatic HTTPS.
+- **UI:** deployments tab with live status messages, SSE-streamed logs, redeploy/rollback/remove buttons, the URL on the node and in the panel, and a node status indicator.
+- **Deferred:** the SQLite job queue moves to Phase 3, where builds need it. Cron services move to Phase 4.
+- **Exit:** `e2e/deploy.e2e.ts` (run with `TRAMLINE_E2E_DOCKER=1`): deploy `traefik/whoami` with a healthcheck, reach it through the ingress, see its logs, remove it, and get a 404.
 
 ### Phase 3: Builds from source
 

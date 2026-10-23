@@ -67,7 +67,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tramline/web exec playwright install --with-deps chromium
+      # GitHub's Ubuntu runners ship Docker, so the agent can deploy real containers
       - run: pnpm test:e2e
+        env:
+          TRAMLINE_E2E_DOCKER: '1'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

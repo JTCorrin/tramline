@@ -2,12 +2,13 @@
 
 An open-source, self-hosted, slimmed-down [Railway](https://railway.com): projects are a canvas of services you deploy onto compute you choose: local Docker, Proxmox, or a cloud provider.
 
-> **Status:** Phase 1 complete. You can design a project on the canvas, configure services, variables and environments, and deploy staged changes; deployments stay queued until the agent arrives in Phase 2.
+> **Status:** Phase 2 complete. `pnpm dev` runs the control plane and a local agent; Docker image services deploy to your machine behind a Caddy ingress with live logs. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
 
 ## Repository layout
 
 ```
-apps/web/            SvelteKit app: UI, REST API (/api/v1), control plane
+apps/web/            SvelteKit app: UI, REST API (/api/v1), agent API (/api/agent/v1), control plane
+apps/agent/          node agent: converges Docker to the desired state, runs the Caddy ingress
 packages/contracts/  zod schemas shared by the API, client, CLI and agent
 packages/client/     typed API client + resource definitions
 ```
@@ -43,7 +44,7 @@ cp apps/web/.env.example apps/web/.env   # then set TRAMLINE_SECRET_KEY (openssl
 pnpm dev
 ```
 
-The SQLite database is created at `apps/web/data/tramline.db`, and migrations run automatically on start.
+The SQLite database is created at `apps/web/data/tramline.db`, and migrations run automatically on start. `pnpm dev` also starts the agent, which needs a running Docker daemon (Docker Desktop, OrbStack or Colima). Deployed services are served at `http://<service>-<id>.localhost` through the ingress on port 80 (set `TRAMLINE_INGRESS_PORT` to change it). To run the e2e test that deploys real containers: `TRAMLINE_E2E_DOCKER=1 pnpm test:e2e`.
 
 | Command                                   | What it does                                  |
 | ----------------------------------------- | --------------------------------------------- |
@@ -65,7 +66,8 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
 
 0. **Foundations**: monorepo, auth + organizations, resource model, projects ✅
 1. **Canvas and configuration**: Svelte Flow canvas, service panel, variables and references, environments, staged changes ✅
-2. Agent + local Docker deploys
+2. **Agent + local Docker deploys**: node agent, reconciler, Caddy ingress, live logs, zero-downtime swaps ✅
+   - 2.5 Secure-by-default hardening (container defaults, sealed variables, log redaction, CI security scanning)
 3. Builds from source (GitHub, Railpack)
 4. Databases, volumes, reference variable depth, domains
 5. Agent access: API tokens + MCP server

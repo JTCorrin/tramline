@@ -44,6 +44,10 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.variables.stage({ environmentId: 'e', set: { A: '1' } }),
 		'PATCH /variables'
 	],
+	['deployments.get', (c) => c.deployments.get('d'), 'GET /deployments/d'],
+	['deployments.redeploy', (c) => c.deployments.redeploy('d'), 'POST /deployments/d/redeploy'],
+	['deployments.remove', (c) => c.deployments.remove('d'), 'POST /deployments/d/remove'],
+	['nodes.getAll', (c) => c.nodes.getAll(), 'GET /nodes'],
 	[
 		'deployments.getAll',
 		(c) => c.deployments.getAll({ serviceId: 's', environmentId: 'e' }),
@@ -57,6 +61,12 @@ describe('client routes', () => {
 		await call(createClient({ baseUrl: '/api/v1', fetch }));
 		const [url, init] = fetch.mock.calls[0]!;
 		expect(`${init?.method} ${url}`).toBe(expected.replace(' /', ' /api/v1/'));
+	});
+
+	it('exposes the logs stream path', () => {
+		expect(createClient({ baseUrl: '/api/v1' }).deployments.logsPath('d')).toBe(
+			'/deployments/d/logs'
+		);
 	});
 
 	it('uses the global fetch when none is passed', async () => {

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
 	DEFAULT_SERVICE_CONFIG,
 	parseReferences,
@@ -11,6 +12,9 @@ import type { Secrets } from '../crypto';
 import { deployment, service, serviceInstance, stagedChange, variable } from '../db/schema';
 import { publish } from '../events';
 import { newId } from '../ids';
+import { notifyNodes } from '../nodes/bus';
+import { systemLog } from '../nodes/logs';
+import type { PlatformSettings } from '../settings';
 import { requireEnvironment } from './access';
 import type { Ctx } from './context';
 import { toDto as deploymentDto } from './deployments';
@@ -85,13 +89,39 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 		throw new AppError('conflict', 'There are no changes to deploy');
 	}
 
+	for (const svc of affected) {
+		const { publicDomain, port } = svc.effective.networking;
+		if (publicDomain && !port) {
+			throw new AppError(
+				'conflict',
+				`Set a port on ${svc.service.name} to give it a public domain`
+			);
+		}
+	}
+
+	// generated once per service and environment, then kept for every later deploy
+	const domains = new Map(
+		state.services.map((svc) => [
+			svc.service.id,
+			svc.domain ??
+				(svc.effective.networking.publicDomain
+					? generateDomain(svc.service.name, ctx.settings)
+					: null)
+		])
+	);
+
 	const { variables } = resolveVariables({
 		shared: state.shared.effective,
 		services: state.services.map((svc) => ({
 			id: svc.service.id,
 			name: svc.service.name,
 			variables: svc.effectiveVariables,
-			builtins: builtinVariables(svc.service, env, svc.effective.networking.port)
+			builtins: builtinVariables(
+				svc.service,
+				env,
+				svc.effective.networking.port,
+				domains.get(svc.service.id) ?? null
+			)
 		}))
 	});
 
@@ -109,6 +139,20 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 				)
 				.run();
 			replaceVariables(tx, ctx.secrets, environmentId, svc.service.id, svc.effectiveVariables);
+		}
+		for (const svc of state.services) {
+			const domain = domains.get(svc.service.id);
+			if (domain && domain !== svc.domain) {
+				tx.update(serviceInstance)
+					.set({ domain })
+					.where(
+						and(
+							eq(serviceInstance.serviceId, svc.service.id),
+							eq(serviceInstance.environmentId, environmentId)
+						)
+					)
+					.run();
+			}
 		}
 		tx.delete(stagedChange).where(eq(stagedChange.environmentId, environmentId)).run();
 
@@ -131,6 +175,8 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 			);
 	});
 
+	for (const dep of created) systemLog(ctx.settings.dataDir, dep.id, 'Queued');
+	notifyNodes();
 	publish({ type: 'changes', projectId: env.projectId, environmentId });
 	publish({ type: 'deployments', projectId: env.projectId, environmentId });
 	publish({ type: 'services', projectId: env.projectId });
@@ -193,4 +239,15 @@ function describeVariables(before: Record<string, string>, after: Record<string,
 	return [...changedKeys(before, after)]
 		.sort()
 		.map((key) => (!(key in before) ? `+ ${key}` : !(key in after) ? `- ${key}` : `~ ${key}`));
+}
+
+/** e.g. `whoami-k3f9x2.localhost` */
+function generateDomain(serviceName: string, settings: PlatformSettings) {
+	const slug = serviceName
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-|-$/g, '')
+		.slice(0, 40);
+	const suffix = randomBytes(4).toString('hex').slice(0, 6);
+	return `${slug || 'service'}-${suffix}.${settings.baseDomain}`;
 }

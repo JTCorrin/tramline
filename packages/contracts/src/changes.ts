@@ -30,7 +30,9 @@ export const CanvasService = z.object({
 	source: z.string().nullable(),
 	status: z.enum([...DEPLOYMENT_STATUSES, 'undeployed']),
 	staged: z.boolean(),
-	publicDomain: z.boolean()
+	publicDomain: z.boolean(),
+	/** Public URL once a domain has been generated. */
+	url: z.string().nullable()
 });
 
 export type CanvasService = z.infer<typeof CanvasService>;

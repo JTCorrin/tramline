@@ -1,4 +1,5 @@
 import type { Canvas } from '@tramline/contracts';
+import { publicUrl } from '../settings';
 import { requireEnvironment } from './access';
 import type { Ctx } from './context';
 import { latestStatuses } from './deployments';
@@ -33,7 +34,8 @@ export function get(ctx: Ctx, environmentId: string): Canvas {
 			source: sourceLabel(svc.effective),
 			status: statuses.get(svc.service.id) ?? 'undeployed',
 			staged: hasStaged(svc.staged),
-			publicDomain: svc.effective.networking.publicDomain
+			publicDomain: svc.effective.networking.publicDomain,
+			url: svc.domain ? publicUrl(ctx.settings, svc.domain) : null
 		})),
 		edges
 	};

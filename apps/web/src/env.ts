@@ -17,6 +17,25 @@ export const variables = defineEnvVars({
 		description: 'Path to the SQLite database file.',
 		schema: (value) => value || 'data/tramline.db'
 	},
+	TRAMLINE_DATA_DIR: {
+		description: 'Directory for deployment logs and the local agent token (default: data).',
+		schema: (value) => value || 'data'
+	},
+	TRAMLINE_BASE_DOMAIN: {
+		description:
+			'Wildcard domain for generated service URLs, e.g. apps.example.com (needs a *.apps.example.com DNS record). Defaults to localhost, served over plain HTTP.',
+		schema: (value) => (value || 'localhost').toLowerCase()
+	},
+	TRAMLINE_INGRESS_PORT: {
+		description: 'Host port the ingress proxy listens on for HTTP (default 80).',
+		schema: (value) => {
+			const port = Number(value || 80);
+			if (!Number.isInteger(port) || port < 1 || port > 65535) {
+				throw new Error('TRAMLINE_INGRESS_PORT must be a port number');
+			}
+			return port;
+		}
+	},
 	TRAMLINE_URL: {
 		description: 'Public URL of this Tramline install, e.g. https://tramline.example.com.',
 		schema: optional

@@ -1,6 +1,7 @@
 import type { ServiceConfig, ServiceConfigPatch } from '@tramline/contracts';
 import { index, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { user } from './auth';
+import { node } from './nodes';
 import { project, timestamps } from './projects';
 
 export const environment = sqliteTable(
@@ -44,7 +45,9 @@ export const serviceInstance = sqliteTable(
 			.notNull()
 			.references(() => environment.id, { onDelete: 'cascade' }),
 		/** null until the first deploy. */
-		config: text('config', { mode: 'json' }).$type<ServiceConfig>()
+		config: text('config', { mode: 'json' }).$type<ServiceConfig>(),
+		/** Hostname generated the first time a public domain is enabled; kept across deploys. */
+		domain: text('domain').unique()
 	},
 	(table) => [primaryKey({ columns: [table.serviceId, table.environmentId] })]
 );
@@ -115,6 +118,9 @@ export const deployment = sqliteTable(
 		/** Encrypted JSON of the fully resolved variables. */
 		variables: text('variables').notNull(),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		/** Why it is in its current status, shown in the UI. */
+		message: text('message'),
 		...timestamps
 	},
 	(table) => [index('deployment_instance_idx').on(table.serviceId, table.environmentId)]

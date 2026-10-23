@@ -4,10 +4,11 @@ import type { z } from 'zod';
 import { TRAMLINE_SECRET_KEY } from '$app/env/private';
 import { createSecrets } from '../crypto';
 import { db, schema } from '../db';
+import { settings } from '../settings.server';
 import type { Ctx } from '../domain';
 import { AppError, validationFailed } from './errors';
 
-const secrets = createSecrets(TRAMLINE_SECRET_KEY);
+export const secrets = createSecrets(TRAMLINE_SECRET_KEY);
 
 /**
  * Wraps an `/api/v1` handler: authenticates the caller, builds the domain
@@ -68,5 +69,5 @@ export function context(event: RequestEvent): Ctx {
 		.get();
 	if (!membership) throw new AppError('forbidden', 'You are not a member of this organization');
 
-	return { db, secrets, userId: user.id, organizationId };
+	return { db, secrets, settings, userId: user.id, organizationId };
 }

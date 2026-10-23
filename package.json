@@ -8,7 +8,7 @@
 		"node": ">=22.13"
 	},
 	"scripts": {
-		"dev": "pnpm --filter @tramline/web dev",
+		"dev": "pnpm --parallel --filter @tramline/web --filter @tramline/agent dev",
 		"build": "pnpm --filter @tramline/web build",
 		"check": "pnpm -r check",
 		"lint": "prettier --check . && pnpm -r lint",

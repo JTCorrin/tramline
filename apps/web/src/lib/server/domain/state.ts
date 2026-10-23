@@ -1,8 +1,8 @@
 import type { ServiceConfig } from '@tramline/contracts';
-import { asc, eq } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client';
 import type { Secrets } from '../crypto';
-import { environment, service, type StagedPayload } from '../db/schema';
+import { and, asc, eq } from 'drizzle-orm';
+import { environment, service, serviceInstance, type StagedPayload } from '../db/schema';
 import { appliedConfig, effectiveConfig, getStaged } from './staging';
 import { appliedVariables, effectiveVariables } from './variables';
 
@@ -13,6 +13,8 @@ export interface ServiceState {
 	effective: ServiceConfig;
 	appliedVariables: Record<string, string>;
 	effectiveVariables: Record<string, string>;
+	/** Generated public hostname, once one exists. */
+	domain: string | null;
 }
 
 export interface EnvironmentState {
@@ -54,7 +56,15 @@ export function loadEnvironmentState(
 				staged,
 				effective: effectiveConfig(applied, staged),
 				appliedVariables: appliedVariables(db, secrets, env.id, svc.id),
-				effectiveVariables: effectiveVariables(db, secrets, env.id, svc.id)
+				effectiveVariables: effectiveVariables(db, secrets, env.id, svc.id),
+				domain:
+					db
+						.select({ domain: serviceInstance.domain })
+						.from(serviceInstance)
+						.where(
+							and(eq(serviceInstance.serviceId, svc.id), eq(serviceInstance.environmentId, env.id))
+						)
+						.get()?.domain ?? null
 			};
 		})
 	};

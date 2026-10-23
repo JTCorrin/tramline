@@ -9,6 +9,15 @@
 				"export PATH=$HOME/.nvm/versions/node/v24.22.1/bin:$PATH && cd apps/web && pnpm exec vite dev --port 5173 --strictPort"
 			],
 			"port": 5173
+		},
+		{
+			"name": "agent",
+			"runtimeExecutable": "/bin/zsh",
+			"runtimeArgs": [
+				"-c",
+				"export PATH=$HOME/.nvm/versions/node/v24.22.1/bin:$HOME/.orbstack/bin:$PATH && cd apps/agent && pnpm exec tsx watch src/main.ts"
+			],
+			"port": 7171
 		}
 	]
 }

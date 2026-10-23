@@ -1,5 +1,6 @@
 import type { Secrets } from '../crypto';
 import type { Db } from '../db/client';
+import type { PlatformSettings } from '../settings';
 
 /**
  * Everything a domain function needs to act on behalf of a caller.
@@ -8,6 +9,7 @@ import type { Db } from '../db/client';
 export interface Ctx {
 	db: Db;
 	secrets: Secrets;
+	settings: PlatformSettings;
 	userId: string;
 	organizationId: string;
 }

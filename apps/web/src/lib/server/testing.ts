@@ -2,11 +2,18 @@ import { createSecrets } from './crypto';
 import { createDb, type Db } from './db/client';
 import { member, organization, user } from './db/schema';
 import type { Ctx } from './domain';
+import type { PlatformSettings } from './settings';
 
 /** A migrated in-memory database. */
 export const createTestDb = () => createDb(':memory:');
 
 let seq = 0;
+
+export const testSettings: PlatformSettings = {
+	baseDomain: 'localhost',
+	ingressPort: 8080,
+	dataDir: 'data/test'
+};
 
 export const testSecrets = createSecrets('test-secret-key-that-is-long-enough-123');
 
@@ -27,5 +34,5 @@ export function seedCtx(db: Db = createTestDb()): Ctx {
 		.values({ id: `mem_${n}`, organizationId, userId, role: 'owner', createdAt: now })
 		.run();
 
-	return { db, secrets: testSecrets, userId, organizationId };
+	return { db, secrets: testSecrets, settings: testSettings, userId, organizationId };
 }
