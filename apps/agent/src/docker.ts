@@ -15,6 +15,9 @@ import {
 export const withTag = (image: string) =>
 	image.includes('@') || /:[^/]+$/.test(image) ? image : `${image}:latest`;
 
+/** `ghcr.io/acme/api:1@sha256:…` → `ghcr.io/acme/api`. A port in the registry host is not a tag. */
+export const repositoryOf = (reference: string) => reference.split('@')[0]!.replace(/:[^/]+$/, '');
+
 const statusCode = (error: unknown) => (error as { statusCode?: number })?.statusCode;
 
 /** ContainerRuntime backed by the Docker Engine API (honours DOCKER_HOST). */
@@ -208,6 +211,19 @@ export class DockerRuntime implements ContainerRuntime {
 	async loadImage(tarball: NodeJS.ReadableStream) {
 		const stream = await this.docker.loadImage(tarball);
 		await follow(this.docker, stream);
+	}
+
+	async repoDigest(reference: string) {
+		try {
+			const image = await this.docker.getImage(withTag(reference)).inspect();
+			const repository = repositoryOf(reference);
+			const digests = image.RepoDigests ?? [];
+			// an image pulled under several names has a digest per repository
+			return digests.find((d) => repositoryOf(d) === repository) ?? digests[0] ?? null;
+		} catch (error) {
+			if (statusCode(error) === 404) return null;
+			throw error;
+		}
 	}
 
 	async imageId(reference: string) {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ScanResult } from './scan';
 
 export const DEPLOYMENT_STATUSES = [
 	'queued',
@@ -23,6 +24,8 @@ export const Deployment = z.object({
 	message: z.string().nullable(),
 	/** The commit built, for source deployments. */
 	commit: z.string().nullable(),
+	/** Vulnerability scan of the image, when one ran. */
+	scan: ScanResult.nullable(),
 	createdBy: z.string().nullable(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime()

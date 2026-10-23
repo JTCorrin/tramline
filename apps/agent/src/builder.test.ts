@@ -15,7 +15,7 @@ import {
 } from './builder';
 import { BUILDKIT_IMAGE, RAILPACK } from './pins';
 import { extractFile, railpackBinary } from './railpack';
-import { FakeRuntime } from './testing';
+import { FakeRuntime, stateDirWithTools } from './testing';
 
 const COMMIT = 'a'.repeat(40);
 
@@ -34,6 +34,7 @@ function job(overrides: Partial<DesiredBuild> = {}): DesiredBuild {
 		startCommand: null,
 		image: 'tramline/svc_1:dep_1',
 		secrets: { NPM_TOKEN: 'npm_secret_value', PORT: '8080' },
+		scan: 'off',
 		...overrides
 	};
 }
@@ -41,11 +42,8 @@ function job(overrides: Partial<DesiredBuild> = {}): DesiredBuild {
 /** A builder whose fake runtime behaves like a successful build unless told otherwise. */
 function setup(options: { dockerfile?: boolean; fail?: string; prepareExit?: number[] } = {}) {
 	const runtime = new FakeRuntime();
-	const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-builder-'));
-	// a cached Railpack binary, so tests don't download
-	const cached = path.join(stateDir, 'railpack', RAILPACK.version, 'aarch64');
-	mkdirSync(cached, { recursive: true });
-	writeFileSync(path.join(cached, 'railpack'), 'binary');
+	// cached tool binaries, so tests don't download
+	const stateDir = stateDirWithTools();
 	const prepareExits = [...(options.prepareExit ?? [0])];
 	runtime.onExec = (cmd, { onLine }) => {
 		const program = cmd[0]!;
@@ -87,7 +85,8 @@ describe('Builder', () => {
 			state: 'succeeded',
 			image: 'sha256:built000000000000',
 			commit: COMMIT,
-			error: null
+			error: null,
+			scan: null
 		});
 
 		const clone = execOf(runtime, 'sh')!;

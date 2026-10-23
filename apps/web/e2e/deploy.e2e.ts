@@ -2,8 +2,9 @@ import { INGRESS_PORT } from '../playwright.config';
 import { createProject, expect, signUp, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
-// pulling images and starting containers takes a while on a cold machine
-test.setTimeout(180_000);
+// pulling, scanning (the first scan downloads Trivy's database) and starting containers
+// takes a while on a cold machine
+test.setTimeout(600_000);
 
 test('deploy a Docker image, reach it through the ingress, then remove it', async ({
 	page,
@@ -31,7 +32,7 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	await page.getByTestId('changes-bar').getByRole('button', { name: 'Deploy' }).click();
 
 	const node = page.getByTestId('service-node').filter({ hasText: 'whoami' });
-	await expect(node).toContainText('Online', { timeout: 150_000 });
+	await expect(node).toContainText('Online', { timeout: 540_000 });
 
 	// the generated URL routes through Caddy to the container
 	const url = new URL(await page.getByTestId('service-url').innerText());
@@ -44,6 +45,11 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	// logs stream into the deployments tab
 	await panel.getByRole('tab', { name: 'Deployments' }).click();
 	await expect(page.getByTestId('deployment-logs')).toContainText('Deployment is live');
+	// the image was scanned before it ran (warn mode: findings shown, deployed anyway)
+	await expect(page.getByTestId('deployment-logs')).toContainText(
+		'Scanning for vulnerabilities with Trivy'
+	);
+	await expect(page.getByTestId('scan-summary').first()).toBeVisible();
 	await expect(page.getByTestId('deployment-logs')).toContainText('Starting up on port 80', {
 		timeout: 30_000
 	});

@@ -48,7 +48,8 @@ export class Agent {
 	/** Builds this agent has started, by deployment, until the control plane stops asking for them. */
 	readonly builds = new Map<string, BuildReport>();
 	/** Builds run one at a time; they are CPU and memory hungry. */
-	#buildQueue: Promise<void> = Promise.resolve();
+	/** Builds run one at a time, and so do image scans, but a scan never waits for a long build. */
+	#queues = { build: Promise.resolve(), scan: Promise.resolve() };
 
 	#abort = new AbortController();
 	#lastHeal = 0;
@@ -168,31 +169,47 @@ export class Agent {
 		}
 	}
 
-	/** Queues builds the control plane wants and forgets ones it has moved past. */
+	/** Queues the builds and image scans the control plane wants, and forgets ones it has moved past. */
 	#startBuilds(desired: DesiredState) {
-		const wanted = new Set(desired.builds.map((b) => b.deploymentId));
+		const jobs = [
+			...desired.builds.map((job) => ({
+				id: job.deploymentId,
+				queue: 'build' as const,
+				run: () => this.builder.build(job)
+			})),
+			...desired.scans.map((job) => ({
+				id: job.deploymentId,
+				queue: 'scan' as const,
+				run: () => this.builder.scanImage(job)
+			}))
+		];
+		const wanted = new Set(jobs.map((job) => job.id));
 		for (const [id, build] of this.builds) {
 			if (!wanted.has(id) && build.state !== 'running') this.builds.delete(id);
 		}
-		for (const job of desired.builds) {
-			if (this.builds.has(job.deploymentId)) continue;
-			this.builds.set(job.deploymentId, {
-				deploymentId: job.deploymentId,
+		for (const job of jobs) {
+			if (this.builds.has(job.id)) continue;
+			this.builds.set(job.id, {
+				deploymentId: job.id,
 				state: 'running',
 				image: null,
 				commit: null,
 				error: null
 			});
-			this.#buildQueue = this.#buildQueue.then(async () => {
+			this.#queues[job.queue] = this.#queues[job.queue].then(async () => {
 				// it may have been cancelled (e.g. removed) while waiting its turn
-				if (!this.desired?.builds.some((b) => b.deploymentId === job.deploymentId)) {
-					this.builds.delete(job.deploymentId);
+				const current = this.desired;
+				if (
+					!current?.builds.some((b) => b.deploymentId === job.id) &&
+					!current?.scans.some((b) => b.deploymentId === job.id)
+				) {
+					this.builds.delete(job.id);
 					return;
 				}
-				this.#log(`building ${job.deploymentId}`);
-				const result = await this.builder.build(job);
-				this.#log(`build ${job.deploymentId} ${result.state}`);
-				this.builds.set(job.deploymentId, result);
+				this.#log(`${job.queue} ${job.id}`);
+				const result = await job.run();
+				this.#log(`${job.queue} ${job.id} ${result.state}`);
+				this.builds.set(job.id, result);
 			});
 		}
 	}

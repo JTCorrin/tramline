@@ -1,4 +1,9 @@
-import type { AgentHello, AgentReportInput, DesiredState, LogLine } from '@tramline/contracts';
+import {
+	DesiredState,
+	type AgentHello,
+	type AgentReportInput,
+	type LogLine
+} from '@tramline/contracts';
 
 export class ControlPlaneError extends Error {
 	constructor(
@@ -50,7 +55,8 @@ export class ControlPlane {
 	async desired(revision: string | null, signal?: AbortSignal): Promise<DesiredState | null> {
 		const query = revision ? `?revision=${encodeURIComponent(revision)}` : '';
 		const response = await this.#request(`/desired${query}`, { signal });
-		return response.status === 204 ? null : ((await response.json()) as DesiredState);
+		// parsed, so fields a slightly older control plane leaves out get their defaults
+		return response.status === 204 ? null : DesiredState.parse(await response.json());
 	}
 
 	async report(report: AgentReportInput) {

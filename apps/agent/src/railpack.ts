@@ -4,27 +4,61 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { extract } from 'tar-stream';
-import { RAILPACK } from './pins';
+import { RAILPACK, TRIVY } from './pins';
+
+/** A CLI published as a .tar.gz on a GitHub release, pinned by checksum. */
+export interface ReleaseTool {
+	/** Binary name inside the archive, and the cache directory. */
+	name: string;
+	version: string;
+	sha256: Record<string, string>;
+	/** Download URL for a Docker host architecture, or null when there is no build for it. */
+	url: (arch: string) => string | null;
+}
+
+export const RAILPACK_TOOL: ReleaseTool = {
+	name: 'railpack',
+	version: RAILPACK.version,
+	sha256: RAILPACK.sha256,
+	url: (arch) => {
+		const target = RAILPACK.target[arch];
+		return target
+			? `https://github.com/railwayapp/railpack/releases/download/${RAILPACK.version}/railpack-${RAILPACK.version}-${target}.tar.gz`
+			: null;
+	}
+};
+
+export const TRIVY_TOOL: ReleaseTool = {
+	name: 'trivy',
+	version: TRIVY.version,
+	sha256: TRIVY.sha256,
+	url: (arch) => {
+		const target = TRIVY.target[arch];
+		return target
+			? `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY.version}/trivy_${TRIVY.version}_${target}.tar.gz`
+			: null;
+	}
+};
 
 /**
- * Returns the Railpack CLI for a Docker host architecture, downloading it from
+ * Returns a tool's binary for a Docker host architecture, downloading it from
  * the official release the first time and refusing anything whose checksum
  * doesn't match the pin.
  */
-export async function railpackBinary(
+export async function releaseBinary(
+	tool: ReleaseTool,
 	stateDir: string,
 	arch: string,
 	fetcher: typeof fetch = globalThis.fetch
 ): Promise<Buffer> {
-	const target = RAILPACK.target[arch];
-	const expected = RAILPACK.sha256[arch];
-	if (!target || !expected) throw new Error(`Railpack has no build for ${arch}`);
+	const url = tool.url(arch);
+	const expected = tool.sha256[arch];
+	if (!url || !expected) throw new Error(`${tool.name} has no build for ${arch}`);
 
-	const file = path.join(stateDir, 'railpack', RAILPACK.version, arch, 'railpack');
+	const file = path.join(stateDir, tool.name, tool.version, arch, tool.name);
 	if (existsSync(file)) return readFileSync(file);
 
-	const name = `railpack-${RAILPACK.version}-${target}.tar.gz`;
-	const url = `https://github.com/railwayapp/railpack/releases/download/${RAILPACK.version}/${name}`;
+	const name = path.posix.basename(url);
 	const response = await fetcher(url);
 	if (!response.ok) throw new Error(`Downloading ${name} failed: HTTP ${response.status}`);
 	const tarball = Buffer.from(await response.arrayBuffer());
@@ -34,11 +68,14 @@ export async function railpackBinary(
 		throw new Error(`Checksum mismatch for ${name}: expected ${expected}, got ${actual}`);
 	}
 
-	const binary = await extractFile(tarball, 'railpack');
+	const binary = await extractFile(tarball, tool.name);
 	mkdirSync(path.dirname(file), { recursive: true });
 	writeFileSync(file, binary, { mode: 0o755 });
 	return binary;
 }
+
+export const railpackBinary = (stateDir: string, arch: string, fetcher?: typeof fetch) =>
+	releaseBinary(RAILPACK_TOOL, stateDir, arch, fetcher);
 
 /** Reads one file (by basename) out of a .tar.gz. */
 export function extractFile(tarball: Buffer, name: string) {

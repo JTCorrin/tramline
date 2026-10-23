@@ -1,4 +1,4 @@
-import type { AgentHello } from '@tramline/contracts';
+import type { AgentHello, ScanResult } from '@tramline/contracts';
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { timestamps } from './projects';
 
@@ -30,6 +30,7 @@ export const build = sqliteTable('build', {
 	image: text('image'),
 	commit: text('commit'),
 	error: text('error'),
+	scan: text('scan', { mode: 'json' }).$type<ScanResult>(),
 	updatedAt: timestamps.updatedAt
 });
 

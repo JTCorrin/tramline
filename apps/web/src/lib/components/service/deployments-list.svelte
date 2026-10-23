@@ -9,6 +9,7 @@
 	import type { Deployment } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import DeploymentLogs from './deployment-logs.svelte';
+	import ScanSummary from './scan-summary.svelte';
 
 	let {
 		serviceId,
@@ -92,6 +93,9 @@
 									{deployment.message}
 								</div>
 							{/if}
+							{#if deployment.scan}
+								<div class="mt-0.5"><ScanSummary scan={deployment.scan} /></div>
+							{/if}
 						</div>
 					</button>
 					<div class="flex shrink-0 gap-1">
@@ -124,7 +128,10 @@
 					</div>
 				</div>
 				{#if open === deployment.id}
-					<div class="mt-3">
+					<div class="mt-3 space-y-3">
+						{#if deployment.scan?.findings.length}
+							<ScanSummary scan={deployment.scan} details />
+						{/if}
 						<DeploymentLogs deploymentId={deployment.id} />
 					</div>
 				{/if}

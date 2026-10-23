@@ -27,7 +27,7 @@ interface Transition {
 	nodeId?: string;
 	startedAt?: Date;
 	/** Other columns to update, e.g. the built image. */
-	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit'>>;
+	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit' | 'scan'>>;
 	/** Written to the deployment's log. */
 	log?: string;
 }
@@ -39,8 +39,9 @@ interface Transition {
  *   queued → building → deploying → active ⇄ crashed
  *                  ↘ failed     ↘ failed
  *
- * Source deployments build first; redeploys of a built or pinned image skip
- * straight to deploying.
+ * Source deployments build first, and registry images are pulled and scanned
+ * in the same stage unless scanning is off; redeploys of a built or pinned
+ * image skip straight to deploying.
  *
  * A deployment going live marks the previous live deployment of the same
  * service and environment `removed`, so its containers are torn down only
@@ -135,6 +136,15 @@ function schedule(
 				: 'Waiting for a node to come online'
 		};
 	}
+	if (dep.config.source?.type === 'image' && !dep.image && scanMode(dep) !== 'off') {
+		return {
+			status: 'building',
+			nodeId: target.id,
+			startedAt: new Date(now),
+			message: 'Scanning image',
+			log: `Scanning on node ${target.name}`
+		};
+	}
 	if (dep.config.source?.type === 'repo' && !dep.image) {
 		return {
 			status: 'building',
@@ -153,29 +163,47 @@ function schedule(
 	};
 }
 
+/** Snapshots taken before scanning existed scan in the default mode. */
+const scanMode = (dep: DeploymentRow) => dep.config.build.scan ?? 'warn';
+
 function building(dep: DeploymentRow, report: BuildRow | undefined, now: number): Transition {
+	const pulled = dep.config.source?.type === 'image';
+	const stage = pulled ? 'Scan' : 'Build';
 	if (report?.state === 'succeeded' && report.image) {
 		return {
 			status: 'deploying',
 			startedAt: new Date(now),
 			message: 'Starting',
-			set: { image: report.image, commit: report.commit },
-			log: `Build succeeded${report.commit ? ` (${report.commit.slice(0, 7)})` : ''}`
+			set: {
+				image: report.image,
+				commit: report.commit,
+				scan: report.scan,
+				// a scanned registry image runs by the digest that was scanned
+				...(pulled && report.image.includes('@') ? { resolvedImage: report.image } : {})
+			},
+			log: pulled
+				? `Scanned ${report.image}`
+				: `Build succeeded${report.commit ? ` (${report.commit.slice(0, 7)})` : ''}`
 		};
 	}
 	if (report?.state === 'failed') {
-		const message = report.error ?? 'Build failed';
+		const message = report.error ?? `${stage} failed`;
 		// keep the commit so polling doesn't rebuild the same broken commit
 		return {
 			status: 'failed',
 			message,
-			set: { commit: report.commit },
-			log: `Build failed: ${message}`
+			set: { commit: report.commit, scan: report.scan },
+			log: `${stage} failed: ${message}`
 		};
 	}
 	if (now - (dep.startedAt ?? dep.createdAt).getTime() > BUILD_TIMEOUT_MS) {
-		return { status: 'failed', message: 'Timed out building', log: 'Build timed out' };
+		return {
+			status: 'failed',
+			message: pulled ? 'Timed out scanning' : 'Timed out building',
+			log: `${stage} timed out`
+		};
 	}
+	if (pulled) return { message: 'Scanning image' };
 	return { message: report ? 'Building' : 'Waiting for the builder' };
 }
 

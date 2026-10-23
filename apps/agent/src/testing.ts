@@ -1,4 +1,8 @@
 import type { DesiredContainer, DesiredState } from '@tramline/contracts';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { RAILPACK, TRIVY } from './pins';
 import type {
 	ContainerRuntime,
 	ExecStreamOptions,
@@ -93,6 +97,10 @@ export class FakeRuntime implements ContainerRuntime {
 			// drain
 		}
 	}
+	digests = new Map<string, string>();
+	async repoDigest(reference: string) {
+		return this.digests.get(reference) ?? null;
+	}
 	async imageId(reference: string) {
 		return this.images.get(reference)?.id ?? null;
 	}
@@ -110,6 +118,20 @@ export class FakeRuntime implements ContainerRuntime {
 		this.followers.set(name, { since, onLine, onEnd });
 		return () => this.followers.delete(name);
 	}
+}
+
+/** An agent state directory with Railpack and Trivy already downloaded, so tests never fetch them. */
+export function stateDirWithTools() {
+	const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
+	for (const [name, version] of [
+		['railpack', RAILPACK.version],
+		['trivy', TRIVY.version]
+	]) {
+		const dir = path.join(stateDir, name!, version!, 'aarch64');
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(path.join(dir, name!), 'binary');
+	}
+	return stateDir;
 }
 
 export function desiredContainer(overrides: Partial<DesiredContainer> = {}): DesiredContainer {
@@ -143,6 +165,7 @@ export function desiredState(
 		networks: [...new Set(containers.map((c) => c.network))],
 		containers,
 		builds,
+		scans: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

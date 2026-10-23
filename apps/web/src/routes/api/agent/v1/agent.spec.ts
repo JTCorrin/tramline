@@ -14,6 +14,7 @@ import * as redeployRoute from '../../v1/deployments/[id]/redeploy/+server';
 import * as removeRoute from '../../v1/deployments/[id]/remove/+server';
 import * as nodesRoute from '../../v1/nodes/+server';
 import * as projectsRoute from '../../v1/projects/+server';
+import * as configRoute from '../../v1/services/[id]/config/+server';
 import * as servicesRoute from '../../v1/services/+server';
 import * as desiredRoute from './desired/+server';
 import * as helloRoute from './hello/+server';
@@ -99,15 +100,25 @@ async function deployed() {
 			user
 		})
 	).body;
-	await call(servicesRoute.POST as Handler, {
-		path: '/api/v1/services',
-		method: 'POST',
+	const svc = (
+		await call(servicesRoute.POST as Handler, {
+			path: '/api/v1/services',
+			method: 'POST',
+			user,
+			body: {
+				projectId: project.id,
+				kind: 'image',
+				source: { type: 'image', image: 'traefik/whoami' }
+			}
+		})
+	).body;
+	// straight to running containers; scanning is covered with the reconciler
+	await call(configRoute.PATCH as Handler, {
+		path: `/api/v1/services/${svc.id}/config?environmentId=${env.id}`,
+		method: 'PATCH',
+		params: { id: svc.id },
 		user,
-		body: {
-			projectId: project.id,
-			kind: 'image',
-			source: { type: 'image', image: 'traefik/whoami' }
-		}
+		body: { build: { scan: 'off' } }
 	});
 	const [dep] = (
 		await call(deployRoute.POST as Handler, {

@@ -5,6 +5,7 @@
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import {
 		RESTART_POLICIES,
+		SCAN_MODES,
 		type CanvasService,
 		type ServiceConfig,
 		type ServiceConfigPatch,
@@ -47,6 +48,13 @@
 
 	const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 	const toNumber = (value: string | null) => (value === null ? null : Number(value));
+
+	const SCAN_LABELS: Record<(typeof SCAN_MODES)[number], string> = {
+		warn: 'Scan and warn',
+		block: 'Block fixable critical vulnerabilities',
+		off: 'Off'
+	};
+	const scanMode = $derived(config.build.scan ?? 'warn');
 
 	const POLICY_LABELS: Record<(typeof RESTART_POLICIES)[number], string> = {
 		on_failure: 'On failure',
@@ -174,6 +182,36 @@
 					/>
 				</Setting>
 			{/if}
+		</section>
+	{/if}
+
+	{#if config.source}
+		<section class="space-y-4">
+			<h3 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Security</h3>
+			<Setting
+				label="Vulnerability scan"
+				staged={staged('build', 'scan')}
+				description={scanMode === 'block'
+					? 'Images with critical vulnerabilities that have a fix are refused before they run.'
+					: scanMode === 'warn'
+						? 'Every image is scanned with Trivy before it runs; findings show on the deployment.'
+						: 'Images run without being scanned.'}
+			>
+				<Select.Root
+					type="single"
+					value={scanMode}
+					onValueChange={(v) => stage('build', { scan: v as (typeof SCAN_MODES)[number] })}
+				>
+					<Select.Trigger class="w-full" aria-label="Vulnerability scan">
+						{SCAN_LABELS[scanMode]}
+					</Select.Trigger>
+					<Select.Content>
+						{#each SCAN_MODES as mode (mode)}
+							<Select.Item value={mode}>{SCAN_LABELS[mode]}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</Setting>
 		</section>
 	{/if}
 

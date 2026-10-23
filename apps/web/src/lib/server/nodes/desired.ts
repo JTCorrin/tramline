@@ -2,6 +2,7 @@ import {
 	DEFAULT_SERVICE_CONFIG,
 	mergeConfig,
 	type DesiredBuild,
+	type DesiredScan,
 	type DesiredContainer,
 	type DesiredState,
 	type IngressRoute
@@ -56,6 +57,7 @@ export function buildDesiredState(
 
 	const containers: DesiredContainer[] = [];
 	const builds: DesiredBuild[] = [];
+	const scans: DesiredScan[] = [];
 	const routes: IngressRoute[] = [];
 	const networks = new Set<string>();
 
@@ -65,6 +67,12 @@ export function buildDesiredState(
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
 
 		if (dep.status === 'building') {
+			if (config.source?.type === 'image') {
+				if (config.build.scan !== 'off') {
+					scans.push({ deploymentId: dep.id, image: config.source.image, scan: config.build.scan });
+				}
+				continue;
+			}
 			if (config.source?.type !== 'repo') continue;
 			builds.push({
 				deploymentId: dep.id,
@@ -80,7 +88,8 @@ export function buildDesiredState(
 				startCommand: config.deploy.startCommand,
 				image: builtImageTag(dep.serviceId, dep.id),
 				// every variable is available to the build, as on Railway, but only as a BuildKit secret
-				secrets: env
+				secrets: env,
+				scan: config.build.scan
 			});
 			continue;
 		}
@@ -129,6 +138,7 @@ export function buildDesiredState(
 		networks: [...networks].sort(),
 		containers,
 		builds,
+		scans,
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

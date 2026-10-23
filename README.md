@@ -71,6 +71,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
 2. **Agent + local Docker deploys**: node agent, reconciler, Caddy ingress, live logs, zero-downtime swaps ✅
    - 2.5 **Secure-by-default hardening** ✅: container defaults, sealed variables, log redaction, CSP and security headers, CI security scanning (see [SECURITY.md](SECURITY.md))
 3. **Builds from source**: rootless BuildKit, Railpack or Dockerfile, GitHub App, push webhooks and polling ✅
+   - 3.5 **Image vulnerability scanning** ✅: Trivy scans every built and pulled image before it runs; warn or block per service
 4. Databases, volumes, reference variable depth, domains
 5. Agent access: API tokens + MCP server
 6. Multi-node, adapter SDK, Proxmox adapter

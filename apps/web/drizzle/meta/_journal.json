@@ -57,6 +57,13 @@
       "when": 1792752735620,
       "tag": "0007_github",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792756213324,
+      "tag": "0008_scans",
+      "breakpoints": true
     }
   ]
 }

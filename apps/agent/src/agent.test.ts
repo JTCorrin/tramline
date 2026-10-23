@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Agent } from './agent';
 import { ControlPlane, ControlPlaneError } from './client';
 import { RAILPACK } from './pins';
-import { desiredState, FakeRuntime } from './testing';
+import { desiredState, FakeRuntime, stateDirWithTools } from './testing';
 
 function fakeClient(desired: (DesiredState | null)[] = []) {
 	const calls = {
@@ -146,15 +146,13 @@ describe('Agent builds', () => {
 		buildCommand: null,
 		startCommand: null,
 		image: `tramline/svc_1:${deploymentId}`,
-		secrets: {}
+		secrets: {},
+		scan: 'off' as const
 	});
 
 	function setup(desired: DesiredState[]) {
 		const runtime = new FakeRuntime();
-		const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
-		const cached = path.join(stateDir, 'railpack', RAILPACK.version, 'aarch64');
-		mkdirSync(cached, { recursive: true });
-		writeFileSync(path.join(cached, 'railpack'), 'binary');
+		const stateDir = stateDirWithTools();
 		runtime.onExec = (cmd, { onLine }) => {
 			if (cmd[0] === 'sh') onLine('stdout', 'c'.repeat(40));
 			if (cmd[0] === 'test') return 1;
@@ -182,7 +180,8 @@ describe('Agent builds', () => {
 				state: 'succeeded',
 				image: 'sha256:dep_7',
 				commit: 'c'.repeat(40),
-				error: null
+				error: null,
+				scan: null
 			}
 		]);
 
@@ -190,6 +189,20 @@ describe('Agent builds', () => {
 		await agent.sync();
 		await agent.tick();
 		expect(calls.reports.at(-1)!.builds).toEqual([]);
+	});
+
+	it('pulls and scans registry images in the build queue', async () => {
+		const withScan = {
+			...desiredState([]),
+			revision: 's1',
+			scans: [{ deploymentId: 'dep_9', image: 'traefik/whoami', scan: 'warn' as const }]
+		};
+		const { agent, runtime } = setup([withScan]);
+		runtime.digests.set('traefik/whoami', 'traefik/whoami@sha256:abc');
+		await agent.hello();
+		await agent.sync();
+		await vi.waitFor(() => expect(agent.builds.get('dep_9')?.state).toBe('succeeded'));
+		expect(agent.builds.get('dep_9')?.image).toBe('traefik/whoami@sha256:abc');
 	});
 
 	it('skips builds cancelled while waiting their turn', async () => {

@@ -112,7 +112,8 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 					state: b.state,
 					image: b.image,
 					commit: b.commit,
-					error: b.error
+					error: b.error,
+					scan: b.scan ?? null
 				})
 				.run();
 		}

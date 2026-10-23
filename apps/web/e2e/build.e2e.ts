@@ -2,8 +2,9 @@ import { INGRESS_PORT } from '../playwright.config';
 import { createProject, expect, signUp, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
-// a cold Railpack build downloads Node and npm packages
-test.setTimeout(420_000);
+// a cold Railpack build downloads Node and npm packages, and a cold builder
+// downloads Trivy's vulnerability database before its first scan
+test.setTimeout(720_000);
 
 const REPO = 'https://github.com/heroku/nodejs-getting-started';
 
@@ -40,7 +41,7 @@ test('build a GitHub repository from source, serve it, and redeploy without rebu
 
 	const node = page.getByTestId('service-node').filter({ hasText: 'nodejs-getting-started' });
 	await expect(node).toContainText('Building', { timeout: 60_000 });
-	await expect(node).toContainText('Online', { timeout: 360_000 });
+	await expect(node).toContainText('Online', { timeout: 660_000 });
 
 	const url = new URL(await page.getByTestId('service-url').innerText());
 	const ingress = () => viaIngress(request, INGRESS_PORT, url.hostname);

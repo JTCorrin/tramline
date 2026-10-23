@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ScanMode, ScanResult } from './scan';
 
 /**
  * Protocol between the control plane and node agents.
@@ -68,10 +69,23 @@ export const DesiredBuild = z.object({
 	/** Tag for the resulting image, e.g. `tramline/svc_1:dep_1`. */
 	image: z.string(),
 	/** Passed as BuildKit secrets: available to build steps, never stored in the image or logs. */
-	secrets: z.record(z.string(), z.string())
+	secrets: z.record(z.string(), z.string()),
+	scan: ScanMode.default('warn')
 });
 
 export type DesiredBuild = z.infer<typeof DesiredBuild>;
+
+/**
+ * Pull a registry image and scan it before it runs. Reported like a build,
+ * with `image` set to the exact digest that was scanned.
+ */
+export const DesiredScan = z.object({
+	deploymentId: z.string(),
+	image: z.string(),
+	scan: ScanMode.exclude(['off'])
+});
+
+export type DesiredScan = z.infer<typeof DesiredScan>;
 
 export const IngressRoute = z.object({
 	host: z.string(),
@@ -88,6 +102,7 @@ export const DesiredState = z.object({
 	networks: z.array(z.string()),
 	containers: z.array(DesiredContainer),
 	builds: z.array(DesiredBuild),
+	scans: z.array(DesiredScan).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -132,7 +147,8 @@ export const BuildReport = z.object({
 	image: z.string().nullable(),
 	/** The commit that was built. */
 	commit: z.string().nullable(),
-	error: z.string().nullable()
+	error: z.string().nullable(),
+	scan: ScanResult.nullable().optional()
 });
 
 export type BuildReport = z.infer<typeof BuildReport>;

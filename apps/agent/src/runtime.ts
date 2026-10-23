@@ -27,6 +27,8 @@ export interface ContainerRuntime {
 	putFile(container: string, path: string, content: Buffer, mode: number): Promise<void>;
 	/** Loads an image tarball (`docker save` format). */
 	loadImage(tarball: NodeJS.ReadableStream): Promise<void>;
+	/** `repo@sha256:…` the registry gave a pulled image, or null (e.g. for locally built images). */
+	repoDigest(reference: string): Promise<string | null>;
 	/** Image ID (`sha256:…`) for a reference, or null when missing. */
 	imageId(reference: string): Promise<string | null>;
 	/** Images whose repository is `repository`, newest first. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { caddyConfig } from './caddy';
-import { follow, withTag } from './docker';
+import { follow, repositoryOf, withTag } from './docker';
 import { LABELS } from './runtime';
 import { toRunSpec } from './spec';
 import { desiredContainer } from './testing';
@@ -75,6 +75,16 @@ describe('withTag', () => {
 		['localhost:5000/app', 'localhost:5000/app:latest'],
 		['ghcr.io/acme/api@sha256:abc', 'ghcr.io/acme/api@sha256:abc']
 	])('%s → %s', (input, expected) => expect(withTag(input)).toBe(expected));
+});
+
+describe('repositoryOf', () => {
+	it.each([
+		['nginx', 'nginx'],
+		['nginx:1.27', 'nginx'],
+		['localhost:5000/app:1', 'localhost:5000/app'],
+		['localhost:5000/app', 'localhost:5000/app'],
+		['ghcr.io/acme/api:1@sha256:abc', 'ghcr.io/acme/api']
+	])('%s → %s', (input, expected) => expect(repositoryOf(input)).toBe(expected));
 });
 
 describe('caddyConfig', () => {

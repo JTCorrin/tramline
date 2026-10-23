@@ -1,4 +1,4 @@
-import type { ServiceConfig, ServiceConfigPatch } from '@tramline/contracts';
+import type { ScanResult, ServiceConfig, ServiceConfigPatch } from '@tramline/contracts';
 import {
 	index,
 	integer,
@@ -156,6 +156,8 @@ export const deployment = sqliteTable(
 		resolvedImage: text('resolved_image'),
 		/** The commit built, for source deployments. */
 		commit: text('commit'),
+		/** Vulnerability scan of the image this deployment runs. */
+		scan: text('scan', { mode: 'json' }).$type<ScanResult>(),
 		...timestamps
 	},
 	(table) => [index('deployment_instance_idx').on(table.serviceId, table.environmentId)]

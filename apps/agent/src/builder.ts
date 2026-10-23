@@ -1,10 +1,24 @@
-import type { BuildReport, DesiredBuild } from '@tramline/contracts';
+import type {
+	BuildReport,
+	DesiredBuild,
+	DesiredScan,
+	ScanMode,
+	ScanResult
+} from '@tramline/contracts';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { BUILDKIT_IMAGE, RAILPACK } from './pins';
-import { railpackBinary } from './railpack';
+import { BUILDKIT_IMAGE, RAILPACK, TRIVY } from './pins';
+import { railpackBinary, releaseBinary, TRIVY_TOOL } from './railpack';
 import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
+import {
+	blockedMessage,
+	describe,
+	scanError,
+	SCANNER,
+	summarise,
+	type TrivyReport
+} from './scanner';
 import { hash } from './spec';
 
 /** Keep this many built images per service so recent rollbacks don't need a rebuild. */
@@ -12,6 +26,14 @@ export const KEEP_IMAGES = 3;
 
 const HOME = '/home/user';
 const RAILPACK_PATH = `${HOME}/bin/railpack`;
+const TRIVY_PATH = `${HOME}/bin/trivy`;
+const BUILDKIT_STATE = `${HOME}/.local/share/buildkit`;
+/**
+ * Trivy's vulnerability database, kept on the builder's volume so it survives
+ * restarts. (A volume of its own would be created root-owned, and the builder
+ * runs unprivileged.)
+ */
+const TRIVY_CACHE = `${BUILDKIT_STATE}/trivy-cache`;
 
 export const builderName = (nodeId: string) => `tramline-builder-${nodeId}`;
 
@@ -52,6 +74,7 @@ export class Builder {
 			image: null,
 			commit: null,
 			error: null,
+			scan: null,
 			...extra
 		});
 		const say = (line: string) => this.options.onLine(job.deploymentId, line);
@@ -93,7 +116,13 @@ export class Builder {
 				'--secret',
 				`id=${key},env=${key}`
 			]);
-			const outputFlags = ['--output', `type=docker,name=${job.image}`];
+			const scanning = job.scan !== 'off';
+			const tarball = `${work}/image.tar`;
+			// scanned images are written to a file first, so a blocked image never reaches Docker
+			const outputFlags = [
+				'--output',
+				`type=docker,name=${job.image}${scanning ? `,dest=${tarball}` : ''}`
+			];
 			let buildctl: string[];
 
 			// 2. plan
@@ -151,23 +180,28 @@ export class Builder {
 				];
 			}
 
-			// 3. build, streaming the image straight into the local Docker
-			const tarball = new PassThrough();
-			const loaded = this.runtime.loadImage(tarball);
-			// the exec's output stream ends `tarball` once everything is flushed; ending it here
-			// instead would cut off data still buffered for a slower `docker load`
-			const built = await run(buildctl, job.secrets, tarball);
-			await loaded.catch((error) => {
-				if (built === 0) throw error;
-			});
-			if (built !== 0)
-				return report('failed', { commit, error: 'The build failed; see the build log' });
+			// 3. build into the local Docker; a scanned image goes through a file first,
+			// so one that's refused never reaches Docker
+			let scan: ScanResult | null = null;
+			if (scanning) {
+				if ((await run(buildctl, job.secrets)) !== 0)
+					return report('failed', { commit, error: 'The build failed; see the build log' });
+				scan = await this.#scan(['--input', tarball], job.scan, work, say);
+				if (refused(scan, job.scan))
+					return report('failed', { commit, scan, error: refusal(scan) });
+				if ((await this.#load((stdout) => run(['cat', tarball], undefined, stdout))) !== 0)
+					throw new Error('Could not load the built image');
+			} else {
+				const built = await this.#load((stdout) => run(buildctl, job.secrets, stdout));
+				if (built !== 0)
+					return report('failed', { commit, error: 'The build failed; see the build log' });
+			}
 
 			const image = await this.runtime.imageId(job.image);
 			if (!image) return report('failed', { commit, error: 'The built image was not found' });
 			say(`Built ${image.slice(7, 19)}`);
 			await this.#collect(job);
-			return report('succeeded', { image, commit });
+			return report('succeeded', { image, commit, scan });
 		} catch (error) {
 			return report('failed', {
 				commit,
@@ -180,7 +214,123 @@ export class Builder {
 		}
 	}
 
-	/** Starts the builder container and installs the Railpack CLI in it, once. */
+	/**
+	 * Pulls a registry image and scans that exact digest before it runs. Trivy
+	 * fetches the image from the registry itself, so the builder never needs
+	 * access to the Docker socket.
+	 */
+	async scanImage(job: DesiredScan): Promise<BuildReport> {
+		const say = (line: string) => this.options.onLine(job.deploymentId, line);
+		const work = `${HOME}/work/${job.deploymentId}`;
+		const report = (
+			state: BuildReport['state'],
+			extra: Partial<BuildReport> = {}
+		): BuildReport => ({
+			deploymentId: job.deploymentId,
+			state,
+			image: null,
+			commit: null,
+			error: null,
+			scan: null,
+			...extra
+		});
+		try {
+			await this.ensure();
+			say(`Pulling ${job.image}`);
+			await this.runtime.pull(job.image);
+			// the digest pins the deployment to exactly what was scanned
+			const digest = await this.runtime.repoDigest(job.image);
+			if (!digest) {
+				const scan = scanError('the image has no registry digest to scan');
+				say(describe(scan));
+				return refused(scan, job.scan)
+					? report('failed', { scan, error: refusal(scan) })
+					: report('succeeded', { image: job.image, scan });
+			}
+			await this.runtime.execStream(this.name, ['mkdir', '-p', work], { onLine: () => {} });
+			const scan = await this.#scan(['--image-src', 'remote', digest], job.scan, work, say);
+			return refused(scan, job.scan)
+				? report('failed', { scan, error: refusal(scan) })
+				: report('succeeded', { image: digest, scan });
+		} catch (error) {
+			return report('failed', { error: error instanceof Error ? error.message : String(error) });
+		} finally {
+			await this.runtime
+				.execStream(this.name, ['rm', '-rf', work], { onLine: () => {} })
+				.catch(() => {});
+		}
+	}
+
+	/** Runs Trivy on an image (a tarball or a registry reference) and summarises its report. */
+	async #scan(target: string[], mode: ScanMode, work: string, say: (line: string) => void) {
+		say(`Scanning for vulnerabilities with ${SCANNER}`);
+		const output = `${work}/scan.json`;
+		const code = await this.runtime.execStream(
+			this.name,
+			[
+				TRIVY_PATH,
+				'image',
+				'--scanners',
+				'vuln',
+				'--format',
+				'json',
+				'--output',
+				output,
+				'--cache-dir',
+				TRIVY_CACHE,
+				'--timeout',
+				'15m',
+				'--skip-version-check',
+				// the layer cache is a locked file; keeping it in memory lets scans run side by side
+				'--cache-backend',
+				'memory',
+				...target
+			],
+			{
+				env: { TRIVY_NO_PROGRESS: 'true', TRIVY_DISABLE_VEX_NOTICE: 'true' },
+				onLine: (_, line) => say(line)
+			}
+		);
+		let scan: ScanResult;
+		if (code !== 0) {
+			scan = scanError(`Trivy exited with code ${code}; see the build log`);
+		} else {
+			const json = new PassThrough();
+			const chunks: Buffer[] = [];
+			json.on('data', (chunk: Buffer) => chunks.push(chunk));
+			await this.runtime.execStream(this.name, ['cat', output], { onLine: () => {}, stdout: json });
+			try {
+				scan = summarise(JSON.parse(Buffer.concat(chunks).toString()) as TrivyReport, mode);
+			} catch {
+				scan = scanError('Trivy wrote an unreadable report');
+			}
+		}
+		say(describe(scan));
+		for (const finding of scan.findings.filter((f) => f.severity === 'critical').slice(0, 10)) {
+			say(
+				`  ${finding.id} in ${finding.package} ${finding.installed}${finding.fixed ? ` (fixed in ${finding.fixed})` : ''}`
+			);
+		}
+		return scan;
+	}
+
+	/**
+	 * Streams an image tarball written by a builder command into Docker, and
+	 * returns the command's exit code.
+	 */
+	async #load(produce: (stdout: NodeJS.WritableStream) => Promise<number>) {
+		const tarball = new PassThrough();
+		const loaded = this.runtime.loadImage(tarball);
+		// the exec's output stream ends `tarball` once everything is flushed; ending it here
+		// instead would cut off data still buffered for a slower `docker load`
+		const code = await produce(tarball);
+		await loaded.catch((error) => {
+			if (code === 0) throw error;
+		});
+		return code;
+	}
+
+	/** Starts the builder container and installs Railpack and Trivy in it, once. */
 	ensure() {
 		this.#ready ??= this.#start().catch((error) => {
 			this.#ready = null;
@@ -199,7 +349,7 @@ export class Builder {
 			network: 'bridge',
 			aliases: [],
 			restart: { name: 'always' as const, maxRetries: 0 },
-			volumes: [{ name: `tramline-buildkit-${nodeId}`, target: `${HOME}/.local/share/buildkit` }],
+			volumes: [{ name: `tramline-buildkit-${nodeId}`, target: BUILDKIT_STATE }],
 			// rootless BuildKit runs as uid 1000 and is never --privileged, but its user
 			// namespace needs setuid helpers and Docker's seccomp/AppArmor profiles relaxed
 			security: {
@@ -239,6 +389,8 @@ export class Builder {
 			onLine: () => {}
 		});
 		await this.runtime.putFile(this.name, RAILPACK_PATH, binary, 0o755);
+		await this.#installTrivy();
+		await this.#updateDatabase();
 		// buildkitd takes a moment to accept connections after the container starts
 		for (let attempt = 0; attempt < 30; attempt++) {
 			const ready = await this.runtime.execStream(this.name, ['buildctl', 'debug', 'workers'], {
@@ -250,6 +402,48 @@ export class Builder {
 		throw new Error('The builder did not start');
 	}
 
+	/** Copies Trivy into the builder unless this version is already there (it's large). */
+	async #installTrivy() {
+		let installed = '';
+		await this.runtime.execStream(this.name, [TRIVY_PATH, '--version'], {
+			onLine: (_, line) => (installed += `${line}\n`)
+		});
+		if (installed.includes(`Version: ${TRIVY.version}`)) return;
+		const binary = await releaseBinary(
+			TRIVY_TOOL,
+			this.options.stateDir,
+			await this.runtime.arch(),
+			this.options.fetcher
+		);
+		await this.runtime.putFile(this.name, TRIVY_PATH, binary, 0o755);
+	}
+
+	/**
+	 * Fetches Trivy's vulnerability database (when it is missing or stale) once
+	 * the builder starts, so concurrent scans don't each try to download it.
+	 * A failure is only logged: the next scan tries again.
+	 */
+	async #updateDatabase() {
+		const output: string[] = [];
+		const code = await this.runtime.execStream(
+			this.name,
+			[
+				TRIVY_PATH,
+				'image',
+				'--download-db-only',
+				'--cache-dir',
+				TRIVY_CACHE,
+				'--skip-version-check'
+			],
+			{ env: { TRIVY_NO_PROGRESS: 'true' }, onLine: (_, line) => output.push(line) }
+		);
+		if (code !== 0) {
+			this.options.log?.(
+				`Could not download Trivy's vulnerability database: ${output.at(-1) ?? `exit ${code}`}`
+			);
+		}
+	}
+
 	/** Removes older built images of the service, keeping the newest few. */
 	async #collect(job: DesiredBuild) {
 		const repository = job.image.split(':')[0]!;
@@ -257,6 +451,15 @@ export class Builder {
 		for (const image of images.slice(KEEP_IMAGES)) await this.runtime.removeImage(image.id);
 	}
 }
+
+/** Whether a scan stops the image from running: always when blocked, and in block mode when the scan failed. */
+export const refused = (scan: ScanResult, mode: ScanMode) =>
+	scan.outcome === 'blocked' || (mode === 'block' && scan.outcome === 'error');
+
+const refusal = (scan: ScanResult) =>
+	scan.outcome === 'blocked'
+		? blockedMessage(scan)
+		: `Blocked: the image could not be scanned (${scan.error})`;
 
 /** Clones one ref shallowly into $DIR and prints the commit. Inputs arrive as env vars, never interpolated. */
 export const CLONE_SCRIPT = [

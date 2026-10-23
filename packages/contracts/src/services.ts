@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ScanMode } from './scan';
 
 export const SERVICE_KINDS = ['image', 'repo', 'database', 'empty'] as const;
 export type ServiceKind = (typeof SERVICE_KINDS)[number];
@@ -56,7 +57,9 @@ export type ServiceSource = z.infer<typeof ServiceSource>;
 export const BuildConfig = z.object({
 	builder: z.enum(['railpack', 'dockerfile']),
 	dockerfilePath: optionalText,
-	buildCommand: optionalText
+	buildCommand: optionalText,
+	/** Vulnerability scanning of the image before it runs (built and pulled images alike). */
+	scan: ScanMode
 });
 
 export const RESTART_POLICIES = ['on_failure', 'always', 'never'] as const;
@@ -99,7 +102,7 @@ export type ServiceConfigPatch = z.infer<typeof ServiceConfigPatch>;
 
 export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 	source: null,
-	build: { builder: 'railpack', dockerfilePath: null, buildCommand: null },
+	build: { builder: 'railpack', dockerfilePath: null, buildCommand: null, scan: 'warn' },
 	deploy: {
 		startCommand: null,
 		replicas: 1,

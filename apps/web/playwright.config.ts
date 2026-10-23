@@ -11,12 +11,14 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+	// builds and image scans run alongside the UI tests and load the machine, so give those more room
+	...(docker ? { timeout: 90_000, expect: { timeout: 15_000 } } : {}),
 	use: { baseURL: 'http://localhost:4173', trace: 'retain-on-failure' },
 	webServer: [
 		{
 			// fresh database and data directory per run so tests never depend on leftover state
 			command:
-				'rm -rf data/e2e data/e2e.db* && pnpm build && pnpm preview --port 4173 --strictPort',
+				'rm -rf data/e2e data/e2e.db* data/e2e-agent/caddy && pnpm build && pnpm preview --port 4173 --strictPort',
 			port: 4173,
 			reuseExistingServer: false,
 			env: {
@@ -39,7 +41,8 @@ export default defineConfig({
 						env: {
 							TRAMLINE_URL: 'http://localhost:4173',
 							TRAMLINE_AGENT_TOKEN_FILE: `${import.meta.dirname}/data/e2e/local-agent.token`,
-							TRAMLINE_AGENT_STATE_DIR: `${import.meta.dirname}/data/e2e/agent`,
+							// outside data/e2e so the checksum-verified Railpack and Trivy downloads are reused
+							TRAMLINE_AGENT_STATE_DIR: `${import.meta.dirname}/data/e2e-agent`,
 							TRAMLINE_AGENT_HEALTH_PORT: '7172'
 						}
 					}

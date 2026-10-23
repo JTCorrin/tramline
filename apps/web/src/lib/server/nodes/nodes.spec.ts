@@ -1,4 +1,4 @@
-import type { AgentHello, AgentReport } from '@tramline/contracts';
+import type { AgentHello, AgentReport, ScanMode, ScanResult } from '@tramline/contracts';
 import { eq } from 'drizzle-orm';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,7 +35,14 @@ const hello: AgentHello = {
 	docker: { version: '27.0.0' }
 };
 
-function setup(options: { publicDomain?: boolean; healthcheck?: string; replicas?: number } = {}) {
+function setup(
+	options: {
+		publicDomain?: boolean;
+		healthcheck?: string;
+		replicas?: number;
+		scan?: ScanMode;
+	} = {}
+) {
 	const ctx = seedCtx();
 	ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-cp-')) };
 	const { node: local, tokenFile } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
@@ -48,7 +55,9 @@ function setup(options: { publicDomain?: boolean; healthcheck?: string; replicas
 	});
 	services.stageConfig(ctx, svc.id, env!.id, {
 		networking: { port: 80, publicDomain: options.publicDomain ?? false },
-		deploy: { healthcheckPath: options.healthcheck ?? null, replicas: options.replicas ?? 1 }
+		deploy: { healthcheckPath: options.healthcheck ?? null, replicas: options.replicas ?? 1 },
+		// most tests are about deploying; scanning has its own
+		build: { scan: options.scan ?? 'off' }
 	});
 	return { ctx, local, tokenFile, env: env!, svc };
 }
@@ -508,5 +517,132 @@ describe('reconciler and desired state', () => {
 		expect(() => changes.deploy(ctx, env.id)).toThrow(
 			'Set a port on whoami to give it a public domain'
 		);
+	});
+});
+
+describe('image scanning', () => {
+	const DIGEST = 'traefik/whoami@sha256:2222';
+	const scan = (outcome: ScanResult['outcome']): ScanResult => ({
+		scanner: 'Trivy 0.75.0',
+		outcome,
+		counts: { critical: 1, high: 0, medium: 0, low: 0, unknown: 0 },
+		fixableCritical: 1,
+		findings: [],
+		error: null,
+		scannedAt: new Date().toISOString()
+	});
+
+	it('scans a registry image first, then runs exactly the digest that was scanned', () => {
+		const { ctx, local, env } = setup({ scan: 'warn' });
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({ status: 'building', message: 'Scanning image' });
+		const desired = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id);
+		expect(desired.scans).toEqual([
+			{ deploymentId: dep!.id, image: 'traefik/whoami', scan: 'warn' }
+		]);
+		expect(desired.builds).toEqual([]);
+		expect(desired.containers).toEqual([]);
+
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [],
+			builds: [{ deploymentId: dep!.id, state: 'running', image: null, commit: null, error: null }]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id).message).toBe('Scanning image');
+
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [],
+			builds: [
+				{
+					deploymentId: dep!.id,
+					state: 'succeeded',
+					image: DIGEST,
+					commit: null,
+					error: null,
+					scan: scan('warned')
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'deploying',
+			image: DIGEST,
+			resolvedImage: DIGEST,
+			scan: { outcome: 'warned', fixableCritical: 1 }
+		});
+		expect(
+			buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers[0]!.image
+		).toBe(DIGEST);
+		expect(deployments.get(ctx, dep!.id).scan?.outcome).toBe('warned');
+		expect(readLogs(ctx.settings.dataDir, dep!.id).map((l) => l.line)).toContain(
+			`Scanned ${DIGEST}`
+		);
+
+		// a redeploy reuses the scanned image and its scan
+		const again = deployments.redeploy(ctx, dep!.id);
+		expect(again.scan?.outcome).toBe('warned');
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, again.id).status).toBe('deploying');
+	});
+
+	it('fails a deployment whose image is blocked, keeping the scan', () => {
+		const { ctx, local, env } = setup({ scan: 'block' });
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).scans[0]!.scan).toBe(
+			'block'
+		);
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [],
+			builds: [
+				{
+					deploymentId: dep!.id,
+					state: 'failed',
+					image: null,
+					commit: null,
+					error: 'Blocked: 1 critical vulnerability with a fix available',
+					scan: scan('blocked')
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'failed',
+			message: 'Blocked: 1 critical vulnerability with a fix available',
+			scan: { outcome: 'blocked' }
+		});
+		expect(readLogs(ctx.settings.dataDir, dep!.id).map((l) => l.line)).toContain(
+			'Scan failed: Blocked: 1 critical vulnerability with a fix available'
+		);
+		// redeploying an image that never ran scans it again
+		expect(deployments.redeploy(ctx, dep!.id).scan).toBeNull();
+	});
+
+	it('times out a scan that never finishes', () => {
+		const { ctx, local, env } = setup({ scan: 'warn' });
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		recordHello(ctx.db, local.id, hello);
+		reconcile(ctx.db, ctx.settings, Date.now() + BUILD_TIMEOUT_MS + 1000);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'failed',
+			message: 'Timed out scanning'
+		});
+	});
+
+	it('skips scanning when it is off', () => {
+		const { ctx, local, env } = setup({ scan: 'off' });
+		recordHello(ctx.db, local.id, hello);
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		expect(statusOf(ctx, dep!.id).status).toBe('deploying');
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).scans).toEqual([]);
 	});
 });

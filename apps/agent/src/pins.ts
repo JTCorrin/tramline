@@ -23,3 +23,14 @@ export const RAILPACK = {
 /** Rootless BuildKit: builds run as an unprivileged user, never --privileged. */
 export const BUILDKIT_IMAGE =
 	'moby/buildkit:v0.34.1-rootless@sha256:f68752a5a94acfcdad2d07867b7075601a421638e17fc5f28efc1c814d0c4f89';
+
+/** Trivy, the vulnerability scanner, run inside the rootless builder. */
+export const TRIVY = {
+	version: '0.75.0',
+	/** sha256 of each release tarball, from the release's checksums.txt. */
+	sha256: {
+		aarch64: 'a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3',
+		x86_64: 'c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f'
+	} as Record<string, string>,
+	target: { aarch64: 'Linux-ARM64', x86_64: 'Linux-64bit' } as Record<string, string>
+};

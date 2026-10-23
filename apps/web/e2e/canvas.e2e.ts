@@ -6,7 +6,7 @@ const node = (page: Page, name: string) =>
 const changesBar = (page: Page) => page.getByTestId('changes-bar');
 const panel = (page: Page) => page.getByTestId('service-panel');
 /** Any status after Deploy; how far it gets depends on whether an agent is running. */
-const DEPLOYED = /Queued|Deploying|Online/;
+const DEPLOYED = /Queued|Building|Deploying|Online/;
 
 test.beforeEach(async ({ page }) => {
 	await signUp(page);

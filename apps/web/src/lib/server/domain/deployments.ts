@@ -21,6 +21,7 @@ export const toDto = (row: DeploymentRow): Deployment => ({
 	source: sourceLabel(row.config),
 	message: row.message,
 	commit: row.commit,
+	scan: row.scan ?? null,
 	createdBy: row.createdBy,
 	createdAt: row.createdAt.toISOString(),
 	updatedAt: row.updatedAt.toISOString()
@@ -92,6 +93,8 @@ export function redeploy(ctx: Ctx, id: string): Deployment {
 			// the exact image again: the built one, or the digest the original pulled
 			image: source.image ?? source.resolvedImage,
 			commit: source.commit,
+			// the same image needs no new scan
+			scan: (source.image ?? source.resolvedImage) ? source.scan : null,
 			createdBy: ctx.userId
 		})
 		.returning()

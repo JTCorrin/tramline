@@ -181,7 +181,7 @@ Security is a core reason for Tramline to exist, so every default should be the 
 **Workloads**
 
 - **Container defaults:** `no-new-privileges`, all capabilities dropped except a small allowlist, PID and memory limits, `/var/run/docker.sock` never mountable into user containers, and an optional read-only root filesystem.
-- **Images:** tags resolved to a digest at deploy time and pinned in the snapshot, so a rollback really is the same image. A vulnerability scan (Trivy or Grype) runs on deploy, with warnings or optional blocking. SBOMs are stored.
+- **Images:** tags resolved to a digest at deploy time and pinned in the snapshot, so a rollback really is the same image. A vulnerability scan (Trivy) runs before every new image runs, with warnings or optional blocking ✅ (Phase 3.5). SBOMs are stored (later).
 - **Secrets:**
   - "Sealed" variables (write-only, never shown again after saving).
   - Known secret values redacted from deployment logs.
@@ -248,7 +248,7 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
 - **Phase 3 ✅:** BuildKit secret mounts, image digest pinning, a rootless builder, and pinned and verified build tools.
   - GitHub: a private, read-only app (`contents` and `metadata` only) whose private key and webhook secret are encrypted at rest. Installation tokens last an hour, are cached in memory only and are handed to the builder through git's environment, never in a URL.
   - Webhooks are HMAC-verified in constant time; the manifest, install and setup redirects are bound to a state cookie; installations are verified with GitHub before they're connected and never shared across organizations.
-- **Phase 3.5:** optional image vulnerability scanning (Trivy), warning by default or blocking on critical findings.
+- **Phase 3.5 ✅:** image vulnerability scanning with Trivy, warning by default or blocking fixable critical findings, on built and registry images alike.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
 - **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
 - **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
@@ -335,6 +335,25 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
 - The deployment log follows the newest deployment, so a push's build log appears without a click.
 - **Deferred:** watch paths beyond the root directory move to Phase 4 alongside config-as-code.
 - **Exit:** `e2e/github.e2e.ts`: create the app through the manifest flow (GitHub stubbed), then a signed push webhook deploys the pushed commit.
+
+### Phase 3.5: Image vulnerability scanning ✅ (verified on Docker; e2e in CI)
+
+- **Trivy in the builder:** the pinned Trivy CLI (checksum-verified, like Railpack) runs inside each node's rootless builder, never with the Docker socket. Its vulnerability database is cached on the builder's volume.
+- **Before anything runs:**
+  - **Built images** are written to a tarball, scanned, and only then loaded into Docker, so a refused image never reaches it.
+  - **Registry images** get a short "Scanning image" stage: the agent pulls the image, Trivy scans that exact digest from the registry, and the deployment runs by that digest (which also pins it for rollbacks).
+  - **Redeploys and rollbacks** of an image that already ran reuse it and its scan.
+- **Policy per service** (Settings → Security → Vulnerability scan):
+  - `warn` (the default): findings are shown and the image deploys.
+  - `block`: images with **critical vulnerabilities that have a fix** are refused, and so are images that could not be scanned. Unfixable criticals are shown but don't block, since there is nothing to upgrade to.
+  - `off`: no scan.
+- **Results:** counts per severity and the 50 most severe findings are stored on the deployment, shown as a summary line and a findings table with links to each advisory, and the full scan output is in the build log.
+- **Exit:** `e2e/scan.e2e.ts`: block mode refuses `alpine:3.12.0` (fixable critical vulnerabilities) before it runs; `e2e/deploy.e2e.ts` and `e2e/build.e2e.ts` scan in warn mode and deploy.
+- **Deferred:**
+  - SBOMs.
+  - Rescanning running deployments when new vulnerabilities are published.
+  - Private registry credentials, which image services don't support yet.
+  - The first scan on a node downloads Trivy's vulnerability database (about 1.5 minutes on the connection it was tested on), and Trivy refreshes it daily, so some scans take longer.
 
 ### Phase 4: Data, variables and networking depth
 
