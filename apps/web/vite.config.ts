@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { CSP_DIRECTIVES } from './src/lib/server/security';
 
 export default defineConfig({
 	plugins: [
@@ -15,7 +16,15 @@ export default defineConfig({
 			},
 
 			// Tramline is a long-lived process (reconciler, job queue, SSE, agent sockets), so it runs on Node.
-			adapter: adapter()
+			adapter: adapter(),
+
+			// nonces on dynamic pages; see src/lib/server/security.ts
+			csp: {
+				mode: 'auto',
+				directives: Object.fromEntries(
+					Object.entries(CSP_DIRECTIVES).map(([key, values]) => [key, [...values]])
+				)
+			}
 		})
 	],
 	test: {

@@ -20,6 +20,7 @@ import type { Ctx } from './context';
 import { toDto as deploymentDto } from './deployments';
 import { builtinVariables, resolveVariables } from './resolve';
 import { describeConfigChanges, scopeOf } from './staging';
+import { pruneSeals } from './variables';
 import { hasStaged, loadEnvironmentState } from './state';
 
 export function summary(ctx: Ctx, environmentId: string): StagedChanges {
@@ -67,6 +68,9 @@ export function discard(ctx: Ctx, environmentId: string) {
 			}
 		}
 		tx.delete(stagedChange).where(eq(stagedChange.environmentId, environmentId)).run();
+		pruneSeals(tx, ctx.secrets, environmentId, null);
+		for (const row of rows)
+			if (row.serviceId) pruneSeals(tx, ctx.secrets, environmentId, row.serviceId);
 	});
 	publish({ type: 'services', projectId: env.projectId });
 	publish({ type: 'changes', projectId: env.projectId, environmentId });
@@ -155,6 +159,8 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 			}
 		}
 		tx.delete(stagedChange).where(eq(stagedChange.environmentId, environmentId)).run();
+		pruneSeals(tx, ctx.secrets, environmentId, null);
+		for (const svc of state.services) pruneSeals(tx, ctx.secrets, environmentId, svc.service.id);
 
 		return affected
 			.filter((svc) => svc.effective.source)

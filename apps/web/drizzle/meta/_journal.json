@@ -29,6 +29,20 @@
       "when": 1792737272476,
       "tag": "0003_nodes",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792738734632,
+      "tag": "0004_sealed_variables",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792747027247,
+      "tag": "0005_deployment_started_at",
+      "breakpoints": true
     }
   ]
 }

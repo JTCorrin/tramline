@@ -5,7 +5,9 @@
 	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { cn } from '#lib/utils.js';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import EyeIcon from '@lucide/svelte/icons/eye';
+	import LockIcon from '@lucide/svelte/icons/lock';
 	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
@@ -18,7 +20,8 @@
 		environmentId,
 		serviceId,
 		version,
-		suggestions
+		suggestions,
+		track = (request) => request
 	}: {
 		environmentId: string;
 		/** null for the environment's shared variables */
@@ -26,6 +29,8 @@
 		/** bump to refetch */
 		version: number;
 		suggestions: string[];
+		/** Lets the workspace hold a deploy until in-flight edits have landed. */
+		track?: <T>(request: Promise<T>) => Promise<T>;
 	} = $props();
 
 	const client = api();
@@ -37,6 +42,7 @@
 	let newKey = $state('');
 	let newValue = $state('');
 	let raw = $state<string | null>(null);
+	let sealing = $state<string | null>(null);
 
 	$effect(() => {
 		void version;
@@ -49,9 +55,16 @@
 			.catch(reportError);
 	});
 
-	async function stage(set: Record<string, string>, unset: string[] = []) {
+	type Edits = {
+		set?: Record<string, string>;
+		unset?: string[];
+		seal?: string[];
+		restore?: string[];
+	};
+
+	async function stage(edits: Edits) {
 		try {
-			variables = await client.variables.stage({ environmentId, serviceId, set, unset });
+			variables = await track(client.variables.stage({ environmentId, serviceId, ...edits }));
 		} catch (error) {
 			reportError(error);
 		}
@@ -59,7 +72,7 @@
 
 	async function add(event: SubmitEvent) {
 		event.preventDefault();
-		await stage({ [newKey.trim()]: newValue });
+		await stage({ set: { [newKey.trim()]: newValue } });
 		newKey = newValue = '';
 	}
 
@@ -68,9 +81,10 @@
 		else revealed.add(key);
 	}
 
+	// sealed values never leave the server, so the raw editor neither shows nor touches them
+	const editable = () => variables.filter((v) => v.staged !== 'removed' && !v.sealed);
 	const toRaw = () =>
-		variables
-			.filter((v) => v.staged !== 'removed')
+		editable()
 			.map((v) => `${v.key}=${v.value}`)
 			.join('\n');
 
@@ -80,14 +94,14 @@
 			const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
 			if (match) next[match[1]!] = match[2]!.replace(/^(['"])(.*)\1$/, '$2');
 		}
-		const current = variables.filter((v) => v.staged !== 'removed');
+		const current = editable();
 		const set = Object.fromEntries(
 			Object.entries(next).filter(
 				([key, value]) => current.find((v) => v.key === key)?.value !== value
 			)
 		);
 		const unset = current.filter((v) => !(v.key in next)).map((v) => v.key);
-		await stage(set, unset);
+		await stage({ set, unset });
 		raw = null;
 	}
 
@@ -154,18 +168,22 @@
 					>
 						{variable.key}
 					</span>
+					{#if variable.sealed}
+						<LockIcon class="size-3 shrink-0 text-muted-foreground" aria-label="Sealed" />
+					{/if}
 					{#if editing === variable.key}
 						<form
 							class="flex flex-1 gap-2"
 							onsubmit={async (event) => {
 								event.preventDefault();
-								await stage({ [variable.key]: editValue });
+								await stage({ set: { [variable.key]: editValue } });
 								editing = null;
 							}}
 						>
 							<div class="flex-1">
 								<ReferenceInput
 									aria-label="Value of {variable.key}"
+									placeholder={variable.sealed ? 'New value (write-only)' : undefined}
 									{suggestions}
 									bind:value={editValue}
 									onkeydown={(event) => event.key === 'Escape' && (editing = null)}
@@ -175,23 +193,29 @@
 						</form>
 					{:else}
 						<span class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-							{revealed.has(variable.key) ? variable.value : '••••••••'}
+							{#if variable.sealed}
+								<span class="italic">sealed</span>
+							{:else}
+								{revealed.has(variable.key) ? variable.value : '••••••••'}
+							{/if}
 						</span>
 						<div class="flex opacity-60 group-hover:opacity-100">
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								aria-label="{revealed.has(variable.key) ? 'Hide' : 'Show'} {variable.key}"
-								onclick={() => toggle(variable.key)}
-							>
-								{#if revealed.has(variable.key)}<EyeOffIcon />{:else}<EyeIcon />{/if}
-							</Button>
+							{#if !variable.sealed}
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									aria-label="{revealed.has(variable.key) ? 'Hide' : 'Show'} {variable.key}"
+									onclick={() => toggle(variable.key)}
+								>
+									{#if revealed.has(variable.key)}<EyeOffIcon />{:else}<EyeIcon />{/if}
+								</Button>
+							{/if}
 							{#if variable.staged === 'removed'}
 								<Button
 									variant="ghost"
 									size="icon-sm"
 									aria-label="Restore {variable.key}"
-									onclick={() => stage({ [variable.key]: variable.value })}
+									onclick={() => stage({ restore: [variable.key] })}
 								>
 									<Undo2Icon />
 								</Button>
@@ -202,16 +226,26 @@
 									aria-label="Edit {variable.key}"
 									onclick={() => {
 										editing = variable.key;
-										editValue = variable.value;
+										editValue = variable.value ?? '';
 									}}
 								>
 									<PencilIcon />
 								</Button>
+								{#if !variable.sealed}
+									<Button
+										variant="ghost"
+										size="icon-sm"
+										aria-label="Seal {variable.key}"
+										onclick={() => (sealing = variable.key)}
+									>
+										<LockIcon />
+									</Button>
+								{/if}
 								<Button
 									variant="ghost"
 									size="icon-sm"
 									aria-label="Delete {variable.key}"
-									onclick={() => stage({}, [variable.key])}
+									onclick={() => stage({ unset: [variable.key] })}
 								>
 									<TrashIcon />
 								</Button>
@@ -223,3 +257,27 @@
 		</ul>
 	{/if}
 </div>
+
+<AlertDialog.Root bind:open={() => sealing !== null, (open) => !open && (sealing = null)}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Seal {sealing}?</AlertDialog.Title>
+			<AlertDialog.Description>
+				Its value will never be shown again, in the dashboard or through the API. Services still
+				receive it and references still resolve. You can replace or delete it, but not unseal it.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				onclick={() => {
+					const key = sealing!;
+					sealing = null;
+					stage({ seal: [key] });
+				}}
+			>
+				Seal variable
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

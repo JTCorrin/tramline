@@ -13,7 +13,8 @@
 	<title>Tramline</title>
 </svelte:head>
 
-<ModeWatcher defaultMode="dark" />
+<!-- its first-paint script lives in app.html so it can carry the CSP nonce -->
+<ModeWatcher defaultMode="dark" disableHeadScriptInjection />
 <Toaster richColors position="bottom-right" />
 
 {@render children()}

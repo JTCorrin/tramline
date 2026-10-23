@@ -92,6 +92,15 @@ export class DockerRuntime implements ContainerRuntime {
 			HostConfig: {
 				RestartPolicy: { Name: spec.restart.name, MaximumRetryCount: spec.restart.maxRetries },
 				NetworkMode: spec.network,
+				CapDrop: ['ALL'],
+				CapAdd: spec.security.capabilities,
+				SecurityOpt: ['no-new-privileges:true'],
+				PidsLimit: spec.security.pidsLimit,
+				Privileged: false,
+				...(spec.security.memoryMb ? { Memory: spec.security.memoryMb * 1024 * 1024 } : {}),
+				...(spec.security.readOnlyRootFilesystem
+					? { ReadonlyRootfs: true, Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=64m' } }
+					: {}),
 				PortBindings: Object.fromEntries(
 					ports.map((p) => [`${p.container}/tcp`, [{ HostPort: String(p.host) }]])
 				),

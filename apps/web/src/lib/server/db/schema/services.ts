@@ -1,5 +1,13 @@
 import type { ServiceConfig, ServiceConfigPatch } from '@tramline/contracts';
-import { index, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+	index,
+	integer,
+	primaryKey,
+	real,
+	sqliteTable,
+	text,
+	uniqueIndex
+} from 'drizzle-orm/sqlite-core';
 import { user } from './auth';
 import { node } from './nodes';
 import { project, timestamps } from './projects';
@@ -72,6 +80,25 @@ export const variable = sqliteTable(
 	]
 );
 
+/**
+ * Keys whose values are write-only. A seal applies to the key in its scope,
+ * whether the value is deployed or only staged, and goes away with the key.
+ */
+export const sealedVariable = sqliteTable(
+	'sealed_variable',
+	{
+		environmentId: text('environment_id')
+			.notNull()
+			.references(() => environment.id, { onDelete: 'cascade' }),
+		serviceId: text('service_id').references(() => service.id, { onDelete: 'cascade' }),
+		/** `service_id`, or `shared`. */
+		scope: text('scope').notNull(),
+		key: text('key').notNull(),
+		createdAt: timestamps.createdAt
+	},
+	(table) => [primaryKey({ columns: [table.environmentId, table.scope, table.key] })]
+);
+
 export interface StagedPayload {
 	/** The service was created and has not been deployed in this environment yet. */
 	create?: boolean;
@@ -121,6 +148,8 @@ export const deployment = sqliteTable(
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
 		/** Why it is in its current status, shown in the UI. */
 		message: text('message'),
+		/** When it was scheduled onto a node; the deploy timeout counts from here, not from queueing. */
+		startedAt: integer('started_at', { mode: 'timestamp_ms' }),
 		...timestamps
 	},
 	(table) => [index('deployment_instance_idx').on(table.serviceId, table.environmentId)]

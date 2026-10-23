@@ -1,6 +1,7 @@
 import type { DesiredState } from '@tramline/contracts';
 
-export const INGRESS_NAME = 'tramline-ingress';
+/** One ingress per node, so several agents can share a Docker host (e.g. dev and e2e). */
+export const ingressName = (nodeId: string) => `tramline-ingress-${nodeId}`;
 export const INGRESS_IMAGE = 'caddy:2-alpine';
 /** Where the generated config lives inside the ingress container. */
 export const INGRESS_CONFIG_PATH = '/etc/tramline/caddy.json';
@@ -10,6 +11,17 @@ export function caddyConfig(ingress: DesiredState['ingress']) {
 	const routes: object[] = ingress.routes.map((route) => ({
 		match: [{ host: [route.host] }],
 		handle: [
+			// browsers must only ever reach HTTPS services over HTTPS again
+			...(ingress.tls
+				? [
+						{
+							handler: 'headers',
+							response: {
+								set: { 'Strict-Transport-Security': ['max-age=31536000; includeSubDomains'] }
+							}
+						}
+					]
+				: []),
 			{
 				handler: 'reverse_proxy',
 				upstreams: route.upstreams.map((dial) => ({ dial }))

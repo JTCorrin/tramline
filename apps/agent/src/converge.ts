@@ -1,15 +1,25 @@
 import type { DesiredState } from '@tramline/contracts';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, INGRESS_NAME, caddyConfig } from './caddy';
-import { LABELS, type ContainerRuntime } from './runtime';
+import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
+import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
 import { hash, toRunSpec } from './spec';
 
 export interface ConvergeOptions {
 	/** Host directory for agent state; the ingress config is written under it. */
 	stateDir: string;
+	/** Usually learned from the control plane at hello; required before the first run. */
+	nodeId?: string;
+	/**
+	 * How long a container stays up after leaving the desired state, so traffic
+	 * can move off it first (the ingress reloads its routes within about a second).
+	 */
+	drainMs?: number;
+	now?: () => number;
 	log?: (message: string) => void;
 }
+
+export const DEFAULT_DRAIN_MS = 10_000;
 
 /**
  * Makes the container runtime match a desired state. Idempotent and safe to
@@ -22,14 +32,48 @@ export class Converger {
 	/** Containers that could not be started, with the reason (e.g. image not found). */
 	readonly errors = new Map<string, string>();
 
+	/** The node whose containers this converger owns. */
+	nodeId: string | null;
+
 	#running: Promise<void> | null = null;
 	#again = false;
 	#latest: DesiredState | null = null;
+	/** When each no-longer-desired container was first seen, for draining. */
+	#leaving = new Map<string, number>();
 
 	constructor(
 		private runtime: ContainerRuntime,
 		private options: ConvergeOptions
-	) {}
+	) {
+		this.nodeId = options.nodeId ?? null;
+	}
+
+	get ingressName() {
+		return ingressName(this.#node());
+	}
+
+	/** Whether a draining container is due for removal, so the agent should converge again. */
+	get removalDue() {
+		const now = this.#now();
+		for (const since of this.#leaving.values()) if (now - since >= this.#drainMs) return true;
+		return false;
+	}
+
+	/** Containers on the runtime that this node's agent manages. */
+	owned(containers: ManagedContainer[]) {
+		return containers.filter((c) => c.labels[LABELS.node] === this.nodeId);
+	}
+
+	#node() {
+		if (!this.nodeId) throw new Error('nodeId is not known yet');
+		return this.nodeId;
+	}
+	#now() {
+		return (this.options.now ?? Date.now)();
+	}
+	get #drainMs() {
+		return this.options.drainMs ?? DEFAULT_DRAIN_MS;
+	}
 
 	/** Converges to `desired`; overlapping calls coalesce into one follow-up run. */
 	async run(desired: DesiredState): Promise<void> {
@@ -53,25 +97,30 @@ export class Converger {
 
 	async #converge(desired: DesiredState) {
 		const log = this.options.log ?? (() => {});
+		const nodeId = this.#node();
 		for (const network of desired.networks) await this.runtime.ensureNetwork(network);
 
-		const wanted = new Map(desired.containers.map((c) => [c.name, toRunSpec(c)]));
-		const existing = await this.runtime.list();
+		const wanted = new Map(desired.containers.map((c) => [c.name, toRunSpec(c, nodeId)]));
+		const existing = this.owned(await this.runtime.list());
+		const workloads = existing.filter((c) => c.labels[LABELS.role] === 'workload');
 		const present = new Set<string>();
+		const stale: ManagedContainer[] = [];
 
-		for (const container of existing) {
-			if (container.labels[LABELS.role] === 'ingress') continue;
+		for (const container of workloads) {
 			const spec = wanted.get(container.name);
-			if (spec && spec.labels[LABELS.spec] === container.labels[LABELS.spec]) {
+			if (!spec) stale.push(container);
+			else if (spec.labels[LABELS.spec] === container.labels[LABELS.spec])
 				present.add(container.name);
-				continue;
+			else {
+				// same name, different spec: replace in place
+				log(`replacing ${container.name}`);
+				await this.runtime.remove(container.name);
 			}
-			log(`removing ${container.name}`);
-			await this.runtime.remove(container.name);
 		}
 
 		for (const name of this.errors.keys()) if (!wanted.has(name)) this.errors.delete(name);
 
+		// 1. start what's missing
 		for (const [name, spec] of wanted) {
 			if (present.has(name) || this.errors.has(name)) continue;
 			try {
@@ -90,14 +139,30 @@ export class Converger {
 			}
 		}
 
+		// 2. point routes at the new deployments (and drop routes to removed ones, even the last)
+		this.#writeIngressConfig(desired);
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
+
+		// 3. only then drain and remove what is no longer wanted
+		const now = this.#now();
+		const staleNames = new Set(stale.map((c) => c.name));
+		for (const name of this.#leaving.keys()) if (!staleNames.has(name)) this.#leaving.delete(name);
+		for (const container of stale) {
+			const since = this.#leaving.get(container.name) ?? now;
+			this.#leaving.set(container.name, since);
+			if (now - since < this.#drainMs) continue;
+			log(`removing ${container.name}`);
+			await this.runtime.remove(container.name);
+			this.#leaving.delete(container.name);
+		}
 	}
 
-	async #ensureIngress(
-		desired: DesiredState,
-		existing: Awaited<ReturnType<ContainerRuntime['list']>>
-	) {
-		const dir = path.join(this.options.stateDir, 'caddy');
+	get #ingressDir() {
+		return path.join(this.options.stateDir, 'caddy');
+	}
+
+	#writeIngressConfig(desired: DesiredState) {
+		const dir = this.#ingressDir;
 		const file = path.join(dir, 'caddy.json');
 		const config = JSON.stringify(caddyConfig(desired.ingress), null, 2);
 		mkdirSync(dir, { recursive: true });
@@ -109,9 +174,13 @@ export class Converger {
 		}
 		// Caddy runs with --watch, so rewriting the file reloads it without dropping connections
 		if (current !== config) writeFileSync(file, config);
+	}
 
+	async #ensureIngress(desired: DesiredState, existing: ManagedContainer[]) {
+		const name = this.ingressName;
+		const dir = this.#ingressDir;
 		const spec = {
-			name: INGRESS_NAME,
+			name,
 			image: INGRESS_IMAGE,
 			cmd: ['caddy', 'run', '--config', INGRESS_CONFIG_PATH, '--watch'],
 			env: {},
@@ -123,16 +192,24 @@ export class Converger {
 				...(desired.ingress.tls ? [{ container: 443, host: 443 }] : [])
 			],
 			binds: [`${path.resolve(dir)}:${path.dirname(INGRESS_CONFIG_PATH)}:ro`],
+			// Caddy only needs to bind ports 80/443 inside its container
+			security: {
+				capabilities: ['NET_BIND_SERVICE'],
+				pidsLimit: 256,
+				memoryMb: 256,
+				readOnlyRootFilesystem: false
+			},
 			labels: {
 				[LABELS.managed]: 'true',
+				[LABELS.node]: this.#node(),
 				[LABELS.role]: 'ingress',
 				[LABELS.spec]: hash({ port: desired.ingress.httpPort, tls: desired.ingress.tls, dir })
 			}
 		};
 
-		let ingress = existing.find((c) => c.name === INGRESS_NAME);
+		let ingress = existing.find((c) => c.name === name);
 		if (ingress && ingress.labels[LABELS.spec] !== spec.labels[LABELS.spec]) {
-			await this.runtime.remove(INGRESS_NAME);
+			await this.runtime.remove(name);
 			ingress = undefined;
 		}
 		if (!ingress) {
@@ -142,7 +219,7 @@ export class Converger {
 		// the ingress joins every environment network so it can reach (and health-check) services
 		const joined = new Set(ingress?.networks ?? [spec.network]);
 		for (const network of desired.networks) {
-			if (!joined.has(network)) await this.runtime.connect(INGRESS_NAME, network);
+			if (!joined.has(network)) await this.runtime.connect(name, network);
 		}
 	}
 }

@@ -2,7 +2,8 @@ import type { StageVariables, Variable } from '@tramline/contracts';
 import { and, eq } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client';
 import type { Secrets } from '../crypto';
-import { variable } from '../db/schema';
+import { AppError } from '../api/errors';
+import { sealedVariable, variable } from '../db/schema';
 import { publish } from '../events';
 import { requireEnvironment, requireInstance } from './access';
 import type { Ctx } from './context';
@@ -52,6 +53,48 @@ export function effectiveVariables(
 	return Object.assign(result, staged.set);
 }
 
+/** Keys in a scope whose values are write-only. */
+export function sealedKeys(db: DbOrTx, environmentId: string, serviceId: string | null) {
+	return new Set(
+		db
+			.select({ key: sealedVariable.key })
+			.from(sealedVariable)
+			.where(
+				and(
+					eq(sealedVariable.environmentId, environmentId),
+					eq(sealedVariable.scope, scopeOf(serviceId))
+				)
+			)
+			.all()
+			.map((row) => row.key)
+	);
+}
+
+/** Drops seals for keys that no longer exist, deployed or staged. */
+export function pruneSeals(
+	db: DbOrTx,
+	secrets: Secrets,
+	environmentId: string,
+	serviceId: string | null
+) {
+	const present = {
+		...appliedVariables(db, secrets, environmentId, serviceId),
+		...effectiveVariables(db, secrets, environmentId, serviceId)
+	};
+	for (const key of sealedKeys(db, environmentId, serviceId)) {
+		if (key in present) continue;
+		db.delete(sealedVariable)
+			.where(
+				and(
+					eq(sealedVariable.environmentId, environmentId),
+					eq(sealedVariable.scope, scopeOf(serviceId)),
+					eq(sealedVariable.key, key)
+				)
+			)
+			.run();
+	}
+}
+
 function check(ctx: Ctx, environmentId: string, serviceId: string | null | undefined) {
 	return serviceId
 		? requireInstance(ctx, serviceId, environmentId).environment
@@ -67,13 +110,19 @@ export function list(
 	const applied = appliedVariables(ctx.db, ctx.secrets, query.environmentId, serviceId);
 	const staged = stagedVariables(ctx.db, ctx.secrets, query.environmentId, serviceId);
 
+	const sealed = sealedKeys(ctx.db, query.environmentId, serviceId);
+	const shown = (key: string, value: string) => (sealed.has(key) ? null : value);
+
 	const variables: Variable[] = Object.entries(applied).map(([key, value]) => ({
 		key,
-		value: staged.set[key] ?? value,
+		value: shown(key, staged.set[key] ?? value),
+		sealed: sealed.has(key),
 		staged: staged.unset.includes(key) ? 'removed' : key in staged.set ? 'modified' : null
 	}));
 	for (const [key, value] of Object.entries(staged.set)) {
-		if (!(key in applied)) variables.push({ key, value, staged: 'added' });
+		if (!(key in applied)) {
+			variables.push({ key, value: shown(key, value), sealed: sealed.has(key), staged: 'added' });
+		}
 	}
 	return variables.sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -84,7 +133,12 @@ export function list(
  */
 export function stage(
 	ctx: Ctx,
-	input: StageVariables & { set: Record<string, string>; unset: string[] }
+	input: StageVariables & {
+		set: Record<string, string>;
+		unset: string[];
+		seal?: string[];
+		restore?: string[];
+	}
 ) {
 	const env = check(ctx, input.environmentId, input.serviceId);
 	const serviceId = input.serviceId ?? null;
@@ -103,11 +157,27 @@ export function stage(
 		delete set[key];
 		if (key in applied) unset.add(key);
 	}
+	for (const key of input.restore ?? []) unset.delete(key);
 
 	saveStaged(ctx.db, input.environmentId, serviceId, {
 		...payload,
 		variables: { set, unset: [...unset] }
 	});
+
+	if (input.seal?.length) {
+		const present = effectiveVariables(ctx.db, ctx.secrets, input.environmentId, serviceId);
+		const missing = input.seal.filter((key) => !(key in present));
+		if (missing.length)
+			throw new AppError('validation_failed', `Cannot seal unknown variable ${missing[0]}`);
+		for (const key of input.seal) {
+			ctx.db
+				.insert(sealedVariable)
+				.values({ environmentId: input.environmentId, serviceId, scope: scopeOf(serviceId), key })
+				.onConflictDoNothing()
+				.run();
+		}
+	}
+	pruneSeals(ctx.db, ctx.secrets, input.environmentId, serviceId);
 
 	publish({
 		type: 'variables',

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { hydrated } from '#lib/hydrated.svelte.js';
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { authClient } from '#lib/auth-client.js';
@@ -15,6 +16,7 @@
 	let password = $state('');
 	let error = $state('');
 	let pending = $state(false);
+	const ready = hydrated();
 
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
@@ -59,7 +61,7 @@
 					/>
 					{#if error}<Field.Error>{error}</Field.Error>{/if}
 				</Field.Field>
-				<Button type="submit" class="w-full" disabled={pending}>Sign in</Button>
+				<Button type="submit" class="w-full" disabled={!ready.current || pending}>Sign in</Button>
 				<Field.Description class="text-center">
 					No account yet? <a href={resolve('/(auth)/sign-up')}>Create one</a>
 				</Field.Description>

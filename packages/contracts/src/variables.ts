@@ -4,7 +4,10 @@ export const VARIABLE_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const Variable = z.object({
 	key: z.string(),
-	value: z.string(),
+	/** null for sealed variables: their values are write-only. */
+	value: z.string().nullable(),
+	/** Sealed values are never returned by the API again; they can only be replaced. */
+	sealed: z.boolean(),
 	/** How this variable differs from the last deploy, if at all. */
 	staged: z.enum(['added', 'modified', 'removed']).nullable()
 });
@@ -22,7 +25,11 @@ export const StageVariables = z.object({
 	/** Omit (or null) for the environment's shared variables. */
 	serviceId: z.string().nullable().optional(),
 	set: z.record(VariableKey, z.string().max(32_768)).default({}),
-	unset: z.array(VariableKey).default([])
+	unset: z.array(VariableKey).default([]),
+	/** Keys to seal. Takes effect immediately and cannot be undone. */
+	seal: z.array(VariableKey).default([]),
+	/** Keys whose staged removal should be cancelled. */
+	restore: z.array(VariableKey).default([])
 });
 
 export type StageVariables = z.input<typeof StageVariables>;

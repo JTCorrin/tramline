@@ -84,6 +84,8 @@ export function desiredContainer(overrides: Partial<DesiredContainer> = {}): Des
 		restartPolicy: 'on_failure',
 		port: 80,
 		healthcheckPath: null,
+		memoryMb: null,
+		readOnlyRootFilesystem: false,
 		...overrides
 	};
 }

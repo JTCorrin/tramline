@@ -1,5 +1,4 @@
-import { expect, test } from '@playwright/test';
-import { createProject, signUp } from './helpers';
+import { createProject, signUp, expect, test } from './helpers';
 
 test('sign up, create an organization and manage projects', async ({ page }) => {
 	await page.goto('/');
@@ -64,6 +63,21 @@ test('switches between organizations and projects', async ({ page }) => {
 	await page.getByRole('button', { name: 'Beta' }).click();
 	await page.getByRole('menuitem', { name: 'Alpha' }).click();
 	await expect(page.getByTestId('project-card')).toHaveCount(2);
+});
+
+test('pages and API responses carry security headers', async ({ request }) => {
+	const page = await request.get('/sign-in');
+	const csp = page.headers()['content-security-policy'];
+	expect(csp).toMatch(/script-src 'self' 'nonce-[^']+'/);
+	expect(csp).toContain("frame-ancestors 'none'");
+	expect(page.headers()).toMatchObject({
+		'x-content-type-options': 'nosniff',
+		'x-frame-options': 'DENY',
+		'referrer-policy': 'strict-origin-when-cross-origin'
+	});
+	expect((await request.get('/api/v1/projects')).headers()['x-content-type-options']).toBe(
+		'nosniff'
+	);
 });
 
 test('the API rejects unauthenticated requests with the error envelope', async ({ request }) => {

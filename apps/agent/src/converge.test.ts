@@ -2,15 +2,19 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INGRESS_NAME } from './caddy';
+import { ingressName } from './caddy';
 import { Converger } from './converge';
 import { LABELS } from './runtime';
 import { desiredContainer, desiredState, FakeRuntime } from './testing';
 
+const INGRESS_NAME = ingressName('node_1');
+
 function setup() {
 	const runtime = new FakeRuntime();
 	const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
-	return { runtime, stateDir, converger: new Converger(runtime, { stateDir }) };
+	const clock = { now: 1_000_000 };
+	const converger = new Converger(runtime, { stateDir, nodeId: 'node_1', now: () => clock.now });
+	return { runtime, stateDir, converger, clock };
 }
 
 describe('Converger', () => {
@@ -30,6 +34,7 @@ describe('Converger', () => {
 		const ingress = runtime.containers.get(INGRESS_NAME)!;
 		expect(ingress.spec.ports).toEqual([{ container: 80, host: 8080 }]);
 		expect(ingress.spec.binds?.[0]).toMatch(/caddy:\/etc\/tramline:ro$/);
+		expect(ingress.spec.security.capabilities).toEqual(['NET_BIND_SERVICE']);
 		const config = JSON.parse(readFileSync(path.join(stateDir, 'caddy', 'caddy.json'), 'utf8'));
 		expect(config.apps.http.servers.tramline.routes[0].match[0].host).toEqual([
 			'whoami-abc.localhost'
@@ -44,18 +49,82 @@ describe('Converger', () => {
 		expect(runtime.calls.filter((c) => /^(run|remove|pull)/.test(c))).toEqual([]);
 	});
 
-	it('removes containers that are no longer desired, but never the ingress', async () => {
-		const { runtime, converger } = setup();
-		await converger.run(
-			desiredState([
-				desiredContainer(),
-				desiredContainer({ name: 'tl-dep_2-0', deploymentId: 'dep_2' })
-			])
-		);
+	it('drains containers that are no longer desired before removing them, but never the ingress', async () => {
+		const { runtime, converger, clock } = setup();
+		const second = desiredContainer({ name: 'tl-dep_2-0', deploymentId: 'dep_2' });
+		await converger.run(desiredState([desiredContainer(), second]));
+		await converger.run(desiredState([second]));
+		// still serving while the ingress moves traffic away
+		expect(runtime.containers.has('tl-dep_1-0')).toBe(true);
+		expect(converger.removalDue).toBe(false);
+
+		clock.now += 10_000;
+		expect(converger.removalDue).toBe(true);
+		await converger.run(desiredState([second]));
+		expect([...runtime.containers.keys()].sort()).toEqual(['tl-dep_2-0', INGRESS_NAME].sort());
+		expect(converger.removalDue).toBe(false);
+	});
+
+	it('stops draining a container that becomes desired again', async () => {
+		const { runtime, converger, clock } = setup();
+		await converger.run(desiredState());
+		await converger.run(desiredState([]));
+		await converger.run(desiredState());
+		clock.now += 60_000;
+		await converger.run(desiredState());
+		expect(runtime.containers.has('tl-dep_1-0')).toBe(true);
+	});
+
+	it('updates routes before removing the containers they move away from', async () => {
+		const { runtime, converger, clock } = setup();
+		await converger.run(desiredState());
 		await converger.run(
 			desiredState([desiredContainer({ name: 'tl-dep_2-0', deploymentId: 'dep_2' })])
 		);
-		expect([...runtime.containers.keys()].sort()).toEqual(['tl-dep_2-0', INGRESS_NAME].sort());
+		clock.now += 10_000;
+		runtime.calls = [];
+		const route = {
+			host: 'a.localhost',
+			upstreams: ['dep_2.tramline.internal:80'],
+			network: 'tl-env_1'
+		};
+		await converger.run(
+			desiredState([desiredContainer({ name: 'tl-dep_2-0', deploymentId: 'dep_2' })], [route])
+		);
+		// the config file is written (no runtime call) before the drained container goes
+		expect(runtime.calls.at(-1)).toBe('remove tl-dep_1-0');
+	});
+
+	it("never touches another node's containers", async () => {
+		const { runtime, stateDir } = setup();
+		const other = new Converger(runtime, { stateDir, nodeId: 'node_2', drainMs: 0 });
+		const mine = new Converger(runtime, { stateDir, nodeId: 'node_1', drainMs: 0 });
+		await other.run(
+			desiredState([desiredContainer({ name: 'tl-dep_9-0', deploymentId: 'dep_9' })])
+		);
+		await mine.run(desiredState());
+		await mine.run(desiredState([]));
+		expect([...runtime.containers.keys()].sort()).toEqual(
+			['tl-dep_9-0', ingressName('node_1'), ingressName('node_2')].sort()
+		);
+	});
+
+	it('drops routes when the last deployment goes away', async () => {
+		const { converger, stateDir } = setup();
+		const route = {
+			host: 'a.localhost',
+			upstreams: ['dep_1.tramline.internal:80'],
+			network: 'tl-env_1'
+		};
+		await converger.run(desiredState(undefined, [route]));
+		await converger.run(desiredState([], []));
+		const config = JSON.parse(readFileSync(path.join(stateDir, 'caddy', 'caddy.json'), 'utf8'));
+		expect(config.apps.http.servers.tramline.routes).toHaveLength(1); // only the 404 fallback
+	});
+
+	it('refuses to run before it knows its node', async () => {
+		const converger = new Converger(new FakeRuntime(), { stateDir: tmpdir() });
+		await expect(converger.run(desiredState())).rejects.toThrow('nodeId is not known yet');
 	});
 
 	it('replaces a container whose spec changed', async () => {
@@ -108,6 +177,6 @@ describe('Converger', () => {
 		);
 		await Promise.all([first, second]);
 		expect(runtime.containers.has('tl-dep_9-0')).toBe(true);
-		expect(runtime.containers.has('tl-dep_1-0')).toBe(false);
+		expect(converger.removalDue).toBe(false); // tl-dep_1-0 is draining
 	});
 });

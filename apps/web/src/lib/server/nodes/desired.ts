@@ -1,4 +1,10 @@
-import type { DesiredContainer, DesiredState, IngressRoute } from '@tramline/contracts';
+import {
+	DEFAULT_SERVICE_CONFIG,
+	mergeConfig,
+	type DesiredContainer,
+	type DesiredState,
+	type IngressRoute
+} from '@tramline/contracts';
 import { and, eq, inArray } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Secrets } from '../crypto';
@@ -43,7 +49,8 @@ export function buildDesiredState(
 	const networks = new Set<string>();
 
 	for (const { deployment: dep, domain } of rows) {
-		const { config } = dep;
+		// snapshots taken before a field existed pick up its default
+		const config = mergeConfig(DEFAULT_SERVICE_CONFIG, dep.config);
 		if (config.source?.type !== 'image') continue; // repo sources need a build first (Phase 3)
 
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
@@ -67,7 +74,9 @@ export function buildDesiredState(
 				aliases,
 				restartPolicy: config.deploy.restartPolicy,
 				port: config.networking.port,
-				healthcheckPath: config.deploy.healthcheckPath
+				healthcheckPath: config.deploy.healthcheckPath,
+				memoryMb: config.deploy.memoryMb,
+				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem
 			});
 		}
 

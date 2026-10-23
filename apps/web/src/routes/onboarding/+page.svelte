@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { hydrated } from '#lib/hydrated.svelte.js';
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { authClient } from '#lib/auth-client.js';
@@ -15,6 +16,7 @@
 	let name = $state('');
 	let error = $state('');
 	let pending = $state(false);
+	const ready = hydrated();
 	const slug = $derived(slugify(name));
 
 	async function submit(event: SubmitEvent) {
@@ -57,7 +59,7 @@
 						<Field.Description>URL: <code>{slug || 'acme-inc'}</code></Field.Description>
 						{#if error}<Field.Error>{error}</Field.Error>{/if}
 					</Field.Field>
-					<Button type="submit" class="w-full" disabled={pending || !slug}>
+					<Button type="submit" class="w-full" disabled={!ready.current || pending || !slug}>
 						Create organization
 					</Button>
 				</Field.Group>

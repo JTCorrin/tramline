@@ -1,6 +1,5 @@
-import { expect, test } from '@playwright/test';
 import { INGRESS_PORT } from '../playwright.config';
-import { createProject, signUp } from './helpers';
+import { createProject, expect, signUp, test } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // pulling images and starting containers takes a while on a cold machine
@@ -37,11 +36,11 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	// the generated URL routes through Caddy to the container
 	const url = new URL(await page.getByTestId('service-url').innerText());
 	expect(url.hostname).toMatch(/^whoami-[0-9a-f]{6}\.localhost$/);
-	const response = await request.get(`http://127.0.0.1:${INGRESS_PORT}/`, {
-		headers: { host: url.hostname }
-	});
-	expect(response.status()).toBe(200);
-	expect(await response.text()).toContain('Hostname:');
+	// the ingress picks up new routes within a second or two
+	const viaIngress = () =>
+		request.get(`http://127.0.0.1:${INGRESS_PORT}/`, { headers: { host: url.hostname } });
+	await expect.poll(async () => (await viaIngress()).status(), { timeout: 15_000 }).toBe(200);
+	expect(await (await viaIngress()).text()).toContain('Hostname:');
 
 	// logs stream into the deployments tab
 	await panel.getByRole('tab', { name: 'Deployments' }).click();
@@ -53,17 +52,5 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	// removing tears the container down and the route with it
 	await page.getByTestId('deployments').getByRole('button', { name: 'Remove' }).first().click();
 	await expect(node).toContainText('Removed');
-	await expect
-		.poll(
-			async () =>
-				(
-					await request.get(`http://127.0.0.1:${INGRESS_PORT}/`, {
-						headers: { host: url.hostname }
-					})
-				).status(),
-			{
-				timeout: 30_000
-			}
-		)
-		.toBe(404);
+	await expect.poll(async () => (await viaIngress()).status(), { timeout: 30_000 }).toBe(404);
 });

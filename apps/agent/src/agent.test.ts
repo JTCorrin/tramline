@@ -105,20 +105,29 @@ describe('Agent', () => {
 		expect(runtime.containers.size).toBe(0);
 	});
 
-	it('runs its loops until stopped, and stops when its token is rejected', async () => {
+	it('keeps going when its token is rejected, asking for a fresh token first', async () => {
 		const runtime = new FakeRuntime();
 		const { client } = fakeClient();
-		client.desired.mockRejectedValue(new ControlPlaneError(401, 'Unknown agent token'));
+		client.desired
+			.mockRejectedValueOnce(new ControlPlaneError(401, 'Unknown agent token'))
+			.mockResolvedValue(null);
+		const onUnauthorized = vi.fn();
 		const agent = new Agent({
 			runtime,
 			client,
 			stateDir: mkdtempSync(path.join(tmpdir(), 'tramline-agent-')),
 			version: 'test',
 			reportIntervalMs: 10,
+			unauthorizedBackoffMs: 10,
+			onUnauthorized,
 			log: () => {}
 		});
 		await agent.start();
-		await vi.waitFor(() => expect(agent.stopped).toBe(true));
+		await vi.waitFor(() => expect(client.desired.mock.calls.length).toBeGreaterThan(2));
+		expect(onUnauthorized).toHaveBeenCalledOnce();
+		expect(agent.stopped).toBe(false);
+		agent.stop();
+		expect(agent.stopped).toBe(true);
 	});
 });
 

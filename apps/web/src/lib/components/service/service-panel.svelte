@@ -42,7 +42,9 @@
 
 	async function stage(patch: ServiceConfigPatch) {
 		try {
-			view = await client.services.stageConfig(service.id, workspace.environmentId, patch);
+			view = await workspace.track(
+				client.services.stageConfig(service.id, workspace.environmentId, patch)
+			);
 		} catch (error) {
 			reportError(error);
 		}
@@ -114,6 +116,7 @@
 			</Tabs.Content>
 			<Tabs.Content value="variables" class="p-4">
 				<VariablesEditor
+					track={(request) => workspace.track(request)}
 					environmentId={workspace.environmentId}
 					serviceId={service.id}
 					version={workspace.version}

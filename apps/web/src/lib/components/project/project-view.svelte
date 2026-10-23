@@ -159,6 +159,7 @@
 		</Sheet.Header>
 		<div class="overflow-y-auto px-4 pb-4">
 			<VariablesEditor
+				track={(request) => workspace.track(request)}
 				environmentId={workspace.environmentId}
 				serviceId={null}
 				version={workspace.version}

@@ -15,7 +15,7 @@ export class ControlPlane {
 
 	constructor(
 		url: string,
-		private token: string,
+		public token: string,
 		private fetcher: typeof fetch = globalThis.fetch
 	) {
 		this.#base = `${url.replace(/\/$/, '')}/api/agent/v1`;

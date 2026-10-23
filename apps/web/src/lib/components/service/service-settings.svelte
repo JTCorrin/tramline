@@ -213,6 +213,38 @@
 				onsave={(v) => stage('deploy', { healthcheckPath: v })}
 			/>
 		</Setting>
+		<div class="grid grid-cols-2 gap-3">
+			<Setting
+				label="Memory limit (MB)"
+				for="deploy-memory"
+				staged={staged('deploy', 'memoryMb')}
+				description="The container is killed if it exceeds this."
+			>
+				<CommitInput
+					id="deploy-memory"
+					type="number"
+					placeholder="No limit"
+					value={config.deploy.memoryMb}
+					onsave={(v) => stage('deploy', { memoryMb: toNumber(v) })}
+				/>
+			</Setting>
+			<div class="flex items-start justify-between gap-3 rounded-lg border p-3">
+				<div>
+					<div class="flex items-center gap-2 text-sm font-medium">
+						Read-only filesystem
+						{#if staged('deploy', 'readOnlyRootFilesystem')}
+							<span class="size-1.5 rounded-full bg-amber-400"></span>
+						{/if}
+					</div>
+					<p class="text-xs text-muted-foreground">Only /tmp is writable.</p>
+				</div>
+				<Switch
+					checked={config.deploy.readOnlyRootFilesystem}
+					onCheckedChange={(checked) => stage('deploy', { readOnlyRootFilesystem: checked })}
+					aria-label="Read-only filesystem"
+				/>
+			</div>
+		</div>
 		<Setting
 			label="Cron schedule"
 			for="deploy-cron"

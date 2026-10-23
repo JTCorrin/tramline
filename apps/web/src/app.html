@@ -4,6 +4,10 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<!-- applies the saved light/dark mode before first paint; filled in by hooks.server.ts -->
+		<script nonce="%sveltekit.nonce%">
+			%tramline.theme%
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

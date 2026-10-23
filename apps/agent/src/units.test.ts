@@ -7,34 +7,64 @@ import { desiredContainer } from './testing';
 
 describe('toRunSpec', () => {
 	it('maps restart policies and wraps start commands in a shell', () => {
-		expect(toRunSpec(desiredContainer({ restartPolicy: 'always' })).restart).toEqual({
+		expect(toRunSpec(desiredContainer({ restartPolicy: 'always' }), 'node_1').restart).toEqual({
 			name: 'always',
 			maxRetries: 0
 		});
-		expect(toRunSpec(desiredContainer({ restartPolicy: 'never' })).restart).toEqual({
+		expect(toRunSpec(desiredContainer({ restartPolicy: 'never' }), 'node_1').restart).toEqual({
 			name: 'no',
 			maxRetries: 0
 		});
-		expect(toRunSpec(desiredContainer()).restart).toEqual({ name: 'on-failure', maxRetries: 10 });
-		expect(toRunSpec(desiredContainer({ command: 'npm start' })).cmd).toEqual([
+		expect(toRunSpec(desiredContainer(), 'node_1').restart).toEqual({
+			name: 'on-failure',
+			maxRetries: 10
+		});
+		expect(toRunSpec(desiredContainer({ command: 'npm start' }), 'node_1').cmd).toEqual([
 			'/bin/sh',
 			'-c',
 			'npm start'
 		]);
-		expect(toRunSpec(desiredContainer()).cmd).toBeUndefined();
+		expect(toRunSpec(desiredContainer(), 'node_1').cmd).toBeUndefined();
 	});
 
 	it('labels containers with a spec hash that changes with the spec', () => {
-		const a = toRunSpec(desiredContainer());
+		const a = toRunSpec(desiredContainer(), 'node_1');
 		expect(a.labels).toMatchObject({
 			[LABELS.managed]: 'true',
 			[LABELS.deployment]: 'dep_1',
 			[LABELS.replica]: '0'
 		});
-		expect(toRunSpec(desiredContainer()).labels[LABELS.spec]).toBe(a.labels[LABELS.spec]);
-		expect(toRunSpec(desiredContainer({ env: { PORT: '81' } })).labels[LABELS.spec]).not.toBe(
-			a.labels[LABELS.spec]
+		expect(toRunSpec(desiredContainer(), 'node_1').labels[LABELS.spec]).toBe(a.labels[LABELS.spec]);
+		expect(
+			toRunSpec(desiredContainer({ env: { PORT: '81' } }), 'node_1').labels[LABELS.spec]
+		).not.toBe(a.labels[LABELS.spec]);
+	});
+});
+
+describe('workload hardening', () => {
+	it('drops privileges, limits processes and never mounts the host', () => {
+		const spec = toRunSpec(
+			desiredContainer({ memoryMb: 512, readOnlyRootFilesystem: true }),
+			'node_1'
 		);
+		expect(spec.security).toEqual({
+			capabilities: [
+				'CHOWN',
+				'DAC_OVERRIDE',
+				'FOWNER',
+				'FSETID',
+				'KILL',
+				'NET_BIND_SERVICE',
+				'SETGID',
+				'SETUID'
+			],
+			pidsLimit: 1024,
+			memoryMb: 512,
+			readOnlyRootFilesystem: true
+		});
+		expect(spec.security.capabilities).not.toContain('NET_RAW');
+		expect(spec.binds).toBeUndefined();
+		expect(spec.ports).toBeUndefined();
 	});
 });
 
@@ -73,9 +103,26 @@ describe('caddyConfig', () => {
 		});
 	});
 
-	it('serves HTTPS with automatic certificates for real domains', () => {
-		const server = caddyConfig({ httpPort: 80, tls: true, routes: [] }).apps.http.servers.tramline;
+	it('serves HTTPS with automatic certificates and HSTS for real domains', () => {
+		const server = caddyConfig({
+			httpPort: 80,
+			tls: true,
+			routes: [
+				{ host: 'api.apps.example.com', upstreams: ['dep_1.tramline.internal:80'], network: 'n' }
+			]
+		}).apps.http.servers.tramline;
 		expect(server.listen).toEqual([':443']);
 		expect(server).not.toHaveProperty('automatic_https');
+		expect(server.routes[0]).toMatchObject({
+			handle: [
+				{
+					handler: 'headers',
+					response: {
+						set: { 'Strict-Transport-Security': ['max-age=31536000; includeSubDomains'] }
+					}
+				},
+				{ handler: 'reverse_proxy' }
+			]
+		});
 	});
 });

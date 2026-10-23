@@ -42,7 +42,9 @@ export const DesiredContainer = z.object({
 	aliases: z.array(z.string()),
 	restartPolicy: z.enum(['on_failure', 'always', 'never']),
 	port: z.number().int().nullable(),
-	healthcheckPath: z.string().nullable()
+	healthcheckPath: z.string().nullable(),
+	memoryMb: z.number().int().nullable(),
+	readOnlyRootFilesystem: z.boolean()
 });
 
 export type DesiredContainer = z.infer<typeof DesiredContainer>;

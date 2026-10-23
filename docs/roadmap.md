@@ -205,12 +205,50 @@ Security is a core reason for Tramline to exist, so every default should be the 
 
 **CI supply chain:** CodeQL, `pnpm audit`, gitleaks secret scanning, Dependabot or Renovate, and pinned GitHub Actions.
 
+**No long-lived credentials: Tramline as an OIDC identity provider**
+
+The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure keys into variables, a deployment proves _who it is_, and the cloud hands it short-lived credentials. GitHub Actions and Vercel already do this, and Tramline is well placed to do it too, because it already knows exactly which org, project, environment, service and deployment every container belongs to.
+
+- **Issuer:** each install is an OIDC issuer. It serves `/.well-known/openid-configuration` and a JWKS with rotating signing keys, held encrypted like other secrets.
+- **Per-deployment tokens:** the agent mounts a signed JWT into each container as a tmpfs file and refreshes it before it expires (around 1 hour, never stored at rest). It works like a Kubernetes projected service-account token.
+  - Claims: `sub=org:acme:project:shop:environment:production:service:api`, plus the deployment ID, node and audience.
+  - The audience is configurable per service: `sts.amazonaws.com`, a GCP pool, or `api://AzureADTokenExchange`.
+- **No SDK changes:** Tramline sets the standard environment variables the official cloud SDKs already read:
+  - **AWS:** `AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE`
+  - **GCP:** a generated external-account `GOOGLE_APPLICATION_CREDENTIALS` file
+  - **Azure:** `AZURE_FEDERATED_TOKEN_FILE` + client and tenant IDs
+  - **HashiCorp Vault:** JWT auth
+
+  You configure a trust policy once in the cloud, matching on `sub` (for example "only production of `shop/api`"), and then there are no keys to paste, rotate or leak.
+
+- **The canvas:** a service gets a "Cloud identity" setting with a role per provider and a copyable trust-policy snippet. Tramline can't recover a deployment's credentials afterwards, because the cloud mints them per request.
+- **Constraint (self-hosting):** the cloud must be able to fetch the issuer's discovery document over public HTTPS. Installs on a private network (behind Proxmox or a LAN) can publish just the discovery document and JWKS to a public bucket or static site. Tramline automates that upload, and only public keys leave the network.
+- **The other direction:**
+  - CI deploys to Tramline using **GitHub Actions' OIDC token** under a trust policy (repo, branch, environment), so CI holds no Tramline API token.
+  - Agents on cloud nodes can authenticate with the cloud's instance identity instead of a static join token.
+  - Compute adapters use workload-identity federation for provider APIs wherever Tramline itself runs in that cloud.
+- **What remains secret:** services that only accept static keys (many SaaS APIs) still need them. Those stay sealed, redacted and envelope-encrypted, and an optional external store (1Password, Vault) fetches them at deploy time so they never sit in Tramline at all. Credentials Tramline generates itself (for example database passwords) never need to be seen by a person.
+
 **Where it lands**
 
-- **Phase 2.5** (small, next): container hardening defaults, log redaction of secret values, sealed variables, security headers and CSP, CI security scanning.
+- **Phase 2.5 ✅:**
+  - Container defaults: `no-new-privileges`, capabilities trimmed to an allowlist (no `NET_RAW` or `MKNOD`), a PID limit, optional memory limit and read-only root, no host mounts. The ingress keeps only `NET_BIND_SERVICE`.
+  - Sealed variables: write-only, can be replaced or restored but never revealed, and not visible in the raw editor or the API.
+  - Log redaction of sealed and secret-looking values and URL passwords.
+  - Nonce-based CSP plus `nosniff`, `X-Frame-Options`, a referrer policy, a permissions policy, and HSTS over HTTPS. HSTS is also set on HTTPS ingress routes, and every e2e test fails on a CSP violation.
+  - CI security: CodeQL (security-extended), gitleaks, `pnpm audit` (high and above), Dependabot, and least-privilege workflow permissions.
+  - `SECURITY.md`.
+  - Found and fixed while verifying on a real Docker host:
+    - Agents only ever touch containers labelled with their own node ID, and each node has its own ingress, so a misconfigured or second agent can't remove another install's services.
+    - Old containers drain for 10s after the route moves. A swap was measured at 334 out of 334 requests answered with 200.
+    - Routes are dropped when the last deployment goes.
+    - The deploy timeout counts from scheduling, not from queueing.
+    - A rejected agent token now backs off and re-reads the token file instead of stopping the agent.
+    - Deploy waits for in-flight edits, and forms can't submit before the page has hydrated.
 - **Phase 3:** BuildKit secret mounts, image digest pinning, vulnerability scan on deploy.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
-- **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9).
+- **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
+- **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
 - **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view.
 - **Phase 7:** provider firewalls and security groups, no public SSH by default on cloud nodes.
 

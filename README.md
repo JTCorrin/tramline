@@ -67,7 +67,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
 0. **Foundations**: monorepo, auth + organizations, resource model, projects ✅
 1. **Canvas and configuration**: Svelte Flow canvas, service panel, variables and references, environments, staged changes ✅
 2. **Agent + local Docker deploys**: node agent, reconciler, Caddy ingress, live logs, zero-downtime swaps ✅
-   - 2.5 Secure-by-default hardening (container defaults, sealed variables, log redaction, CI security scanning)
+   - 2.5 **Secure-by-default hardening** ✅: container defaults, sealed variables, log redaction, CSP and security headers, CI security scanning (see [SECURITY.md](SECURITY.md))
 3. Builds from source (GitHub, Railpack)
 4. Databases, volumes, reference variable depth, domains
 5. Agent access: API tokens + MCP server

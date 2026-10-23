@@ -206,7 +206,7 @@ describe('canvas workflow API', () => {
 			}
 		});
 		expect(vars.body).toEqual([
-			{ key: 'DATABASE_URL', value: '${{Postgres.DATABASE_URL}}', staged: 'added' }
+			{ key: 'DATABASE_URL', value: '${{Postgres.DATABASE_URL}}', sealed: false, staged: 'added' }
 		]);
 		expect(
 			(

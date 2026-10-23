@@ -42,10 +42,21 @@ export interface RunSpec {
 	restart: { name: 'no' | 'always' | 'on-failure'; maxRetries: number };
 	ports?: { container: number; host: number }[];
 	binds?: string[];
+	security: SecurityOptions;
+}
+
+export interface SecurityOptions {
+	/** Linux capabilities to keep; everything else is dropped. */
+	capabilities: string[];
+	pidsLimit: number;
+	memoryMb: number | null;
+	readOnlyRootFilesystem: boolean;
 }
 
 export const LABELS = {
 	managed: 'tramline.managed',
+	/** The node whose agent owns the container; agents never touch other nodes' containers. */
+	node: 'tramline.node',
 	role: 'tramline.role',
 	spec: 'tramline.spec',
 	deployment: 'tramline.deployment',

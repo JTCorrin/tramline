@@ -1,10 +1,12 @@
-import { expect, test, type Page } from '@playwright/test';
-import { createProject, signUp } from './helpers';
+import type { Page } from '@playwright/test';
+import { createProject, signUp, expect, test } from './helpers';
 
 const node = (page: Page, name: string) =>
 	page.getByTestId('service-node').filter({ hasText: name });
 const changesBar = (page: Page) => page.getByTestId('changes-bar');
 const panel = (page: Page) => page.getByTestId('service-panel');
+/** Any status after Deploy; how far it gets depends on whether an agent is running. */
+const DEPLOYED = /Queued|Deploying|Online/;
 
 test.beforeEach(async ({ page }) => {
 	await signUp(page);
@@ -53,8 +55,9 @@ test('build a project on the canvas, wire a reference and deploy', async ({ page
 	// deploy
 	await changesBar(page).getByRole('button', { name: 'Deploy' }).click();
 	await expect(changesBar(page)).toBeHidden();
-	await expect(node(page, 'whoami')).toContainText('Queued');
-	await expect(node(page, 'Postgres')).toContainText('Queued');
+	// queued without an agent; further along when one is running (TRAMLINE_E2E_DOCKER=1)
+	await expect(node(page, 'whoami')).toContainText(DEPLOYED);
+	await expect(node(page, 'Postgres')).toContainText(DEPLOYED);
 	await panel(page).getByRole('tab', { name: 'Deployments' }).click();
 	await expect(page.getByTestId('deployments')).toContainText('traefik/whoami');
 
@@ -95,7 +98,7 @@ test('environments and shared variables', async ({ page }) => {
 	await page.getByRole('option', { name: 'Redis' }).click();
 	await expect(node(page, 'Redis')).toBeVisible();
 	await changesBar(page).getByRole('button', { name: 'Deploy' }).click();
-	await expect(node(page, 'Redis')).toContainText('Queued');
+	await expect(node(page, 'Redis')).toContainText(DEPLOYED);
 
 	// shared variables
 	await page.getByRole('button', { name: 'Shared variables' }).click();
@@ -120,9 +123,52 @@ test('environments and shared variables', async ({ page }) => {
 	// production still has its own pending shared variable
 	await page.getByTestId('environment-switcher').click();
 	await page.getByRole('menuitem', { name: 'production' }).click();
-	await expect(node(page, 'Redis')).toContainText('Queued');
+	await expect(node(page, 'Redis')).toContainText(DEPLOYED);
 	await changesBar(page).getByRole('button', { name: 'Details' }).click();
 	await expect(page.getByText('+ REGION')).toBeVisible();
+});
+
+test('seal a variable so its value can never be shown again', async ({ page }) => {
+	await page.keyboard.press('ControlOrMeta+k');
+	await page.getByRole('option', { name: 'Empty Service' }).click();
+	await panel(page).getByRole('tab', { name: 'Variables' }).click();
+	await page.getByLabel('New variable key').fill('API_KEY');
+	await page.getByLabel('New variable value').fill('sk_live_supersecret');
+	await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+	const vars = page.getByTestId('variables');
+	await vars.getByRole('button', { name: 'Show API_KEY' }).click();
+	await expect(vars).toContainText('sk_live_supersecret');
+
+	await vars.getByRole('button', { name: 'Seal API_KEY' }).click();
+	await page.getByRole('button', { name: 'Seal variable' }).click();
+	await expect(vars).toContainText('sealed');
+	await expect(vars).not.toContainText('sk_live_supersecret');
+	await expect(vars.getByRole('button', { name: 'Show API_KEY' })).toHaveCount(0);
+	await expect(vars.getByRole('button', { name: 'Seal API_KEY' })).toHaveCount(0);
+
+	// not in the raw editor either, and the API never returns it
+	await page.getByRole('button', { name: 'Raw editor' }).click();
+	await expect(page.locator('textarea')).not.toHaveValue(/supersecret/);
+	await page.getByRole('button', { name: 'Table view' }).click();
+	const api = await page.evaluate(async () => {
+		const service = new URL(location.href).searchParams.get('service');
+		const envs = await (
+			await fetch(`/api/v1/environments?projectId=${location.pathname.split('/').pop()}`)
+		).json();
+		return (
+			await fetch(`/api/v1/variables?environmentId=${envs[0].id}&serviceId=${service}`)
+		).text();
+	});
+	expect(api).not.toContain('supersecret');
+	expect(JSON.parse(api)).toEqual([{ key: 'API_KEY', value: null, sealed: true, staged: 'added' }]);
+
+	// replacing it keeps it sealed
+	await vars.getByRole('button', { name: 'Edit API_KEY' }).click();
+	await page.getByLabel('Value of API_KEY').fill('sk_live_rotated');
+	await page.getByRole('button', { name: 'Save' }).click();
+	await expect(vars).toContainText('sealed');
+	await expect(vars).not.toContainText('sk_live_rotated');
 });
 
 test('delete a service from its context menu', async ({ page }) => {

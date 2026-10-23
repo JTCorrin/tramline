@@ -6,6 +6,7 @@ import {
 	ServiceConfigPatch,
 	StageVariables,
 	UpdateProject,
+	Variable,
 	mergeConfig,
 	parseReferences,
 	replaceReferences
@@ -67,6 +68,21 @@ describe('schemas', () => {
 		expect(CreateService.safeParse({ ...base, name: '-leading' }).success).toBe(false);
 	});
 
+	it('represents sealed variables without their value', () => {
+		expect(Variable.parse({ key: 'K', value: null, sealed: true, staged: null })).toMatchObject({
+			value: null
+		});
+		expect(Variable.safeParse({ key: 'K', value: null, staged: null }).success).toBe(false);
+	});
+
+	it('defaults new deploy settings to unrestricted', () => {
+		expect(DEFAULT_SERVICE_CONFIG.deploy).toMatchObject({
+			memoryMb: null,
+			readOnlyRootFilesystem: false
+		});
+		expect(ServiceConfigPatch.safeParse({ deploy: { memoryMb: 8 } }).success).toBe(false);
+	});
+
 	it('turns blank optional config text into null', () => {
 		expect(ServiceConfigPatch.parse({ deploy: { startCommand: '  ' } })).toEqual({
 			deploy: { startCommand: null }
@@ -79,8 +95,11 @@ describe('schemas', () => {
 		expect(StageVariables.parse({ environmentId: 'env_1' })).toEqual({
 			environmentId: 'env_1',
 			set: {},
-			unset: []
+			unset: [],
+			seal: [],
+			restore: []
 		});
+		expect(StageVariables.safeParse({ environmentId: 'e', seal: ['bad key'] }).success).toBe(false);
 		expect(StageVariables.safeParse({ environmentId: 'e', set: { '1BAD': 'x' } }).success).toBe(
 			false
 		);

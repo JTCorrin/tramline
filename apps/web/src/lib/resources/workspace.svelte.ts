@@ -114,9 +114,27 @@ export class Workspace {
 		this.version++;
 	}
 
+	/** Edits still on their way to the server; deploy and discard wait for them. */
+	// bookkeeping only, never rendered, so it doesn't need to be reactive
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity
+	#pending = new Set<Promise<unknown>>();
+
+	/** Registers a staging request so a deploy started meanwhile includes it. */
+	track<T>(request: Promise<T>): Promise<T> {
+		this.#pending.add(request);
+		const done = () => this.#pending.delete(request);
+		request.then(done, done);
+		return request;
+	}
+
+	async #settled() {
+		while (this.#pending.size) await Promise.allSettled([...this.#pending]);
+	}
+
 	async deploy() {
 		this.deploying = true;
 		try {
+			await this.#settled();
 			await this.#client.environments.deploy(this.environmentId);
 			await this.refresh();
 		} finally {
@@ -125,6 +143,7 @@ export class Workspace {
 	}
 
 	async discard() {
+		await this.#settled();
 		await this.#client.environments.discard(this.environmentId);
 		await this.refresh();
 	}

@@ -16,8 +16,8 @@ describe('observe', () => {
 			desiredContainer({ name: 'tl-dep_2-0', deploymentId: 'dep_2', healthcheckPath: '/health' }),
 			desiredContainer({ name: 'tl-dep_3-0', deploymentId: 'dep_3' })
 		]);
-		await runtime.run(toRunSpec(desired.containers[0]!));
-		await runtime.run(toRunSpec(desired.containers[2]!));
+		await runtime.run(toRunSpec(desired.containers[0]!, 'node_1'));
+		await runtime.run(toRunSpec(desired.containers[2]!, 'node_1'));
 		runtime.containers.get('tl-dep_2-0')!.status = 'exited';
 		runtime.containers.get('tl-dep_2-0')!.exitCode = 137;
 
@@ -42,16 +42,16 @@ describe('HealthChecker', () => {
 	it('checks HTTP health through the ingress and forgets stopped containers', async () => {
 		const runtime = new FakeRuntime();
 		const desired = desiredState([desiredContainer({ healthcheckPath: '/health' })]);
-		await runtime.run({ ...toRunSpec(desired.containers[0]!) });
+		await runtime.run({ ...toRunSpec(desired.containers[0]!, 'node_1') });
 		await runtime.run({
-			...toRunSpec(desired.containers[0]!),
-			name: 'tramline-ingress',
+			...toRunSpec(desired.containers[0]!, 'node_1'),
+			name: 'tramline-ingress-node_1',
 			labels: { 'tramline.role': 'ingress' }
 		});
-		const health = new HealthChecker(runtime);
+		const health = new HealthChecker(runtime, () => 'tramline-ingress-node_1');
 
 		await health.check(desired, await runtime.list());
-		expect(runtime.calls).toContain('exec tramline-ingress http://tl-dep_1-0:80/health');
+		expect(runtime.calls).toContain('exec tramline-ingress-node_1 http://tl-dep_1-0:80/health');
 		expect(health.results.get('tl-dep_1-0')).toBe(true);
 
 		runtime.execExit = 1;
@@ -70,7 +70,7 @@ describe('LogShipper', () => {
 		const shipper = new LogShipper(runtime, async (lines) => {
 			sent.push(...lines.map((l) => `${l.deploymentId} ${l.stream} ${l.line}`));
 		});
-		await runtime.run(toRunSpec(desiredContainer()));
+		await runtime.run(toRunSpec(desiredContainer(), 'node_1'));
 
 		shipper.sync(await runtime.list());
 		const first = runtime.followers.get('tl-dep_1-0')!;
@@ -103,7 +103,7 @@ describe('LogShipper', () => {
 			if (fail) throw new Error('offline');
 			sent.push(...lines.map((l) => l.line));
 		});
-		await runtime.run(toRunSpec(desiredContainer()));
+		await runtime.run(toRunSpec(desiredContainer(), 'node_1'));
 		shipper.sync(await runtime.list());
 		runtime.followers.get('tl-dep_1-0')!.onLine('stdout', '2026-10-23T10:00:01.000Z', 'a');
 		await expect(shipper.flush()).rejects.toThrow('offline');

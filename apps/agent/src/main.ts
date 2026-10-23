@@ -8,24 +8,36 @@ import { DockerRuntime } from './docker';
 
 const VERSION = '0.1.0';
 
+const tokenFile =
+	process.env.TRAMLINE_AGENT_TOKEN_FILE ?? path.resolve('../web/data/local-agent.token');
+
 /** The token comes from the environment, or from a file the control plane writes on first boot. */
 async function token() {
 	if (process.env.TRAMLINE_AGENT_TOKEN) return process.env.TRAMLINE_AGENT_TOKEN.trim();
-	const file =
-		process.env.TRAMLINE_AGENT_TOKEN_FILE ?? path.resolve('../web/data/local-agent.token');
 	for (let waited = 0; ; waited++) {
 		try {
-			return readFileSync(file, 'utf8').trim();
+			return readFileSync(tokenFile, 'utf8').trim();
 		} catch {
-			if (waited === 0) console.log(`[agent] waiting for a token at ${file}`);
+			if (waited === 0) console.log(`[agent] waiting for a token at ${tokenFile}`);
 			await new Promise((resolve) => setTimeout(resolve, 1_000));
 		}
 	}
 }
 
+const client = new ControlPlane(process.env.TRAMLINE_URL ?? 'http://localhost:5173', await token());
+
 const agent = new Agent({
 	runtime: new DockerRuntime(),
-	client: new ControlPlane(process.env.TRAMLINE_URL ?? 'http://localhost:5173', await token()),
+	client,
+	// the control plane rewrites the file when it rotates the local node's token
+	onUnauthorized: () => {
+		if (process.env.TRAMLINE_AGENT_TOKEN) return;
+		try {
+			client.token = readFileSync(tokenFile, 'utf8').trim();
+		} catch {
+			// keep the old token; the next attempt will say so again
+		}
+	},
 	stateDir: process.env.TRAMLINE_AGENT_STATE_DIR ?? path.join(os.homedir(), '.tramline', 'agent'),
 	version: VERSION
 });

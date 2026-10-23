@@ -1,5 +1,4 @@
 import type { DesiredState } from '@tramline/contracts';
-import { INGRESS_NAME } from './caddy';
 import type { ContainerRuntime, ManagedContainer } from './runtime';
 
 /**
@@ -10,13 +9,18 @@ import type { ContainerRuntime, ManagedContainer } from './runtime';
 export class HealthChecker {
 	readonly results = new Map<string, boolean>();
 
-	constructor(private runtime: ContainerRuntime) {}
+	constructor(
+		private runtime: ContainerRuntime,
+		/** Name of this node's ingress container, which runs the checks. */
+		private ingress: () => string
+	) {}
 
 	async check(desired: DesiredState, containers: ManagedContainer[]) {
 		const running = new Set(containers.filter((c) => c.status === 'running').map((c) => c.name));
 		for (const name of this.results.keys()) if (!running.has(name)) this.results.delete(name);
 
-		const ingressUp = containers.some((c) => c.name === INGRESS_NAME && c.status === 'running');
+		const ingressName = this.ingress();
+		const ingressUp = containers.some((c) => c.name === ingressName && c.status === 'running');
 		await Promise.all(
 			desired.containers
 				.filter((c) => c.healthcheckPath && c.port && running.has(c.name))
@@ -25,7 +29,7 @@ export class HealthChecker {
 					const url = `http://${c.name}:${c.port}${c.healthcheckPath}`;
 					try {
 						// busybox wget exits 0 only for 2xx responses
-						const { exitCode } = await this.runtime.exec(INGRESS_NAME, [
+						const { exitCode } = await this.runtime.exec(ingressName, [
 							'wget',
 							'-q',
 							'-O',

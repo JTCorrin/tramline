@@ -1,0 +1,8 @@
+# Extends gitleaks' default rules. Test fixtures use obviously fake secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "test-only values"
+paths = ['''apps/web/\.env\.test''']
+regexes = ['''test-secret-key-that-is-long-enough-123''', '''e2e-only-secret-key-not-for-production-use''', '''sk_live_(abcdef|supersecret|rotated|123)''']

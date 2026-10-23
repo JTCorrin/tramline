@@ -1,4 +1,23 @@
-import { expect, type Page } from '@playwright/test';
+import { test as base, expect, type Page } from '@playwright/test';
+
+export { expect };
+
+/** Every UI test fails if the browser reports a Content Security Policy violation. */
+export const test = base.extend<{ cspGuard: void }>({
+	cspGuard: [
+		async ({ page }, use) => {
+			const violations: string[] = [];
+			page.on('console', (message) => {
+				if (message.type() === 'error' && message.text().includes('Content Security Policy')) {
+					violations.push(message.text());
+				}
+			});
+			await use();
+			expect(violations, 'CSP violations').toEqual([]);
+		},
+		{ auto: true }
+	]
+});
 
 /** Signs up a fresh user, creates an organization and lands on the dashboard. */
 export async function signUp(page: Page, org = 'E2E Org') {

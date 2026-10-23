@@ -256,6 +256,28 @@ describe('reconciler and desired state', () => {
 		expect(statusOf(ctx, slow.id).status).toBe('failed');
 	});
 
+	it('starts the deploy timeout when the deployment is scheduled, not when it was queued', () => {
+		const { ctx, local, env } = setup();
+		const [dep] = changes.deploy(ctx, env.id);
+		const anHourLater = Date.now() + 60 * 60_000;
+		// the node only shows up an hour later
+		recordHello(ctx.db, local.id, hello);
+		ctx.db
+			.update(node)
+			.set({ lastSeenAt: new Date(anHourLater) })
+			.where(eq(node.id, local.id))
+			.run();
+		reconcile(ctx.db, ctx.settings, anHourLater);
+		expect(statusOf(ctx, dep!.id)).toMatchObject({
+			status: 'deploying',
+			startedAt: new Date(anHourLater)
+		});
+		reconcile(ctx.db, ctx.settings, anHourLater + 1_000);
+		expect(statusOf(ctx, dep!.id).status).toBe('deploying');
+		reconcile(ctx.db, ctx.settings, anHourLater + DEPLOY_TIMEOUT_MS + 1_000);
+		expect(statusOf(ctx, dep!.id).status).toBe('failed');
+	});
+
 	it('marks live deployments crashed and recovered', () => {
 		const { ctx, local, env } = setup();
 		recordHello(ctx.db, local.id, hello);

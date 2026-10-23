@@ -60,7 +60,7 @@ export function saveStaged(
 }
 
 export function appliedConfig(db: DbOrTx, serviceId: string, environmentId: string) {
-	return (
+	const stored =
 		db
 			.select({ config: serviceInstance.config })
 			.from(serviceInstance)
@@ -70,8 +70,9 @@ export function appliedConfig(db: DbOrTx, serviceId: string, environmentId: stri
 					eq(serviceInstance.environmentId, environmentId)
 				)
 			)
-			.get()?.config ?? null
-	);
+			.get()?.config ?? null;
+	// configs saved before a field existed pick up its default
+	return stored && mergeConfig(DEFAULT_SERVICE_CONFIG, stored);
 }
 
 export function effectiveConfig(applied: ServiceConfig | null, staged: StagedPayload) {

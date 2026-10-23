@@ -16,6 +16,10 @@ export interface AgentOptions {
 	reportIntervalMs?: number;
 	/** Re-converge this often even without changes, to repair drift (e.g. a container removed by hand). */
 	healIntervalMs?: number;
+	/** Called when the control plane rejects the token, e.g. to re-read a rotated token file. */
+	onUnauthorized?: () => void;
+	/** Wait this long before retrying after a rejected token. */
+	unauthorizedBackoffMs?: number;
 	log?: (message: string) => void;
 }
 
@@ -42,7 +46,7 @@ export class Agent {
 	constructor(private options: AgentOptions) {
 		this.#log = options.log ?? ((message) => console.log(`[agent] ${message}`));
 		this.converger = new Converger(options.runtime, { stateDir: options.stateDir, log: this.#log });
-		this.health = new HealthChecker(options.runtime);
+		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
 	}
 
@@ -52,7 +56,8 @@ export class Agent {
 
 	async start() {
 		await this.hello();
-		void this.#loop('sync', () => this.sync(), 0);
+		// long-polls normally wait server-side; the floor stops a misbehaving server from causing a busy loop
+		void this.#loop('sync', () => this.sync(), 100);
 		void this.#loop('report', () => this.tick(), this.options.reportIntervalMs ?? 2_000);
 		void this.#loop('logs', () => this.logs.flush(), 500);
 	}
@@ -69,26 +74,39 @@ export class Agent {
 				if (every) await sleep(every, undefined, { signal: this.#abort.signal });
 			} catch (error) {
 				if (this.stopped) return;
-				if (error instanceof ControlPlaneError && error.status === 401) {
-					this.#log('the control plane rejected this agent token; stopping');
-					return this.stop();
-				}
-				this.#log(`${name}: ${errorMessage(error)}`);
-				await sleep(2_000, undefined, { signal: this.#abort.signal }).catch(() => {});
+				await this.#backoff(name, error);
 			}
 		}
+	}
+
+	/**
+	 * Waits before retrying. A rejected token is never fatal: it may have been
+	 * rotated (so re-read it), or the control plane may be briefly misbehaving.
+	 */
+	async #backoff(step: string, error: unknown) {
+		let wait = 2_000;
+		if (error instanceof ControlPlaneError && error.status === 401) {
+			this.#log(
+				`${step}: the control plane rejected this agent's token; retrying with a fresh read`
+			);
+			this.options.onUnauthorized?.();
+			wait = this.options.unauthorizedBackoffMs ?? 30_000;
+		} else {
+			this.#log(`${step}: ${errorMessage(error)}`);
+		}
+		await sleep(wait, undefined, { signal: this.#abort.signal }).catch(() => {});
 	}
 
 	/** Registers with the control plane, retrying until it is reachable. */
 	async hello() {
 		for (;;) {
 			try {
-				await this.options.client.hello(await this.#describe());
+				const { nodeId } = await this.options.client.hello(await this.#describe());
+				this.converger.nodeId = nodeId;
 				return;
 			} catch (error) {
-				if (error instanceof ControlPlaneError && error.status === 401) throw error;
-				this.#log(`waiting for the control plane: ${errorMessage(error)}`);
-				await sleep(2_000, undefined, { signal: this.#abort.signal });
+				await this.#backoff('hello', error);
+				if (this.stopped) throw error;
 			}
 		}
 	}
@@ -132,10 +150,10 @@ export class Agent {
 	async tick() {
 		let containers: ManagedContainer[] = [];
 		try {
-			containers = await this.options.runtime.list();
+			containers = this.converger.owned(await this.options.runtime.list());
 			if (this.dockerError) {
 				this.#log('Docker is back');
-				await this.options.client.hello(await this.#describe());
+				await this.hello();
 			}
 		} catch (error) {
 			if (!this.dockerError) {
@@ -146,10 +164,11 @@ export class Agent {
 
 		const desired = this.desired;
 		if (desired && !this.dockerError) {
-			if (Date.now() - this.#lastHeal >= (this.options.healIntervalMs ?? 15_000)) {
+			const heal = Date.now() - this.#lastHeal >= (this.options.healIntervalMs ?? 15_000);
+			if (heal || this.converger.removalDue) {
 				this.#lastHeal = Date.now();
 				await this.converger.run(desired);
-				containers = await this.options.runtime.list();
+				containers = this.converger.owned(await this.options.runtime.list());
 			}
 			await this.health.check(desired, containers);
 			this.logs.sync(containers);

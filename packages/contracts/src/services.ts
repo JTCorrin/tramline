@@ -62,7 +62,11 @@ export const DeployConfig = z.object({
 	replicas: z.number().int().min(1).max(20),
 	healthcheckPath: optionalText,
 	restartPolicy: z.enum(RESTART_POLICIES),
-	cronSchedule: optionalText
+	cronSchedule: optionalText,
+	/** Hard memory limit; null for no limit. */
+	memoryMb: z.number().int().min(16).max(262_144).nullable(),
+	/** Mount the container's root filesystem read-only (with a writable /tmp). */
+	readOnlyRootFilesystem: z.boolean()
 });
 
 export const NetworkingConfig = z.object({
@@ -97,7 +101,9 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		replicas: 1,
 		healthcheckPath: null,
 		restartPolicy: 'on_failure',
-		cronSchedule: null
+		cronSchedule: null,
+		memoryMb: null,
+		readOnlyRootFilesystem: false
 	},
 	networking: { port: null, publicDomain: false }
 };

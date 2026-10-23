@@ -22,6 +22,7 @@ interface Transition {
 	status?: Status;
 	message: string | null;
 	nodeId?: string;
+	startedAt?: Date;
 	/** Written to the deployment's log. */
 	log?: string;
 }
@@ -50,7 +51,12 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 		}
 		const row = db
 			.update(deployment)
-			.set({ status, message: t.message, nodeId: t.nodeId ?? dep.nodeId })
+			.set({
+				status,
+				message: t.message,
+				nodeId: t.nodeId ?? dep.nodeId,
+				startedAt: t.startedAt ?? dep.startedAt
+			})
 			.where(eq(deployment.id, dep.id))
 			.returning()
 			.get()!;
@@ -114,6 +120,7 @@ function schedule(
 	return {
 		status: 'deploying',
 		nodeId: target.id,
+		startedAt: new Date(now),
 		message: 'Pulling image',
 		log: `Scheduled on node ${target.name}`
 	};
@@ -144,7 +151,7 @@ function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Tr
 	);
 	if (ready.length >= wanted) return { status: 'active', message: null, log: 'Deployment is live' };
 
-	if (now - dep.createdAt.getTime() > DEPLOY_TIMEOUT_MS) {
+	if (now - (dep.startedAt ?? dep.createdAt).getTime() > DEPLOY_TIMEOUT_MS) {
 		return {
 			status: 'failed',
 			message: 'Timed out waiting for the deployment to become healthy',

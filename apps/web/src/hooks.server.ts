@@ -6,9 +6,12 @@ import { db } from '#lib/server/db/index.js';
 import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
+import { securityHeaders } from '#lib/server/security.js';
 import { settings } from '#lib/server/settings.server.js';
+import { createInitialModeExpression } from 'mode-watcher';
 
 const RECONCILE_INTERVAL_MS = 2_000;
+const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
 	if (building) return;
@@ -37,5 +40,22 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = session?.user ?? null;
 	event.locals.session = session?.session ?? null;
 
-	return svelteKitHandler({ event, resolve, auth, building });
+	const response = await svelteKitHandler({
+		event,
+		resolve: (e) =>
+			resolve(e, {
+				transformPageChunk: ({ html }) => html.replace('%tramline.theme%', THEME_SCRIPT)
+			}),
+		auth,
+		building
+	});
+	for (const [name, value] of Object.entries(securityHeaders(event.url))) {
+		// streamed and immutable responses (e.g. from better-auth) may have locked headers
+		try {
+			response.headers.set(name, value);
+		} catch {
+			return response;
+		}
+	}
+	return response;
 };

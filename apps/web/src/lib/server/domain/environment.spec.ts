@@ -109,7 +109,7 @@ describe('services and staged changes', () => {
 			image: 'traefik/whoami'
 		});
 		expect(variables.list(ctx, { environmentId: env.id, serviceId: api.id })).toEqual([
-			{ key: 'DATABASE_URL', value: '${{Postgres.DATABASE_URL}}', staged: null }
+			{ key: 'DATABASE_URL', value: '${{Postgres.DATABASE_URL}}', sealed: false, staged: null }
 		]);
 
 		// the deployment snapshot holds fully resolved values
