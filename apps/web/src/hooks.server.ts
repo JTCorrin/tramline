@@ -12,6 +12,8 @@ import { reachableFromInternet } from '#lib/server/settings.js';
 import { secrets } from '#lib/server/api/handler.js';
 import { pollRepositories } from '#lib/server/github/poll.js';
 import { runBackupSchedules } from '#lib/server/domain/backups.js';
+import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
+import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
 import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
 import { createInitialModeExpression } from 'mode-watcher';
 
@@ -48,12 +50,13 @@ export const init: ServerInit = () => {
 		pollEvery || 2 ** 31 - 1
 	);
 
-	// scheduled backups, retention and timed-out jobs
+	// scheduled backups, retention and timed-out jobs; snapshots of this database and drills
 	let scheduling = false;
 	const schedules = setInterval(async () => {
 		if (scheduling) return;
 		scheduling = true;
 		await runBackupSchedules(db, secrets)
+			.then(() => runControlPlaneBackups(db, controlPlaneBackups))
 			.catch((error) => console.error('[backups]', error))
 			.finally(() => (scheduling = false));
 	}, BACKUP_SCHEDULE_INTERVAL_MS);

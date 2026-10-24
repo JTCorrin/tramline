@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { backup, backupStorage, member, restore } from '../db/schema';
+import { backup, backupStorage, drill, member, restore } from '../db/schema';
 import { buildDesiredState, containerName } from '../nodes/desired';
 import { reconcile } from '../nodes/reconciler';
 import { ensureLocalNode, recordHello, recordReport } from '../nodes/registry';
@@ -267,6 +267,56 @@ describe('backups', () => {
 		});
 	});
 
+	it('verifies a backup with a restore drill into the same Postgres image', () => {
+		const s = setup();
+		backups.saveStorage(s.ctx, STORAGE);
+		const created = backups.backUp(s.ctx, s.vol.id);
+		expect(() => backups.verifyBackup(s.ctx, created.id)).toThrow(
+			'Only finished backups can be verified'
+		);
+		recordReport(s.ctx.db, s.node.id, {
+			revision: null,
+			containers: [],
+			backups: [{ id: created.id, state: 'succeeded', size: 10, error: null }]
+		});
+
+		expect(backups.verifyBackup(s.ctx, created.id).drill).toMatchObject({ status: 'pending' });
+		expect(() => backups.verifyBackup(s.ctx, created.id)).toThrow('already being verified');
+
+		const state = desired(s);
+		expect(state.drills).toEqual([
+			{
+				id: expect.stringMatching(/^drl_/),
+				kind: 'postgres',
+				image: 'postgres:17',
+				url: null,
+				key: null
+			}
+		]);
+		const job = backups.attachBackupUrls(s.ctx.db, testSecrets, state).drills[0]!;
+		expect(job.url).toContain('.sql.gz.enc?X-Amz-Algorithm=');
+		expect(job.key).toBeTruthy();
+
+		recordReport(s.ctx.db, s.node.id, {
+			revision: null,
+			containers: [],
+			drills: [
+				{
+					id: job.id,
+					state: 'succeeded',
+					size: null,
+					error: null,
+					detail: 'Loaded 1 database with 3 tables into a scratch Postgres'
+				}
+			]
+		});
+		expect(backups.listBackups(s.ctx, s.vol.id)[0]!.drill).toMatchObject({
+			status: 'succeeded',
+			detail: 'Loaded 1 database with 3 tables into a scratch Postgres'
+		});
+		expect(desired(s).drills).toEqual([]);
+	});
+
 	it('deletes a backup and its object', async () => {
 		const s = setup();
 		backups.saveStorage(s.ctx, STORAGE);
@@ -328,6 +378,13 @@ describe('backup schedules', () => {
 		const left = backups.listBackups(s.ctx, s.vol.id).filter((b) => b.status === 'succeeded');
 		expect(left).toHaveLength(2);
 		expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(2);
+
+		// the newest backup was drilled once this week, not every day
+		const drills = s.ctx.db.select().from(drill).all();
+		expect(drills).toHaveLength(1);
+		const drilled = backups.listBackups(s.ctx, s.vol.id).find((b) => b.drill);
+		// no agent picks it up here, so like any job it times out
+		expect(drilled?.drill?.status).toBe('failed');
 
 		// a job that never finishes is failed eventually
 		const manual = backups.backUp(s.ctx, s.vol.id);

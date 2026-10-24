@@ -2,6 +2,7 @@ import type {
 	Backup,
 	BackupQuery,
 	BackupStorage,
+	ControlPlaneBackupStatus,
 	SaveBackupStorage,
 	UpdateVolume,
 	Volume,
@@ -10,7 +11,12 @@ import type {
 import type { Http } from '../http';
 
 export const backups = (http: Http) => ({
-	storage: () => http.get<{ storage: BackupStorage | null; canManage: boolean }>('/backup-storage'),
+	storage: () =>
+		http.get<{
+			storage: BackupStorage | null;
+			canManage: boolean;
+			controlPlane: ControlPlaneBackupStatus | null;
+		}>('/backup-storage'),
 	saveStorage: (input: SaveBackupStorage) => http.put<BackupStorage>('/backup-storage', input),
 	removeStorage: () => http.delete<void>('/backup-storage'),
 	testStorage: () => http.post<{ ok: true }>('/backup-storage/test'),
@@ -19,5 +25,6 @@ export const backups = (http: Http) => ({
 	getAll: (query: BackupQuery) => http.get<Backup[]>('/backups', query),
 	create: (volumeId: string) => http.post<Backup>('/backups', { volumeId }),
 	remove: (id: string) => http.delete<void>(`/backups/${id}`),
-	restore: (id: string) => http.post<Backup>(`/backups/${id}/restore`)
+	restore: (id: string) => http.post<Backup>(`/backups/${id}/restore`),
+	verify: (id: string) => http.post<Backup>(`/backups/${id}/verify`)
 });

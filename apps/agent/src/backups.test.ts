@@ -9,6 +9,8 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { extract } from 'tar-stream';
 import { describe, expect, it, vi } from 'vitest';
 import { Backups, decryptFile, DUMP, encrypt, LOAD, MAGIC } from './backups';
+import type { DesiredDrill } from '@tramline/contracts';
+import { pack } from 'tar-stream';
 import { HELPER_IMAGE } from './pins';
 import { LABELS } from './runtime';
 import { FakeRuntime } from './testing';
@@ -124,7 +126,8 @@ describe('Backups.backup', () => {
 			id: 'bak_1',
 			state: 'succeeded',
 			size: uploads[0]!.body.length,
-			error: null
+			error: null,
+			detail: null
 		});
 		expect(runtime.execs[0]).toMatchObject({
 			container: 'tl-dep_1-0',
@@ -318,5 +321,130 @@ describe('Backups.restore', () => {
 			state: 'failed',
 			error: 'ERROR: syntax error'
 		});
+	});
+});
+
+describe('Backups.drill', () => {
+	const drillJob = (overrides: Partial<DesiredDrill> = {}): DesiredDrill => ({
+		id: 'drl_1',
+		kind: 'volume',
+		image: null,
+		url: 'https://bucket.example/bak_1?X-Amz-Signature=ghi',
+		key: KEY,
+		...overrides
+	});
+
+	async function tarball(files: Record<string, string>) {
+		const archive = pack();
+		for (const [name, content] of Object.entries(files)) archive.entry({ name }, content);
+		archive.finalize();
+		const chunks: Buffer[] = [];
+		for await (const chunk of archive) chunks.push(chunk as Buffer);
+		return gzipSync(Buffer.concat(chunks));
+	}
+
+	function drillSetup(options: Partial<{ readyAfter: number; loadExit: number }> = {}) {
+		const s = setup();
+		const backups = new Backups(s.runtime, {
+			stateDir: mkdtempSync(path.join(tmpdir(), 'tramline-agent-')),
+			nodeId: () => 'node_1',
+			hold: () => {},
+			release: () => {},
+			fetcher: s.fetcher,
+			drillStartAttempts: 3,
+			drillPollMs: 1
+		});
+		let checks = 0;
+		s.runtime.onExec = (cmd, { onLine }) => {
+			const script = cmd.at(-1)!;
+			if (script.startsWith('pg_isready')) return ++checks > (options.readyAfter ?? 1) ? 0 : 2;
+			if (script.startsWith('gunzip')) return options.loadExit ?? 0;
+			if (script.startsWith('for db')) {
+				onLine('stdout', '3');
+				onLine('stdout', '2');
+			}
+			return 0;
+		};
+		return { ...s, backups };
+	}
+
+	it('reads a volume archive to the end', async () => {
+		const { backups, serve } = drillSetup();
+		serve(await encrypted(await tarball({ 'a.txt': 'hello', 'b/c.txt': 'world!' })));
+		expect(await backups.drill(drillJob())).toMatchObject({
+			state: 'succeeded',
+			detail: 'An archive of 2 files (11 bytes)'
+		});
+		serve(await encrypted(gzipSync('not a tar archive, just text that is long enough')));
+		expect((await backups.drill(drillJob())).state).toBe('failed');
+	});
+
+	it('checks mysqldump and mongodump formats', async () => {
+		const { backups, serve } = drillSetup();
+		serve(await encrypted(gzipSync('-- MySQL dump 10.13\nCREATE TABLE t (id int);')));
+		expect(await backups.drill(drillJob({ kind: 'mysql' }))).toMatchObject({
+			state: 'succeeded',
+			detail: expect.stringMatching(/^A complete mysqldump \(\d+ bytes\)$/)
+		});
+		serve(await encrypted(gzipSync('SELECT 1;')));
+		expect(await backups.drill(drillJob({ kind: 'mysql' }))).toMatchObject({
+			state: 'failed',
+			error: 'Not a mysqldump'
+		});
+		serve(await encrypted(Buffer.from([0x6d, 0xe2, 0x99, 0x81, 1, 2, 3])));
+		expect((await backups.drill(drillJob({ kind: 'mongo' }))).detail).toBe(
+			'A complete mongodump archive'
+		);
+		serve(await encrypted(Buffer.from('nope')));
+		expect((await backups.drill(drillJob({ kind: 'mongo' }))).error).toBe(
+			'Not a mongodump archive'
+		);
+	});
+
+	it('loads a Postgres dump into a scratch container with no network', async () => {
+		const { runtime, backups, serve } = drillSetup({ readyAfter: 2 });
+		serve(await encrypted(gzipSync('-- dump')));
+		let spec: unknown;
+		const run = runtime.run.bind(runtime);
+		runtime.run = async (s) => {
+			spec = s;
+			return run(s);
+		};
+		const result = await backups.drill(drillJob({ kind: 'postgres', image: 'postgres:17' }));
+		expect(result).toMatchObject({
+			state: 'succeeded',
+			detail: 'Loaded 2 databases with 5 tables into a scratch Postgres'
+		});
+		expect(spec).toMatchObject({
+			name: 'tl-drill-drl_1',
+			image: 'postgres:17',
+			network: 'none',
+			labels: { [LABELS.role]: 'helper' }
+		});
+		expect(runtime.archives.has('tl-drill-drl_1:/tmp')).toBe(true);
+		// thrown away afterwards
+		expect(runtime.containers.has('tl-drill-drl_1')).toBe(false);
+	});
+
+	it('fails when the scratch Postgres never starts, the load fails, or nothing is there', async () => {
+		const slow = drillSetup({ readyAfter: 100 });
+		slow.serve(await encrypted(gzipSync('-- dump')));
+		expect(
+			await slow.backups.drill(drillJob({ kind: 'postgres', image: 'postgres:17' }))
+		).toMatchObject({ state: 'failed', error: 'The scratch Postgres did not start' });
+
+		const broken = drillSetup({ loadExit: 3 });
+		broken.serve(await encrypted(gzipSync('-- dump')));
+		expect(
+			(await broken.backups.drill(drillJob({ kind: 'postgres', image: 'postgres:17' }))).error
+		).toBe('psql failed');
+		expect((await broken.backups.drill(drillJob({ kind: 'postgres' }))).error).toBe(
+			'No Postgres image to restore into'
+		);
+		expect((await broken.backups.drill(drillJob({ url: null }))).error).toBe(
+			'No download URL for this backup'
+		);
+		broken.fetcher.mockResolvedValueOnce(new Response('gone', { status: 404 }));
+		expect((await broken.backups.drill(drillJob())).error).toBe('Download failed: HTTP 404 gone');
 	});
 });

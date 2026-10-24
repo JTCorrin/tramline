@@ -55,6 +55,50 @@ export const variables = defineEnvVars({
 			'Rate limit sign-in and sign-up attempts in production (default true). Only disable for automated tests.',
 		schema: (value) => value !== 'false'
 	},
+	TRAMLINE_BACKUP_S3_ENDPOINT: {
+		description:
+			'S3-compatible endpoint for backups of this install’s own database, e.g. https://s3.eu-west-1.amazonaws.com. Control-plane backups are off unless the endpoint, bucket and keys are set.',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_S3_REGION: {
+		description: 'Region of the backup bucket (default us-east-1).',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_S3_BUCKET: { description: 'Bucket for control-plane backups.', schema: optional },
+	TRAMLINE_BACKUP_S3_PREFIX: {
+		description: 'Folder inside the bucket (optional).',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_S3_ACCESS_KEY_ID: {
+		description: 'Access key for the backup bucket.',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_S3_SECRET_ACCESS_KEY: {
+		description: 'Secret key for the backup bucket.',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_S3_PATH_STYLE: {
+		description: 'Path-style URLs, as MinIO and most self-hosted stores need (default true).',
+		schema: optional
+	},
+	TRAMLINE_BACKUP_INTERVAL_MINUTES: {
+		description: 'How often to snapshot this install’s database (default 60; 0 turns it off).',
+		schema: (value) => {
+			const minutes = Number(value ?? 60);
+			if (!Number.isInteger(minutes) || minutes < 0)
+				throw new Error('TRAMLINE_BACKUP_INTERVAL_MINUTES must be a whole number');
+			return minutes;
+		}
+	},
+	TRAMLINE_BACKUP_KEEP: {
+		description: 'Control-plane snapshots kept in the bucket (default 72).',
+		schema: (value) => {
+			const keep = Number(value ?? 72);
+			if (!Number.isInteger(keep) || keep < 1)
+				throw new Error('TRAMLINE_BACKUP_KEEP must be at least 1');
+			return keep;
+		}
+	},
 	GITHUB_CLIENT_ID: {
 		description: 'GitHub OAuth app client id. Enables "Continue with GitHub" when set.',
 		schema: optional

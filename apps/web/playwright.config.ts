@@ -15,6 +15,17 @@ export const E2E_S3 = {
 	secretAccessKey: 'e2e-secret-key-not-for-production'
 };
 
+/** Control-plane backups to the test bucket; the scheduler's first pass runs a minute after start. */
+export function controlPlaneBackupEnv() {
+	return {
+		TRAMLINE_BACKUP_S3_ENDPOINT: `http://localhost:${E2E_S3.port}`,
+		TRAMLINE_BACKUP_S3_BUCKET: E2E_S3.bucket,
+		TRAMLINE_BACKUP_S3_PREFIX: 'install',
+		TRAMLINE_BACKUP_S3_ACCESS_KEY_ID: E2E_S3.accessKeyId,
+		TRAMLINE_BACKUP_S3_SECRET_ACCESS_KEY: E2E_S3.secretAccessKey
+	};
+}
+
 export default defineConfig({
 	testDir: 'e2e',
 	testMatch: '**/*.e2e.{ts,js}',
@@ -40,7 +51,9 @@ export default defineConfig({
 				TRAMLINE_INGRESS_PORT: String(INGRESS_PORT),
 				TRAMLINE_AUTH_RATE_LIMIT: 'false',
 				// builds into its own output directory, so a running `pnpm dev` is never disturbed
-				TRAMLINE_E2E: '1'
+				TRAMLINE_E2E: '1',
+				// with Docker, the install's own database is snapshotted to the test bucket
+				...(docker ? controlPlaneBackupEnv() : {})
 			}
 		},
 		...(docker

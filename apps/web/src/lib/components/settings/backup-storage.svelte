@@ -6,10 +6,19 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
-	import type { BackupStorage } from '@tramline/contracts';
+	import type { BackupStorage, ControlPlaneBackupStatus } from '@tramline/contracts';
+	import { formatBytes, timeAgo } from '#lib/format.js';
 	import { toast } from 'svelte-sonner';
 
-	let { storage, canManage }: { storage: BackupStorage | null; canManage: boolean } = $props();
+	let {
+		storage,
+		canManage,
+		controlPlane
+	}: {
+		storage: BackupStorage | null;
+		canManage: boolean;
+		controlPlane: ControlPlaneBackupStatus | null;
+	} = $props();
 
 	let saved = $state<BackupStorage | null>(null);
 	const current = $derived(saved ?? storage);
@@ -133,6 +142,38 @@
 			<p class="text-sm text-muted-foreground">
 				An organization owner or admin can set up backup storage.
 			</p>
+		{/if}
+		{#if controlPlane}
+			<div class="mt-6 space-y-1 border-t pt-4 text-sm" data-testid="control-plane-backups">
+				<div class="font-medium">This install's database</div>
+				{#if !controlPlane.configured}
+					<p class="text-muted-foreground">
+						Not backed up. Set <code class="font-mono">TRAMLINE_BACKUP_S3_*</code> to snapshot it, encrypted,
+						every hour.
+					</p>
+				{:else}
+					{#if controlPlane.snapshot}
+						<p class={controlPlane.snapshot.status === 'failed' ? 'text-destructive' : ''}>
+							{controlPlane.snapshot.status === 'succeeded'
+								? `Last snapshot ${timeAgo(controlPlane.snapshot.createdAt)} (${formatBytes(controlPlane.snapshot.size ?? 0)})`
+								: `Snapshot failed ${timeAgo(controlPlane.snapshot.createdAt)}: ${controlPlane.snapshot.error}`}
+						</p>
+					{:else}
+						<p class="text-muted-foreground">The first snapshot runs within a minute.</p>
+					{/if}
+					{#if controlPlane.drill}
+						<p
+							class={controlPlane.drill.status === 'failed'
+								? 'text-destructive'
+								: 'text-muted-foreground'}
+						>
+							{controlPlane.drill.status === 'succeeded'
+								? `Restore drill passed ${timeAgo(controlPlane.drill.createdAt)}: the newest snapshot decrypts and passes SQLite's integrity check`
+								: `Restore drill failed ${timeAgo(controlPlane.drill.createdAt)}: ${controlPlane.drill.error}`}
+						</p>
+					{/if}
+				{/if}
+			</div>
 		{/if}
 	</Card.Content>
 </Card.Root>

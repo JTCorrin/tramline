@@ -202,6 +202,7 @@ export function desiredState(
 		deletedVolumes: [],
 		backups: [],
 		restores: [],
+		drills: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

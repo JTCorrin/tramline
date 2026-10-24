@@ -373,7 +373,7 @@ Database templates with generated credentials and connection variables, `${{Serv
 - **Exit:** `e2e/data.e2e.ts`: PostgREST connects to Postgres through `${{Postgres.DATABASE_URL}}` over the private network; Postgres is redeployed, finds its existing data ("Skipping initialization"), and PostgREST reconnects.
 - **Deferred:** volume size limits and usage (Docker's local volumes don't enforce a size); volumes for non-root images whose mount path doesn't exist in the image (Docker creates it owned by root).
 
-**4b: backups ✅ (service backups; the control plane's own backups are next)** (verified on Docker against an S3 gateway; e2e in CI)
+**4b: backups ✅** (verified on Docker against an S3 gateway; e2e in CI)
 
 - **Storage per organization:** any S3-compatible bucket, set in Settings → Backups by owners and admins, with a "Test connection" that writes and deletes an object. The secret key is encrypted at rest and never returned.
 - **Credentials stay on the control plane:** for each job it signs a short-lived URL (AWS SigV4 presigning, checked against AWS's published example and against a real S3 server) that allows exactly one upload or download. Nodes never hold bucket credentials.
@@ -390,7 +390,18 @@ Database templates with generated credentials and connection variables, `${{Serv
 - **Exit:** `e2e/backups.e2e.ts`:
   - Postgres: a row is written, backed up, changed and restored; only the original row is back, and the object in the bucket is encrypted.
   - A plain Redis volume: the same round trip while the service is stopped and started again.
-- **Next in 4b:** encrypted backups of the control plane's own SQLite database (Litestream or periodic snapshots to an install-wide bucket), and restore drills that verify the latest backup of each volume on a schedule.
+- **Restore drills:** proof that a backup can be restored, without touching the service. A drill runs weekly against each scheduled volume's newest backup, or on demand with "Verify".
+  - Every backup must decrypt, authenticate and decompress completely.
+  - Postgres dumps are loaded into a throwaway Postgres of the same image (no network), and the databases and tables that arrive are counted.
+  - MySQL and MongoDB dumps are checked for their format.
+  - Volume archives are read back to the end.
+  - The result shows on the backup, e.g. "Verified 2 days ago: Loaded 1 database with 3 tables".
+- **The control plane's own database:** `TRAMLINE_BACKUP_S3_*` points it at an install-wide bucket.
+  - **Snapshots:** every `TRAMLINE_BACKUP_INTERVAL_MINUTES` (default 60) the database is snapshotted with `VACUUM INTO` (a consistent copy while it is in use), then gzip-compressed and encrypted. The encryption key is derived from `TRAMLINE_SECRET_KEY`, which is needed anyway since the database's secrets are encrypted with it. The newest `TRAMLINE_BACKUP_KEEP` (default 72) are kept.
+  - **Drills:** a daily drill fetches the newest snapshot and runs SQLite's integrity check on it.
+  - **Status:** both show in Settings → Backups.
+  - **Restore:** `pnpm --filter @tramline/web restore-control-plane` lists snapshots (`--list`), runs a drill (`--check`), or restores while Tramline is stopped (`--yes`, keeping the current database beside it).
+  - **Why snapshots rather than Litestream:** they run in-process with no sidecar, and are encrypted before upload like every other backup. The trade-off is losing up to one interval (an hour by default) rather than seconds. Litestream can still come with the installer in Phase 9.
 - **Deferred:** single uploads are capped at 5 GB (S3's limit for one PUT; multipart comes later); backups of databases in images other than the templates are archives, not dumps.
 
 **4c: networking and environments**

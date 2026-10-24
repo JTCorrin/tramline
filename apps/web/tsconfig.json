@@ -4,5 +4,5 @@
 		"strict": true,
 		"types": ["$app/types", "node"]
 	},
-	"include": ["e2e", "src", "vite.config.ts", "playwright.config.ts"]
+	"include": ["e2e", "scripts", "src", "vite.config.ts", "playwright.config.ts"]
 }

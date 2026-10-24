@@ -80,6 +80,7 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['backups.create', (c) => c.backups.create('vol_1'), 'POST /backups'],
 	['backups.remove', (c) => c.backups.remove('bak_1'), 'DELETE /backups/bak_1'],
 	['backups.restore', (c) => c.backups.restore('bak_1'), 'POST /backups/bak_1/restore'],
+	['backups.verify', (c) => c.backups.verify('bak_1'), 'POST /backups/bak_1/verify'],
 	[
 		'deployments.getAll',
 		(c) => c.deployments.getAll({ serviceId: 's', environmentId: 'e' }),

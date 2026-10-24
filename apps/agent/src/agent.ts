@@ -53,7 +53,11 @@ export class Agent {
 	readonly builds = new Map<string, BuildReport>();
 	readonly backups: Backups;
 	/** Backups and restores this agent has started, until the control plane stops asking for them. */
-	readonly jobs = { backup: new Map<string, JobReport>(), restore: new Map<string, JobReport>() };
+	readonly jobs = {
+		backup: new Map<string, JobReport>(),
+		restore: new Map<string, JobReport>(),
+		drill: new Map<string, JobReport>()
+	};
 	/**
 	 * Builds run one at a time, and so do image scans, but a scan never waits
 	 * for a long build. Backups and restores share a queue of their own.
@@ -244,7 +248,7 @@ export class Agent {
 	 * arrived yet wait for the next state.
 	 */
 	#startJobs<T extends { id: string; url: string | null }>(
-		kind: 'backup' | 'restore',
+		kind: 'backup' | 'restore' | 'drill',
 		wanted: T[],
 		run: (job: T) => Promise<JobReport>
 	) {
@@ -255,10 +259,11 @@ export class Agent {
 		}
 		for (const job of wanted) {
 			if (reports.has(job.id)) continue;
-			reports.set(job.id, { id: job.id, state: 'running', size: null, error: null });
+			reports.set(job.id, { id: job.id, state: 'running', size: null, error: null, detail: null });
 			this.#queues.data = this.#queues.data.then(async () => {
-				const current = (kind === 'backup' ? this.desired?.backups : this.desired?.restores) as
-					T[] | undefined;
+				const current = this.desired?.[
+					kind === 'backup' ? 'backups' : kind === 'restore' ? 'restores' : 'drills'
+				] as T[] | undefined;
 				const latest = current?.find((j) => j.id === job.id);
 				if (!latest) {
 					reports.delete(job.id);
@@ -302,6 +307,7 @@ export class Agent {
 			this.#startBuilds(desired);
 			this.#startJobs('backup', desired.backups, (job) => this.backups.backup(job));
 			this.#startJobs('restore', desired.restores, (job) => this.backups.restore(job));
+			this.#startJobs('drill', desired.drills, (job) => this.backups.drill(job));
 			volumes = await this.converger.volumes().catch(() => undefined);
 		}
 
@@ -313,6 +319,7 @@ export class Agent {
 			builds: [...this.builds.values()],
 			backups: [...this.jobs.backup.values()],
 			restores: [...this.jobs.restore.values()],
+			drills: [...this.jobs.drill.values()],
 			volumes,
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError

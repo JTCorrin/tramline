@@ -1,14 +1,16 @@
-import type { DesiredBackup, DesiredRestore, JobReport } from '@tramline/contracts';
+import type { DesiredBackup, DesiredDrill, DesiredRestore, JobReport } from '@tramline/contracts';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream, mkdirSync, rmSync, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { PassThrough, Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createGzip } from 'node:zlib';
-import { pack } from 'tar-stream';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { createGunzip, createGzip } from 'node:zlib';
+import { extract, pack } from 'tar-stream';
 import { HELPER_IMAGE } from './pins';
 import { LABELS, type ContainerRuntime } from './runtime';
+import { WORKLOAD_CAPABILITIES } from './spec';
 
 /** Encrypted backup format: magic, 12-byte IV, AES-256-GCM ciphertext, 16-byte tag. */
 export const MAGIC = Buffer.from('TLB1');
@@ -46,6 +48,9 @@ export interface BackupOptions {
 	release: (names: string[]) => void;
 	fetcher?: typeof fetch;
 	log?: (message: string) => void;
+	/** How long a drill waits for its scratch Postgres (tests shorten it). */
+	drillStartAttempts?: number;
+	drillPollMs?: number;
 }
 
 /**
@@ -72,6 +77,7 @@ export class Backups {
 			state,
 			size: null,
 			error: null,
+			detail: null,
 			...extra
 		});
 		if (!job.url || !job.key) return report('failed', { error: 'No upload URL for this backup' });
@@ -132,6 +138,7 @@ export class Backups {
 			state,
 			size: null,
 			error: null,
+			detail: null,
 			...extra
 		});
 		if (!job.url || !job.key) return report('failed', { error: 'No download URL for this backup' });
@@ -195,6 +202,119 @@ export class Backups {
 			// the agent's next pass starts the stopped containers again
 			this.options.release(held);
 		}
+	}
+
+	/**
+	 * Proves a backup can be restored without touching the service: it must
+	 * decrypt and authenticate, decompress, and parse. A Postgres dump is
+	 * loaded into a throwaway Postgres with no network.
+	 */
+	async drill(job: DesiredDrill): Promise<JobReport> {
+		const report = (state: JobReport['state'], extra: Partial<JobReport> = {}): JobReport => ({
+			id: job.id,
+			state,
+			size: null,
+			error: null,
+			detail: null,
+			...extra
+		});
+		if (!job.url || !job.key) return report('failed', { error: 'No download URL for this backup' });
+		const encrypted = path.join(this.#dir, `${job.id}.enc`);
+		const plain = path.join(this.#dir, `${job.id}.out`);
+		const scratch = `tl-drill-${job.id}`;
+		try {
+			const response = await (this.options.fetcher ?? fetch)(job.url);
+			if (!response.ok || !response.body) {
+				throw new Error(`Download failed: HTTP ${response.status} ${await bodyText(response)}`);
+			}
+			await pipeline(
+				Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),
+				createWriteStream(encrypted)
+			);
+			await decryptFile(encrypted, plain, job.key);
+
+			if (job.kind === 'volume') {
+				const { files, bytes } = await readArchive(plain);
+				return report('succeeded', {
+					detail: `An archive of ${files} ${files === 1 ? 'file' : 'files'} (${bytes} bytes)`
+				});
+			}
+			if (job.kind === 'mongo') {
+				const head = await firstBytes(plain, 4);
+				// mongodump archives start with the magic number 0x8199e26d, little-endian
+				if (!head.equals(Buffer.from([0x6d, 0xe2, 0x99, 0x81]))) {
+					throw new Error('Not a mongodump archive');
+				}
+				return report('succeeded', { detail: 'A complete mongodump archive' });
+			}
+			const sql = await gunzipCheck(plain);
+			if (job.kind === 'mysql') {
+				if (!/^-- (MySQL|MariaDB) dump/.test(sql.head)) throw new Error('Not a mysqldump');
+				return report('succeeded', { detail: `A complete mysqldump (${sql.bytes} bytes)` });
+			}
+			if (!job.image) throw new Error('No Postgres image to restore into');
+			return report('succeeded', { detail: await this.#loadPostgres(scratch, job, plain) });
+		} catch (error) {
+			return report('failed', { error: message(error) });
+		} finally {
+			rmSync(encrypted, { force: true });
+			rmSync(plain, { force: true });
+			await this.runtime.remove(scratch).catch(ignore);
+		}
+	}
+
+	/** Loads a dump into a scratch Postgres and counts what arrived. */
+	async #loadPostgres(name: string, job: DesiredDrill, dump: string) {
+		const image = job.image!;
+		if (!(await this.runtime.hasImage(image))) await this.runtime.pull(image);
+		await this.runtime.run({
+			name,
+			image,
+			env: {
+				POSTGRES_PASSWORD: randomBytes(16).toString('hex'),
+				POSTGRES_HOST_AUTH_METHOD: 'trust'
+			},
+			network: 'none',
+			aliases: [],
+			restart: { name: 'no', maxRetries: 0 },
+			security: {
+				capabilities: WORKLOAD_CAPABILITIES,
+				pidsLimit: 1024,
+				memoryMb: 1024,
+				readOnlyRootFilesystem: false
+			},
+			labels: {
+				[LABELS.managed]: 'true',
+				[LABELS.node]: this.options.nodeId(),
+				[LABELS.role]: 'helper'
+			}
+		});
+		const run = async (command: string) => {
+			let out = '';
+			const errors: string[] = [];
+			const code = await this.runtime.execStream(name, ['sh', '-c', command], {
+				onLine: (stream, line) => (stream === 'stdout' ? (out += `${line}\n`) : errors.push(line))
+			});
+			return { code, out: out.trim(), errors };
+		};
+		// the image's init runs a socket-only server first; TCP answers once the real one is up
+		for (let attempt = 0; ; attempt++) {
+			if ((await run('pg_isready -q -h 127.0.0.1 -U postgres')).code === 0) break;
+			if (attempt >= (this.options.drillStartAttempts ?? 120)) {
+				throw new Error('The scratch Postgres did not start');
+			}
+			await sleep(this.options.drillPollMs ?? 500);
+		}
+		const file = `/tmp/tramline-drill-${job.id}.gz`;
+		await this.runtime.putArchive(name, '/tmp', tarOf(path.basename(file), dump));
+		const load = await run(`gunzip -c ${file} | psql -q -h 127.0.0.1 -U postgres -d postgres`);
+		if (load.code !== 0) throw new Error(lastLines(load.errors) || 'psql failed');
+		const counted = await run(
+			`for db in $(psql -h 127.0.0.1 -U postgres -tAc "select datname from pg_database where not datistemplate and datname <> 'postgres'"); do psql -h 127.0.0.1 -U postgres -d "$db" -tAc "select count(*) from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema')"; done`
+		);
+		const counts = counted.out.split('\n').filter(Boolean).map(Number);
+		const tables = counts.reduce((a, b) => a + b, 0);
+		return `Loaded ${counts.length} ${counts.length === 1 ? 'database' : 'databases'} with ${tables} ${tables === 1 ? 'table' : 'tables'} into a scratch Postgres`;
 	}
 
 	/**
@@ -280,6 +400,45 @@ export async function decryptFile(input: string, output: string, keyBase64: stri
 }
 
 /** A one-file tar archive, streamed from disk as it is read. */
+/** Reads a gzipped tar archive to the end, counting files and bytes. */
+export async function readArchive(file: string) {
+	let files = 0;
+	let bytes = 0;
+	const tar = extract();
+	tar.on('entry', (header, stream, next) => {
+		if (header.type === 'file') files++;
+		stream.on('data', (chunk: unknown) => (bytes += (chunk as Buffer).length));
+		stream.on('end', next);
+		stream.resume();
+	});
+	await pipeline(createReadStream(file), createGunzip(), tar);
+	return { files, bytes };
+}
+
+/** Decompresses a gzip file to the end, returning its first line and size. */
+export async function gunzipCheck(file: string) {
+	let head = '';
+	let bytes = 0;
+	await pipeline(createReadStream(file), createGunzip(), async function (source) {
+		for await (const chunk of source) {
+			if (head.length < 200) head += (chunk as Buffer).toString('utf8', 0, 200);
+			bytes += (chunk as Buffer).length;
+		}
+	});
+	return { head, bytes };
+}
+
+async function firstBytes(file: string, length: number) {
+	const handle = await open(file, 'r');
+	try {
+		const buffer = Buffer.alloc(length);
+		const { bytesRead } = await handle.read(buffer, 0, length, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		await handle.close();
+	}
+}
+
 export function tarOf(name: string, file: string) {
 	const archive = pack();
 	const entry = archive.entry({ name, size: statSync(file).size, mode: 0o600 }, (error) =>

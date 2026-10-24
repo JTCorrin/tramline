@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
-import { E2E_S3 } from '../playwright.config';
+import path from 'node:path';
+import { controlPlaneBackupEnv, E2E_S3 } from '../playwright.config';
 import { createProject, currentEnvironment, execIn, expect, signUp, test } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
@@ -91,6 +92,13 @@ test('back up Postgres to the bucket, encrypted, and restore it', async ({ page 
 	);
 	expect(psql('select body from notes')).toBe('before the backup');
 
+	// a restore drill loads the backup into a throwaway Postgres
+	await page.getByTestId('backup-list').getByRole('button', { name: 'Verify' }).click();
+	await expect(page.getByTestId('drill-status')).toContainText(
+		/Verified .*: Loaded 1 database with 1 table into a scratch Postgres/,
+		{ timeout: 180_000 }
+	);
+
 	// what reached the bucket is encrypted
 	const [object] = bucketObjects();
 	expect(object).toMatch(/\.sql\.gz\.enc$/);
@@ -138,4 +146,43 @@ test('back up a plain volume and restore it while the service is stopped', async
 			}
 		})
 		.toBe('before');
+
+	// a restore drill reads the whole archive back
+	await page.getByTestId('backup-list').getByRole('button', { name: 'Verify' }).click();
+	await expect(page.getByTestId('drill-status')).toContainText(
+		/Verified .*: An archive of \d+ files?/,
+		{
+			timeout: 120_000
+		}
+	);
+});
+
+test('snapshots this install’s database, drills it, and the restore command reads it', async ({
+	page
+}) => {
+	await signUp(page, 'Install Org');
+	await page.goto('/settings');
+	const status = page.getByTestId('control-plane-backups');
+	// the scheduler's first pass is a minute after start
+	await expect(status).toContainText('Last snapshot', { timeout: 150_000 });
+	await expect(status).toContainText('Restore drill passed', { timeout: 60_000 });
+
+	const [snapshot] = bucketObjects().filter((key) =>
+		key.includes('/install/tramline/control-plane/')
+	);
+	expect(snapshot).toMatch(/\.sqlite\.gz\.enc$/);
+	expect(magic(snapshot!)).toBe('TLB1');
+
+	// the restore command, as an operator would run it (--check only: the test install keeps running)
+	const output = execFileSync('pnpm', ['restore-control-plane', '--check'], {
+		cwd: path.resolve(import.meta.dirname, '..'),
+		encoding: 'utf8',
+		env: {
+			...process.env,
+			...controlPlaneBackupEnv(),
+			TRAMLINE_SECRET_KEY: 'e2e-only-secret-key-not-for-production-use'
+		}
+	});
+	expect(output).toContain("decrypts and passes SQLite's integrity check");
+	expect(output).toMatch(/[1-9]\d* organizations/);
 });

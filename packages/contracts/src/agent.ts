@@ -127,6 +127,22 @@ export const DesiredRestore = z.object({
 
 export type DesiredRestore = z.infer<typeof DesiredRestore>;
 
+/**
+ * A restore drill: fetch a backup and prove it can be restored, without
+ * touching the service. Postgres dumps are loaded into a throwaway container
+ * of `image`; other backups are fully decrypted, decompressed and parsed.
+ */
+export const DesiredDrill = z.object({
+	id: z.string(),
+	kind: DesiredBackup.shape.kind,
+	/** The database's image, for a scratch restore. */
+	image: z.string().nullable(),
+	url: z.string().nullable().default(null),
+	key: z.string().nullable().default(null)
+});
+
+export type DesiredDrill = z.infer<typeof DesiredDrill>;
+
 export const IngressRoute = z.object({
 	host: z.string(),
 	/** `alias:port` reachable on one of the environment networks. */
@@ -147,6 +163,7 @@ export const DesiredState = z.object({
 	deletedVolumes: z.array(z.string()).default([]),
 	backups: z.array(DesiredBackup).default([]),
 	restores: z.array(DesiredRestore).default([]),
+	drills: z.array(DesiredDrill).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -203,7 +220,9 @@ export const JobReport = z.object({
 	id: z.string(),
 	state: z.enum(['running', 'succeeded', 'failed']),
 	size: z.number().int().nullable().default(null),
-	error: z.string().nullable().default(null)
+	error: z.string().nullable().default(null),
+	/** What a drill found, e.g. "Loaded 2 databases with 14 tables". */
+	detail: z.string().nullable().default(null)
 });
 
 export type JobReport = z.infer<typeof JobReport>;
@@ -213,6 +232,7 @@ export const AgentReport = z.object({
 	builds: z.array(BuildReport).default([]),
 	backups: z.array(JobReport).default([]),
 	restores: z.array(JobReport).default([]),
+	drills: z.array(JobReport).default([]),
 	/** Volumes this node's agent manages that exist on the node; absent when Docker can't be asked. */
 	volumes: z.array(z.string()).optional(),
 	/** The desired revision the agent last converged to. */

@@ -108,7 +108,8 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 		if (report.volumes) recordVolumes(tx, nodeId, report.volumes);
 		recordJobReports(tx, nodeId, {
 			backups: report.backups ?? [],
-			restores: report.restores ?? []
+			restores: report.restores ?? [],
+			drills: report.drills ?? []
 		});
 		tx.delete(build).where(eq(build.nodeId, nodeId)).run();
 		for (const b of report.builds ?? []) {

@@ -12,7 +12,8 @@ export const ID_PREFIXES = {
 	change: 'chg',
 	volume: 'vol',
 	backup: 'bak',
-	restore: 'rst'
+	restore: 'rst',
+	drill: 'drl'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

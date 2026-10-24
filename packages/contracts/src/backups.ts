@@ -78,6 +78,15 @@ export const Backup = z.object({
 	/** Encrypted size in bytes. */
 	size: z.number().int().nullable(),
 	error: z.string().nullable(),
+	/** The latest restore drill: proof the backup can be restored. */
+	drill: z
+		.object({
+			status: z.enum(BACKUP_STATUSES),
+			detail: z.string().nullable(),
+			error: z.string().nullable(),
+			createdAt: z.iso.datetime()
+		})
+		.nullable(),
 	/** When the latest restore from this backup ran, and how it went. */
 	restore: z
 		.object({
@@ -93,3 +102,22 @@ export const Backup = z.object({
 export type Backup = z.infer<typeof Backup>;
 
 export type BackupQuery = { volumeId: string };
+
+const ControlPlaneJob = z
+	.object({
+		status: z.enum(['succeeded', 'failed']),
+		size: z.number().int().nullable(),
+		detail: z.record(z.string(), z.unknown()).nullable(),
+		error: z.string().nullable(),
+		createdAt: z.iso.datetime()
+	})
+	.nullable();
+
+/** Backups of this install's own database (configured with TRAMLINE_BACKUP_S3_*). */
+export const ControlPlaneBackupStatus = z.object({
+	configured: z.boolean(),
+	snapshot: ControlPlaneJob,
+	drill: ControlPlaneJob
+});
+
+export type ControlPlaneBackupStatus = z.infer<typeof ControlPlaneBackupStatus>;

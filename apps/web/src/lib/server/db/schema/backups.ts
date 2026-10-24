@@ -68,3 +68,35 @@ export const restore = sqliteTable(
 	},
 	(table) => [index('restore_backup_idx').on(table.backupId)]
 );
+
+/** A restore drill: proof that a backup can be restored, without touching the service. */
+export const drill = sqliteTable(
+	'drill',
+	{
+		id: text('id').primaryKey(),
+		backupId: text('backup_id')
+			.notNull()
+			.references(() => backup.id, { onDelete: 'cascade' }),
+		status: text('status', { enum: JOB_STATUSES }).notNull(),
+		/** What the drill found, e.g. "Loaded 2 databases with 14 tables". */
+		detail: text('detail'),
+		error: text('error'),
+		finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+		...timestamps
+	},
+	(table) => [index('drill_backup_idx').on(table.backupId)]
+);
+
+/** Snapshots of this install's own database, and the restore drills run against them. */
+export const controlPlaneBackup = sqliteTable('control_plane_backup', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	kind: text('kind', { enum: ['snapshot', 'drill'] }).notNull(),
+	status: text('status', { enum: ['succeeded', 'failed'] }).notNull(),
+	/** The snapshot's object key. */
+	objectKey: text('object_key'),
+	size: integer('size'),
+	/** What a drill found, e.g. table and row counts. */
+	detail: text('detail', { mode: 'json' }).$type<Record<string, unknown>>(),
+	error: text('error'),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull()
+});

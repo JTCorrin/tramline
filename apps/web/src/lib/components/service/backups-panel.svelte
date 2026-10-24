@@ -57,7 +57,10 @@
 	// jobs report through the agent; check back while one is in flight
 	$effect(() => {
 		const busy = backups.some(
-			(b) => ['pending', 'running'].includes(b.status) || b.restore?.status === 'running'
+			(b) =>
+				['pending', 'running'].includes(b.status) ||
+				['pending', 'running'].includes(b.restore?.status ?? '') ||
+				['pending', 'running'].includes(b.drill?.status ?? '')
 		);
 		if (!busy) return;
 		const timer = setInterval(() => load().catch(reportError), 3000);
@@ -77,6 +80,16 @@
 		try {
 			await client.backups.create(volume!.id);
 			toast.success('Backup started');
+			await load();
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	async function verify(backup: Backup) {
+		try {
+			await client.backups.verify(backup.id);
+			toast.success('Verifying the backup');
 			await load();
 		} catch (error) {
 			reportError(error);
@@ -171,6 +184,21 @@
 							{#if backup.error}
 								<p class="mt-0.5 text-xs text-destructive">{backup.error}</p>
 							{/if}
+							{#if backup.drill}
+								<p
+									class={cn('mt-0.5 text-xs', STATUS_STYLES[backup.drill.status])}
+									data-testid="drill-status"
+									title="A restore drill proves the backup can be restored, without touching the service"
+								>
+									{#if backup.drill.status === 'succeeded'}
+										Verified {timeAgo(backup.drill.createdAt)}: {backup.drill.detail}
+									{:else if backup.drill.status === 'failed'}
+										Verification failed {timeAgo(backup.drill.createdAt)}: {backup.drill.error}
+									{:else}
+										Verifying…
+									{/if}
+								</p>
+							{/if}
 							{#if backup.restore}
 								<p
 									class={cn('mt-0.5 text-xs', STATUS_STYLES[backup.restore.status])}
@@ -184,6 +212,7 @@
 							{/if}
 						</div>
 						{#if backup.status === 'succeeded'}
+							<Button variant="ghost" size="sm" onclick={() => verify(backup)}>Verify</Button>
 							<Button variant="outline" size="sm" onclick={() => (confirm = backup)}>Restore</Button
 							>
 						{/if}

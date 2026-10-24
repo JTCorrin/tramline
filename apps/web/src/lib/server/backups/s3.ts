@@ -46,7 +46,11 @@ export function presign(
 	target: S3Target,
 	method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
 	key: string,
-	{ expiresIn = 3600, now = new Date() }: { expiresIn?: number; now?: Date } = {}
+	{
+		expiresIn = 3600,
+		now = new Date(),
+		query: extra = {}
+	}: { expiresIn?: number; now?: Date; query?: Record<string, string> } = {}
 ) {
 	const url = objectUrl(target, key);
 	const stamp = now
@@ -61,7 +65,8 @@ export function presign(
 		['X-Amz-Credential', `${target.accessKeyId}/${scope}`],
 		['X-Amz-Date', stamp],
 		['X-Amz-Expires', String(expiresIn)],
-		['X-Amz-SignedHeaders', 'host']
+		['X-Amz-SignedHeaders', 'host'],
+		...Object.entries(extra)
 	];
 	const query = params
 		.map(([k, v]) => [encode(k), encode(v)])
@@ -84,3 +89,41 @@ export function presign(
 
 	return `${url.origin}${url.pathname}?${query}&X-Amz-Signature=${signature}`;
 }
+
+/**
+ * Object keys under a prefix, oldest name first (ListObjectsV2, following
+ * continuation tokens).
+ */
+export async function listObjects(
+	target: S3Target,
+	prefix: string,
+	fetcher: typeof fetch = fetch
+): Promise<string[]> {
+	const keys: string[] = [];
+	let token: string | undefined;
+	do {
+		const query: Record<string, string> = { 'list-type': '2', prefix };
+		if (token) query['continuation-token'] = token;
+		const response = await fetcher(presign(target, 'GET', '', { expiresIn: 60, query }));
+		const body = await response.text();
+		if (!response.ok) {
+			const code = body.match(/<Code>([^<]+)<\/Code>/)?.[1];
+			throw new Error(
+				`Listing the bucket failed: HTTP ${response.status}${code ? ` ${code}` : ''}`
+			);
+		}
+		for (const match of body.matchAll(/<Key>([^<]+)<\/Key>/g)) keys.push(unescapeXml(match[1]!));
+		token = /<IsTruncated>true<\/IsTruncated>/.test(body)
+			? body.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
+			: undefined;
+	} while (token);
+	return keys.sort();
+}
+
+const unescapeXml = (value: string) =>
+	value
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&amp;/g, '&');

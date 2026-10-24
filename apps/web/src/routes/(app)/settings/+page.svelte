@@ -145,7 +145,11 @@
 		</Card.Content>
 	</Card.Root>
 
-	<BackupStorage storage={data.backups.storage} canManage={data.backups.canManage} />
+	<BackupStorage
+		storage={data.backups.storage}
+		canManage={data.backups.canManage}
+		controlPlane={data.backups.controlPlane}
+	/>
 </main>
 
 {#if manifest}

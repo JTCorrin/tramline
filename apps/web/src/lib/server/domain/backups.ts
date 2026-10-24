@@ -2,6 +2,7 @@ import type {
 	Backup,
 	BackupStorage,
 	DesiredBackup,
+	DesiredDrill,
 	DesiredRestore,
 	DesiredState,
 	JobReport,
@@ -16,7 +17,16 @@ import { AppError, notFound } from '../api/errors';
 import { objectUrl, presign, type S3Target } from '../backups/s3';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { backup, backupStorage, deployment, project, restore, service, volume } from '../db/schema';
+import {
+	backup,
+	backupStorage,
+	deployment,
+	drill,
+	project,
+	restore,
+	service,
+	volume
+} from '../db/schema';
 import { publish } from '../events';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
@@ -33,6 +43,8 @@ export const URL_TTL_SECONDS = 6 * 3600;
 /** Give up on a backup or restore that hasn't finished after this long. */
 export const JOB_TIMEOUT_MS = 6 * 3600_000;
 const INTERVAL_MS = { daily: 24 * 3600_000, weekly: 7 * 24 * 3600_000 } as const;
+/** Scheduled volumes get a restore drill of their newest backup this often. */
+export const DRILL_INTERVAL_MS = 7 * 24 * 3600_000;
 
 const EXTENSION: Record<Backup['kind'], string> = {
 	postgres: 'sql.gz.enc',
@@ -177,7 +189,11 @@ export function updateVolume(ctx: Ctx, id: string, patch: UpdateVolume): Volume 
 
 // ---- backups -------------------------------------------------------------------
 
-function backupDto(row: BackupRow, latest?: typeof restore.$inferSelect): Backup {
+function backupDto(
+	row: BackupRow,
+	latest?: typeof restore.$inferSelect,
+	latestDrill?: typeof drill.$inferSelect
+): Backup {
 	return {
 		id: row.id,
 		volumeId: row.volumeId,
@@ -186,6 +202,14 @@ function backupDto(row: BackupRow, latest?: typeof restore.$inferSelect): Backup
 		status: row.status,
 		size: row.size,
 		error: row.error,
+		drill: latestDrill
+			? {
+					status: latestDrill.status,
+					detail: latestDrill.detail,
+					error: latestDrill.error,
+					createdAt: latestDrill.createdAt.toISOString()
+				}
+			: null,
 		restore: latest
 			? {
 					status: latest.status,
@@ -219,12 +243,58 @@ export function listBackups(ctx: Ctx, volumeId: string): Backup[] {
 				.orderBy(desc(restore.createdAt), desc(restore.id))
 				.all()
 		: [];
+	const drills = rows.length
+		? ctx.db
+				.select()
+				.from(drill)
+				.where(
+					inArray(
+						drill.backupId,
+						rows.map((r) => r.id)
+					)
+				)
+				.orderBy(desc(drill.createdAt), desc(drill.id))
+				.all()
+		: [];
 	return rows.map((row) =>
 		backupDto(
 			row,
-			restores.find((r) => r.backupId === row.id)
+			restores.find((r) => r.backupId === row.id),
+			drills.find((d) => d.backupId === row.id)
 		)
 	);
+}
+
+/** Queues a restore drill of a finished backup. */
+export function createDrill(db: DbOrTx, backupId: string, now = new Date()) {
+	return db
+		.insert(drill)
+		.values({
+			id: newId('drill'),
+			backupId,
+			status: 'pending',
+			createdAt: now,
+			updatedAt: now
+		})
+		.returning()
+		.get();
+}
+
+/** Proves a backup can be restored, without touching the service. */
+export function verifyBackup(ctx: Ctx, id: string): Backup {
+	const { backup: row, projectId } = requireBackup(ctx, id);
+	if (row.status !== 'succeeded')
+		throw new AppError('conflict', 'Only finished backups can be verified');
+	const running = ctx.db
+		.select({ id: drill.id })
+		.from(drill)
+		.where(and(eq(drill.backupId, id), inArray(drill.status, ['pending', 'running'])))
+		.get();
+	if (running) throw new AppError('conflict', 'This backup is already being verified');
+	const created = createDrill(ctx.db, id);
+	notifyNodes();
+	publish({ type: 'backups', projectId });
+	return backupDto(row, undefined, created);
 }
 
 /** Creates a pending backup; the node holding the volume picks it up. */
@@ -405,9 +475,18 @@ export function backupJobs(db: DbOrTx, nodeId: string) {
 		.where(and(eq(volume.nodeId, nodeId), inArray(restore.status, ['pending', 'running'])))
 		.orderBy(restore.id)
 		.all();
+	const drills = db
+		.select({ drill, backup, volume })
+		.from(drill)
+		.innerJoin(backup, eq(drill.backupId, backup.id))
+		.innerJoin(volume, eq(backup.volumeId, volume.id))
+		.where(and(eq(volume.nodeId, nodeId), inArray(drill.status, ['pending', 'running'])))
+		.orderBy(drill.id)
+		.all();
 	const deployments = liveDeployments(db, [
 		...backups.map((r) => r.volume),
-		...restores.map((r) => r.volume)
+		...restores.map((r) => r.volume),
+		...drills.map((r) => r.volume)
 	]);
 	const live = (vol: VolumeRow) => deployments.get(`${vol.serviceId}:${vol.environmentId}`) ?? [];
 	// a native dump needs the newest running deployment; a restore stops every one using the volume
@@ -440,7 +519,20 @@ export function backupJobs(db: DbOrTx, nodeId: string) {
 			key: null
 		})
 	);
-	return { backups: desiredBackups, restores: desiredRestores };
+	// a Postgres drill restores into the same image the service runs
+	const image = (vol: VolumeRow) => {
+		const dep = live(vol)[0];
+		if (!dep) return null;
+		return dep.image ?? (dep.config.source?.type === 'image' ? dep.config.source.image : null);
+	};
+	const desiredDrills: DesiredDrill[] = drills.map(({ drill: d, backup: b, volume: v }) => ({
+		id: d.id,
+		kind: b.kind,
+		image: b.kind === 'postgres' ? image(v) : null,
+		url: null,
+		key: null
+	}));
+	return { backups: desiredBackups, restores: desiredRestores, drills: desiredDrills };
 }
 
 /** Adds each job's presigned URL and decrypted key, just before the state is sent. */
@@ -450,7 +542,22 @@ export function attachBackupUrls(
 	desired: DesiredState,
 	now = new Date()
 ): DesiredState {
-	if (!desired.backups.length && !desired.restores.length) return desired;
+	if (!desired.backups.length && !desired.restores.length && !desired.drills.length) {
+		return desired;
+	}
+	const drillOf = new Map(
+		db
+			.select({ id: drill.id, backupId: drill.backupId })
+			.from(drill)
+			.where(
+				inArray(
+					drill.id,
+					desired.drills.map((d) => d.id)
+				)
+			)
+			.all()
+			.map((d) => [d.id, d.backupId])
+	);
 	const backupIds = [
 		...desired.backups.map((b) => b.id),
 		...db
@@ -463,7 +570,8 @@ export function attachBackupUrls(
 				)
 			)
 			.all()
-			.map((r) => r.backupId)
+			.map((r) => r.backupId),
+		...drillOf.values()
 	];
 	const rows = new Map(
 		db
@@ -506,18 +614,23 @@ export function attachBackupUrls(
 		restores: desired.restores.map((job) => ({
 			...job,
 			...sign(rows.get(restoreOf.get(job.id) ?? ''), 'GET')
+		})),
+		drills: desired.drills.map((job) => ({
+			...job,
+			...sign(rows.get(drillOf.get(job.id) ?? ''), 'GET')
 		}))
 	};
 }
 
 /** A job report as sent, before defaults. */
-type Reported = Pick<JobReport, 'id' | 'state'> & Partial<Pick<JobReport, 'size' | 'error'>>;
+type Reported = Pick<JobReport, 'id' | 'state'> &
+	Partial<Pick<JobReport, 'size' | 'error' | 'detail'>>;
 
-/** Applies what an agent reported about its backups and restores. */
+/** Applies what an agent reported about its backups, restores and drills. */
 export function recordJobReports(
 	db: DbOrTx,
 	nodeId: string,
-	reports: { backups: Reported[]; restores: Reported[] }
+	reports: { backups: Reported[]; restores: Reported[]; drills?: Reported[] }
 ) {
 	const finished = (r: Reported) => (r.state === 'running' ? null : new Date());
 	let changed = false;
@@ -558,6 +671,26 @@ export function recordJobReports(
 			.get();
 		if (row) changed = true;
 	}
+	for (const r of reports.drills ?? []) {
+		const row = db
+			.update(drill)
+			.set({
+				status: r.state,
+				detail: r.detail ?? null,
+				error: r.error ?? null,
+				finishedAt: finished(r)
+			})
+			.where(
+				and(
+					eq(drill.id, r.id),
+					inArray(drill.backupId, mine),
+					inArray(drill.status, ['pending', 'running'])
+				)
+			)
+			.returning({ id: drill.id })
+			.get();
+		if (row) changed = true;
+	}
 	if (changed) announceAll(db);
 }
 
@@ -577,7 +710,8 @@ function announceAll(db: DbOrTx) {
 
 /**
  * Runs once a minute: starts scheduled backups that are due, fails jobs that
- * ran too long, and deletes scheduled backups beyond each volume's retention.
+ * ran too long, drills each scheduled volume's newest backup weekly, and
+ * deletes scheduled backups beyond each volume's retention.
  */
 export async function runBackupSchedules(
 	db: DbOrTx,
@@ -585,6 +719,7 @@ export async function runBackupSchedules(
 	{ now = Date.now(), fetcher = fetch, log = console.warn } = {}
 ) {
 	let created = 0;
+	let drilled = 0;
 	const scheduled = db
 		.select({ volume, service, organizationId: project.organizationId })
 		.from(volume)
@@ -635,6 +770,31 @@ export async function runBackupSchedules(
 		.set(timedOut)
 		.where(and(inArray(restore.status, ['pending', 'running']), lt(restore.createdAt, cutoff)))
 		.run();
+	db.update(drill)
+		.set(timedOut)
+		.where(and(inArray(drill.status, ['pending', 'running']), lt(drill.createdAt, cutoff)))
+		.run();
+
+	// a weekly restore drill of each scheduled volume's newest backup
+	for (const { volume: vol } of scheduled) {
+		const latest = db
+			.select()
+			.from(backup)
+			.where(and(eq(backup.volumeId, vol.id), eq(backup.status, 'succeeded')))
+			.orderBy(desc(backup.createdAt), desc(backup.id))
+			.get();
+		if (!latest) continue;
+		const lastDrill = db
+			.select({ createdAt: drill.createdAt })
+			.from(drill)
+			.innerJoin(backup, eq(drill.backupId, backup.id))
+			.where(eq(backup.volumeId, vol.id))
+			.orderBy(desc(drill.createdAt))
+			.get();
+		if (lastDrill && now - lastDrill.createdAt.getTime() < DRILL_INTERVAL_MS) continue;
+		createDrill(db, latest.id, new Date(now));
+		drilled++;
+	}
 
 	// retention: the newest N scheduled backups stay
 	for (const { volume: vol } of scheduled) {
@@ -661,9 +821,10 @@ export async function runBackupSchedules(
 		}
 	}
 
-	if (created) {
+	if (created || drilled) {
 		notifyNodes();
 		announceAll(db);
 	}
+	/** Scheduled backups started. */
 	return created;
 }
