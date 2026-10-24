@@ -52,6 +52,34 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['github.manifest', (c) => c.github.manifest('acme'), 'POST /github/manifest'],
 	['github.repos', (c) => c.github.repos(), 'GET /github/repos'],
 	['github.disconnect', (c) => c.github.disconnect('42'), 'DELETE /github/installations/42'],
+	['backups.storage', (c) => c.backups.storage(), 'GET /backup-storage'],
+	[
+		'backups.saveStorage',
+		(c) =>
+			c.backups.saveStorage({
+				endpoint: 'https://s3.example.com',
+				bucket: 'b',
+				accessKeyId: 'k',
+				secretAccessKey: 's'
+			}),
+		'PUT /backup-storage'
+	],
+	['backups.removeStorage', (c) => c.backups.removeStorage(), 'DELETE /backup-storage'],
+	['backups.testStorage', (c) => c.backups.testStorage(), 'POST /backup-storage/test'],
+	[
+		'backups.volumes',
+		(c) => c.backups.volumes({ serviceId: 's', environmentId: 'e' }),
+		'GET /volumes?serviceId=s&environmentId=e'
+	],
+	[
+		'backups.updateVolume',
+		(c) => c.backups.updateVolume('vol_1', { backupSchedule: 'daily' }),
+		'PATCH /volumes/vol_1'
+	],
+	['backups.getAll', (c) => c.backups.getAll({ volumeId: 'vol_1' }), 'GET /backups?volumeId=vol_1'],
+	['backups.create', (c) => c.backups.create('vol_1'), 'POST /backups'],
+	['backups.remove', (c) => c.backups.remove('bak_1'), 'DELETE /backups/bak_1'],
+	['backups.restore', (c) => c.backups.restore('bak_1'), 'POST /backups/bak_1/restore'],
 	[
 		'deployments.getAll',
 		(c) => c.deployments.getAll({ serviceId: 's', environmentId: 'e' }),

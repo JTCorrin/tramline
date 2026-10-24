@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { gzipSync } from 'node:zlib';
 import { Agent } from './agent';
+import { encrypt } from './backups';
 import { ControlPlane, ControlPlaneError } from './client';
 import { RAILPACK } from './pins';
 import { desiredState, FakeRuntime, stateDirWithTools } from './testing';
@@ -203,6 +207,83 @@ describe('Agent builds', () => {
 		await agent.sync();
 		await vi.waitFor(() => expect(agent.builds.get('dep_9')?.state).toBe('succeeded'));
 		expect(agent.builds.get('dep_9')?.image).toBe('traefik/whoami@sha256:abc');
+	});
+
+	it('runs backups and restores, holding containers during a volume restore', async () => {
+		const key = Buffer.alloc(32, 7).toString('base64');
+		const withJobs = {
+			...desiredState([]),
+			revision: 'j1',
+			backups: [
+				{
+					id: 'bak_1',
+					kind: 'volume' as const,
+					container: null,
+					volume: 'tl-vol_1',
+					url: 'https://bucket.example/bak_1',
+					key
+				},
+				// no presigned URL yet: fails rather than uploading anywhere
+				{
+					id: 'bak_2',
+					kind: 'postgres' as const,
+					container: 'tl-db-0',
+					volume: 'v',
+					url: null,
+					key: null
+				}
+			],
+			restores: [
+				{
+					id: 'rst_1',
+					kind: 'volume' as const,
+					container: null,
+					stop: ['tl-dep_1-0'],
+					volume: 'tl-vol_1',
+					url: 'https://bucket.example/bak_0',
+					key
+				}
+			]
+		};
+		const runtime = new FakeRuntime();
+		const { client, calls } = fakeClient([withJobs, { ...desiredState([]), revision: 'j2' }]);
+		const chunks: Buffer[] = [];
+		await pipeline(Readable.from([gzipSync('tar')]), encrypt(key), async function* (source) {
+			for await (const chunk of source) chunks.push(chunk as Buffer);
+		});
+		const fetcher = vi.fn<typeof fetch>(async (_url, init) =>
+			init?.method === 'PUT'
+				? new Response(null, { status: 200 })
+				: new Response(new Uint8Array(Buffer.concat(chunks)))
+		);
+		const agent = new Agent({
+			runtime,
+			client,
+			stateDir: stateDirWithTools(),
+			version: 'test',
+			fetcher,
+			log: () => {}
+		});
+		await agent.hello();
+		await agent.sync();
+		await agent.tick();
+		await vi.waitFor(() => expect(agent.jobs.restore.get('rst_1')?.state).toBe('succeeded'));
+		expect(agent.jobs.backup.get('bak_1')?.state).toBe('succeeded');
+		expect(agent.jobs.backup.get('bak_2')).toMatchObject({
+			state: 'failed',
+			error: 'No upload URL for this backup'
+		});
+		expect(runtime.calls).toContain('stop tl-dep_1-0 30');
+		// released afterwards, so the next pass starts it again
+		expect(agent.converger.held.size).toBe(0);
+		await agent.tick();
+		expect(calls.reports.at(-1)!.backups.map((b) => b.id)).toEqual(['bak_1', 'bak_2']);
+		expect(calls.reports.at(-1)!.restores.map((r) => r.state)).toEqual(['succeeded']);
+
+		// once the control plane moves on, they are forgotten
+		await agent.sync();
+		await agent.tick();
+		expect(calls.reports.at(-1)!.backups).toEqual([]);
 	});
 
 	it('skips builds cancelled while waiting their turn', async () => {

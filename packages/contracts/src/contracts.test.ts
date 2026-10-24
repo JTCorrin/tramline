@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	SaveBackupStorage,
 	VolumeConfig,
 	CreateProject,
 	CreateService,
@@ -126,5 +127,34 @@ describe('VolumeConfig', () => {
 				'Choose a directory for the data, like /data'
 			);
 		}
+	});
+});
+
+describe('SaveBackupStorage', () => {
+	const base = { endpoint: 'https://s3.example.com', bucket: 'my-backups', accessKeyId: 'AKID' };
+
+	it('normalises the endpoint and folder and fills defaults', () => {
+		expect(
+			SaveBackupStorage.parse({
+				...base,
+				endpoint: ' https://s3.example.com/// ',
+				prefix: '/tramline/prod/'
+			})
+		).toEqual({
+			...base,
+			region: 'us-east-1',
+			prefix: 'tramline/prod',
+			pathStyle: true
+		});
+	});
+
+	it('refuses bad endpoints and bucket names', () => {
+		const issue = (input: object) =>
+			SaveBackupStorage.safeParse({ ...base, ...input }).error?.issues[0]?.message;
+		expect(issue({ endpoint: 'ftp://s3.example.com' })).toBe(
+			'Use the bucket service’s http(s) URL'
+		);
+		expect(issue({ bucket: 'Has_Upper' })).toBe('Not a valid bucket name');
+		expect(issue({ accessKeyId: ' ' })).toBe('Access key ID is required');
 	});
 });

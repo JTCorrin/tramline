@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { timeAgo } from './format';
+import { formatBytes, timeAgo } from './format';
 
 describe('timeAgo', () => {
 	const now = Date.parse('2026-10-23T12:00:00Z');
@@ -12,4 +12,15 @@ describe('timeAgo', () => {
 	])('%s → %s', (iso, expected) => {
 		expect(timeAgo(iso, now)).toBe(expected);
 	});
+});
+
+describe('formatBytes', () => {
+	it.each([
+		[0, '0 B'],
+		[512, '512 B'],
+		[1400, '1.4 KB'],
+		[15_300_000, '15 MB'],
+		[2_500_000_000, '2.5 GB'],
+		[9e15, '9000 TB']
+	])('%d → %s', (bytes, expected) => expect(formatBytes(bytes)).toBe(expected));
 });

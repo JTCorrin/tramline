@@ -3,5 +3,7 @@ import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch, parent }) => {
 	await parent();
-	return { github: await api(fetch).github.status() };
+	const client = api(fetch);
+	const [github, backups] = await Promise.all([client.github.status(), client.backups.storage()]);
+	return { github, backups };
 };

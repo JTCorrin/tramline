@@ -118,6 +118,12 @@ export class FakeRuntime implements ContainerRuntime {
 	async putFile(container: string, path: string, content: Buffer) {
 		this.files.set(`${container}:${path}`, content);
 	}
+	archives = new Map<string, Buffer>();
+	async putArchive(container: string, path: string, archive: NodeJS.ReadableStream) {
+		const chunks: Buffer[] = [];
+		for await (const chunk of archive) chunks.push(Buffer.from(chunk as Buffer));
+		this.archives.set(`${container}:${path}`, Buffer.concat(chunks));
+	}
 	async loadImage(tarball: NodeJS.ReadableStream) {
 		for await (const _ of tarball) {
 			// drain
@@ -194,6 +200,8 @@ export function desiredState(
 		builds,
 		scans: [],
 		deletedVolumes: [],
+		backups: [],
+		restores: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

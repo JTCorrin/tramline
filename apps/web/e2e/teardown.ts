@@ -57,6 +57,12 @@ export default function teardown() {
 	} catch {
 		// never created
 	}
+	// the bucket used by the backup tests
+	try {
+		execFileSync('docker', ['rm', '-f', 'tramline-e2e-s3'], { stdio: 'ignore' });
+	} catch {
+		// not running
+	}
 	// volumes the agent created for this run's services
 	const volumes = docker(
 		'volume',

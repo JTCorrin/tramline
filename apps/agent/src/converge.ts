@@ -35,6 +35,8 @@ export class Converger {
 	readonly pulling = new Set<string>();
 	/** Containers that could not be started, with the reason (e.g. image not found). */
 	readonly errors = new Map<string, string>();
+	/** Containers not to start for now, e.g. while their volume is being restored. */
+	readonly held = new Set<string>();
 
 	/** The node whose containers this converger owns. */
 	nodeId: string | null;
@@ -126,7 +128,7 @@ export class Converger {
 
 		// 1. start what's missing
 		for (const [name, spec] of wanted) {
-			if (present.has(name) || this.errors.has(name)) continue;
+			if (present.has(name) || this.errors.has(name) || this.held.has(name)) continue;
 			try {
 				if (!(await this.runtime.hasImage(spec.image))) {
 					this.pulling.add(name);

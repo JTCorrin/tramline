@@ -109,7 +109,8 @@ export class DockerRuntime implements ContainerRuntime {
 				Mounts: (spec.volumes ?? []).map((v) => ({
 					Type: 'volume' as const,
 					Source: v.name,
-					Target: v.target
+					Target: v.target,
+					ReadOnly: v.readOnly ?? false
 				})),
 				PidsLimit: spec.security.pidsLimit,
 				Privileged: false,
@@ -242,6 +243,10 @@ export class DockerRuntime implements ContainerRuntime {
 			.putArchive(archive as unknown as NodeJS.ReadableStream, {
 				path: path.slice(0, slash) || '/'
 			});
+	}
+
+	async putArchive(container: string, path: string, archive: NodeJS.ReadableStream) {
+		await this.docker.getContainer(container).putArchive(archive, { path });
 	}
 
 	async loadImage(tarball: NodeJS.ReadableStream) {

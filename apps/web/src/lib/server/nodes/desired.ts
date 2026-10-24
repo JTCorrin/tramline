@@ -15,17 +15,21 @@ import { container, deployment, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
-/** Deployments whose containers should exist. */
-export const RUNNING_STATUSES = ['deploying', 'active', 'crashed'] as const;
-
-/** Local tag for an image built from source. */
-export const builtImageTag = (serviceId: string, deploymentId: string) =>
-	`tramline/${serviceId}:${deploymentId}`;
-
-export const networkName = (environmentId: string) => `tl-${environmentId}`;
-export const deploymentAlias = (deploymentId: string) => `${deploymentId}.tramline.internal`;
-export const containerName = (deploymentId: string, replica: number) =>
-	`tl-${deploymentId}-${replica}`;
+export {
+	builtImageTag,
+	containerName,
+	deploymentAlias,
+	networkName,
+	RUNNING_STATUSES
+} from './names';
+import {
+	builtImageTag,
+	containerName,
+	deploymentAlias,
+	networkName,
+	RUNNING_STATUSES
+} from './names';
+import { backupJobs } from '../domain/backups';
 
 /**
  * Everything one node should be running. Deterministic: the same database
@@ -160,6 +164,7 @@ export function buildDesiredState(
 		builds,
 		scans,
 		deletedVolumes: deletedVolumes(db, nodeId),
+		...backupJobs(db, nodeId),
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api.js';
+	import BackupStorage from '#lib/components/settings/backup-storage.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -143,6 +144,8 @@
 			{/if}
 		</Card.Content>
 	</Card.Root>
+
+	<BackupStorage storage={data.backups.storage} canManage={data.backups.canManage} />
 </main>
 
 {#if manifest}

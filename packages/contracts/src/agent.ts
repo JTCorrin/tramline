@@ -89,6 +89,44 @@ export const DesiredScan = z.object({
 
 export type DesiredScan = z.infer<typeof DesiredScan>;
 
+/**
+ * Back up a volume: a native dump taken inside the running database
+ * container, or an archive of the volume. The agent compresses and encrypts
+ * it with `key`, then uploads it to `url`, a presigned URL that allows only
+ * that one upload. `url` and `key` are attached when the state is served.
+ */
+export const DesiredBackup = z.object({
+	id: z.string(),
+	kind: z.enum(['postgres', 'mysql', 'mongo', 'volume']),
+	/** The running database container, for native dumps. */
+	container: z.string().nullable(),
+	volume: z.string(),
+	url: z.string().nullable().default(null),
+	/** base64 AES-256 key. */
+	key: z.string().nullable().default(null)
+});
+
+export type DesiredBackup = z.infer<typeof DesiredBackup>;
+
+/**
+ * Restore a backup: native dumps are loaded into the running database;
+ * volume archives replace the volume's contents while the service's
+ * containers are stopped (they start again afterwards).
+ */
+export const DesiredRestore = z.object({
+	id: z.string(),
+	kind: DesiredBackup.shape.kind,
+	/** The running database container, for native dumps. */
+	container: z.string().nullable(),
+	/** Containers using the volume; stopped during a volume restore. */
+	stop: z.array(z.string()),
+	volume: z.string(),
+	url: z.string().nullable().default(null),
+	key: z.string().nullable().default(null)
+});
+
+export type DesiredRestore = z.infer<typeof DesiredRestore>;
+
 export const IngressRoute = z.object({
 	host: z.string(),
 	/** `alias:port` reachable on one of the environment networks. */
@@ -107,6 +145,8 @@ export const DesiredState = z.object({
 	scans: z.array(DesiredScan).default([]),
 	/** Volumes of deleted services and environments; the agent removes them once nothing uses them. */
 	deletedVolumes: z.array(z.string()).default([]),
+	backups: z.array(DesiredBackup).default([]),
+	restores: z.array(DesiredRestore).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -158,9 +198,21 @@ export const BuildReport = z.object({
 export type BuildReport = z.infer<typeof BuildReport>;
 
 /** What the agent observed; replaces the previous report for the node. */
+/** Progress of a backup or restore; `size` is the uploaded size of a backup. */
+export const JobReport = z.object({
+	id: z.string(),
+	state: z.enum(['running', 'succeeded', 'failed']),
+	size: z.number().int().nullable().default(null),
+	error: z.string().nullable().default(null)
+});
+
+export type JobReport = z.infer<typeof JobReport>;
+
 export const AgentReport = z.object({
 	containers: z.array(ActualContainer),
 	builds: z.array(BuildReport).default([]),
+	backups: z.array(JobReport).default([]),
+	restores: z.array(JobReport).default([]),
 	/** Volumes this node's agent manages that exist on the node; absent when Docker can't be asked. */
 	volumes: z.array(z.string()).optional(),
 	/** The desired revision the agent last converged to. */

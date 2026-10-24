@@ -578,7 +578,9 @@ describe('build tokens', () => {
 				}
 			],
 			scans: [],
-			deletedVolumes: []
+			deletedVolumes: [],
+			backups: [],
+			restores: []
 		};
 		const fetcher = github({ 'POST /app/installations/99/access_tokens': tokenRoute });
 		const withTokens = await attachBuildTokens(ctx.db, testSecrets, desired, fetcher);

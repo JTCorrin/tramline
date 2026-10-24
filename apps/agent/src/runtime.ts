@@ -33,6 +33,8 @@ export interface ContainerRuntime {
 	arch(): Promise<string>;
 	/** Writes a file into a container. */
 	putFile(container: string, path: string, content: Buffer, mode: number): Promise<void>;
+	/** Extracts a tar archive (plain or gzip-compressed) into a directory of a container. */
+	putArchive(container: string, path: string, archive: NodeJS.ReadableStream): Promise<void>;
 	/** Loads an image tarball (`docker save` format). */
 	loadImage(tarball: NodeJS.ReadableStream): Promise<void>;
 	/** `repo@sha256:…` the registry gave a pulled image, or null (e.g. for locally built images). */
@@ -79,7 +81,7 @@ export interface RunSpec {
 	ports?: { container: number; host: number }[];
 	binds?: string[];
 	/** Named Docker volumes. */
-	volumes?: { name: string; target: string }[];
+	volumes?: { name: string; target: string; readOnly?: boolean }[];
 	security: SecurityOptions;
 }
 

@@ -11,10 +11,12 @@ import { settings } from '#lib/server/settings.server.js';
 import { reachableFromInternet } from '#lib/server/settings.js';
 import { secrets } from '#lib/server/api/handler.js';
 import { pollRepositories } from '#lib/server/github/poll.js';
+import { runBackupSchedules } from '#lib/server/domain/backups.js';
 import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
 import { createInitialModeExpression } from 'mode-watcher';
 
 const RECONCILE_INTERVAL_MS = 2_000;
+const BACKUP_SCHEDULE_INTERVAL_MS = 60_000;
 const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
@@ -46,9 +48,20 @@ export const init: ServerInit = () => {
 		pollEvery || 2 ** 31 - 1
 	);
 
+	// scheduled backups, retention and timed-out jobs
+	let scheduling = false;
+	const schedules = setInterval(async () => {
+		if (scheduling) return;
+		scheduling = true;
+		await runBackupSchedules(db, secrets)
+			.catch((error) => console.error('[backups]', error))
+			.finally(() => (scheduling = false));
+	}, BACKUP_SCHEDULE_INTERVAL_MS);
+
 	g.__tramlineReconciler = () => {
 		clearInterval(timer);
 		clearInterval(poll);
+		clearInterval(schedules);
 		unsubscribe();
 	};
 };

@@ -9,6 +9,7 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import type { CanvasService, ServiceConfigPatch, ServiceConfigView } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
+	import BackupsPanel from './backups-panel.svelte';
 	import DeploymentsList from './deployments-list.svelte';
 	import ServiceSettings from './service-settings.svelte';
 	import VariablesEditor from './variables-editor.svelte';
@@ -103,6 +104,9 @@
 		<Tabs.List class="mx-4 mt-3">
 			<Tabs.Trigger value="deployments">Deployments</Tabs.Trigger>
 			<Tabs.Trigger value="variables">Variables</Tabs.Trigger>
+			{#if service.volumeMountPath}
+				<Tabs.Trigger value="backups">Backups</Tabs.Trigger>
+			{/if}
 			<Tabs.Trigger value="metrics">Metrics</Tabs.Trigger>
 			<Tabs.Trigger value="settings">Settings</Tabs.Trigger>
 		</Tabs.List>
@@ -121,6 +125,13 @@
 					serviceId={service.id}
 					version={workspace.version}
 					{suggestions}
+				/>
+			</Tabs.Content>
+			<Tabs.Content value="backups" class="p-4">
+				<BackupsPanel
+					serviceId={service.id}
+					environmentId={workspace.environmentId}
+					version={workspace.version}
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="metrics" class="p-4">

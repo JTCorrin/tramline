@@ -10,7 +10,8 @@ import { randomBytes } from 'node:crypto';
 import { AppError } from '../api/errors';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { deployment, githubApp, githubInstallation, member, project, service } from '../db/schema';
+import { deployment, githubApp, githubInstallation, project, service } from '../db/schema';
+import { isManager, requireManager as requireOrgManager } from '../domain/access';
 import type { Ctx } from '../domain/context';
 import { reachableFromInternet, type PlatformSettings } from '../settings';
 import {
@@ -45,16 +46,7 @@ export function loadApp(db: DbOrTx, secrets: Secrets): AppCredentials | null {
 }
 
 /** Only organization owners and admins connect GitHub. */
-function requireManager(ctx: Ctx) {
-	const row = ctx.db
-		.select({ role: member.role })
-		.from(member)
-		.where(and(eq(member.organizationId, ctx.organizationId), eq(member.userId, ctx.userId)))
-		.get();
-	if (!row || !['owner', 'admin'].includes(row.role)) {
-		throw new AppError('forbidden', 'Only organization owners and admins can connect GitHub');
-	}
-}
+const requireManager = (ctx: Ctx) => requireOrgManager(ctx, 'connect GitHub');
 
 function requirePublicUrl(settings: PlatformSettings) {
 	if (!settings.publicUrl) {
@@ -183,11 +175,7 @@ export function disconnectInstallation(ctx: Ctx, installationId: string) {
 
 export function status(ctx: Ctx, settings: PlatformSettings): GitHubStatus {
 	const app = ctx.db.select().from(githubApp).get();
-	const role = ctx.db
-		.select({ role: member.role })
-		.from(member)
-		.where(and(eq(member.organizationId, ctx.organizationId), eq(member.userId, ctx.userId)))
-		.get()?.role;
+
 	return {
 		app: app ? { name: app.name, slug: app.slug, htmlUrl: app.htmlUrl } : null,
 		installations: ctx.db
@@ -202,7 +190,7 @@ export function status(ctx: Ctx, settings: PlatformSettings): GitHubStatus {
 				htmlUrl: i.htmlUrl
 			})),
 		webhooks: reachableFromInternet(settings),
-		canManage: role === 'owner' || role === 'admin'
+		canManage: isManager(ctx)
 	};
 }
 

@@ -2,10 +2,12 @@ import {
 	AGENT_PROTOCOL_VERSION,
 	type AgentHello,
 	type BuildReport,
-	type DesiredState
+	type DesiredState,
+	type JobReport
 } from '@tramline/contracts';
 import os from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { Backups } from './backups';
 import { Builder } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
@@ -26,6 +28,8 @@ export interface AgentOptions {
 	onUnauthorized?: () => void;
 	/** Wait this long before retrying after a rejected token. */
 	unauthorizedBackoffMs?: number;
+	/** For downloads (build tools) and backup uploads; tests pass a fake. */
+	fetcher?: typeof fetch;
 	log?: (message: string) => void;
 }
 
@@ -47,9 +51,14 @@ export class Agent {
 	readonly builder: Builder;
 	/** Builds this agent has started, by deployment, until the control plane stops asking for them. */
 	readonly builds = new Map<string, BuildReport>();
-	/** Builds run one at a time; they are CPU and memory hungry. */
-	/** Builds run one at a time, and so do image scans, but a scan never waits for a long build. */
-	#queues = { build: Promise.resolve(), scan: Promise.resolve() };
+	readonly backups: Backups;
+	/** Backups and restores this agent has started, until the control plane stops asking for them. */
+	readonly jobs = { backup: new Map<string, JobReport>(), restore: new Map<string, JobReport>() };
+	/**
+	 * Builds run one at a time, and so do image scans, but a scan never waits
+	 * for a long build. Backups and restores share a queue of their own.
+	 */
+	#queues = { build: Promise.resolve(), scan: Promise.resolve(), data: Promise.resolve() };
 
 	#abort = new AbortController();
 	#lastHeal = 0;
@@ -68,6 +77,21 @@ export class Agent {
 			},
 			onLine: (deploymentId, line) =>
 				this.logs.push({ deploymentId, ts: new Date().toISOString(), stream: 'build', line }),
+			fetcher: options.fetcher,
+			log: this.#log
+		});
+		this.backups = new Backups(options.runtime, {
+			stateDir: options.stateDir,
+			nodeId: () => {
+				if (!this.converger.nodeId) throw new Error('nodeId is not known yet');
+				return this.converger.nodeId;
+			},
+			hold: (names) => names.forEach((name) => this.converger.held.add(name)),
+			fetcher: options.fetcher,
+			release: (names) => {
+				names.forEach((name) => this.converger.held.delete(name));
+				if (names.length && this.desired) void this.converger.run(this.desired);
+			},
 			log: this.#log
 		});
 	}
@@ -214,6 +238,40 @@ export class Agent {
 		}
 	}
 
+	/**
+	 * Queues backups or restores the control plane wants, one at a time, and
+	 * forgets finished ones it has moved past. Jobs whose presigned URL hasn't
+	 * arrived yet wait for the next state.
+	 */
+	#startJobs<T extends { id: string; url: string | null }>(
+		kind: 'backup' | 'restore',
+		wanted: T[],
+		run: (job: T) => Promise<JobReport>
+	) {
+		const reports = this.jobs[kind];
+		const ids = new Set(wanted.map((job) => job.id));
+		for (const [id, report] of reports) {
+			if (!ids.has(id) && report.state !== 'running') reports.delete(id);
+		}
+		for (const job of wanted) {
+			if (reports.has(job.id)) continue;
+			reports.set(job.id, { id: job.id, state: 'running', size: null, error: null });
+			this.#queues.data = this.#queues.data.then(async () => {
+				const current = (kind === 'backup' ? this.desired?.backups : this.desired?.restores) as
+					T[] | undefined;
+				const latest = current?.find((j) => j.id === job.id);
+				if (!latest) {
+					reports.delete(job.id);
+					return;
+				}
+				this.#log(`${kind} ${job.id}`);
+				const result = await run(latest);
+				this.#log(`${kind} ${job.id} ${result.state}${result.error ? `: ${result.error}` : ''}`);
+				reports.set(job.id, result);
+			});
+		}
+	}
+
 	/** One report cycle. */
 	async tick() {
 		let containers: ManagedContainer[] = [];
@@ -242,6 +300,8 @@ export class Agent {
 			await this.health.check(desired, containers);
 			this.logs.sync(containers);
 			this.#startBuilds(desired);
+			this.#startJobs('backup', desired.backups, (job) => this.backups.backup(job));
+			this.#startJobs('restore', desired.restores, (job) => this.backups.restore(job));
 			volumes = await this.converger.volumes().catch(() => undefined);
 		}
 
@@ -251,6 +311,8 @@ export class Agent {
 					? observe(desired, containers, this.converger, this.health)
 					: [],
 			builds: [...this.builds.values()],
+			backups: [...this.jobs.backup.values()],
+			restores: [...this.jobs.restore.values()],
 			volumes,
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError

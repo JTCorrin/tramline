@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
-import { notFound } from '../api/errors';
-import { environment, project, service } from '../db/schema';
+import { AppError, notFound } from '../api/errors';
+import { environment, member, project, service } from '../db/schema';
 import type { Ctx } from './context';
 
 // Every lookup joins through `project` so callers can only reach their organization's data.
@@ -35,6 +35,21 @@ export function requireService(ctx: Ctx, serviceId: string) {
 		.get();
 	if (!row) throw notFound('Service');
 	return row.service;
+}
+
+/** Only organization owners and admins change organization-wide settings. */
+export function isManager(ctx: Ctx) {
+	const row = ctx.db
+		.select({ role: member.role })
+		.from(member)
+		.where(and(eq(member.organizationId, ctx.organizationId), eq(member.userId, ctx.userId)))
+		.get();
+	return !!row && ['owner', 'admin'].includes(row.role);
+}
+
+export function requireManager(ctx: Ctx, action: string) {
+	if (!isManager(ctx))
+		throw new AppError('forbidden', `Only organization owners and admins can ${action}`);
 }
 
 /** Loads a service and an environment, checking they belong to the same project. */

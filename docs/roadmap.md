@@ -373,10 +373,25 @@ Database templates with generated credentials and connection variables, `${{Serv
 - **Exit:** `e2e/data.e2e.ts`: PostgREST connects to Postgres through `${{Postgres.DATABASE_URL}}` over the private network; Postgres is redeployed, finds its existing data ("Skipping initialization"), and PostgREST reconnects.
 - **Deferred:** volume size limits and usage (Docker's local volumes don't enforce a size); volumes for non-root images whose mount path doesn't exist in the image (Docker creates it owned by root).
 
-**4b: backups (next)**
+**4b: backups ✅ (service backups; the control plane's own backups are next)** (verified on Docker against an S3 gateway; e2e in CI)
 
-- Scheduled backups of volumes and databases to S3-compatible storage, with restore.
-- Litestream for the control plane's SQLite (moved forward from Phase 9), and restore drills.
+- **Storage per organization:** any S3-compatible bucket, set in Settings → Backups by owners and admins, with a "Test connection" that writes and deletes an object. The secret key is encrypted at rest and never returned.
+- **Credentials stay on the control plane:** for each job it signs a short-lived URL (AWS SigV4 presigning, checked against AWS's published example and against a real S3 server) that allows exactly one upload or download. Nodes never hold bucket credentials.
+- **What a backup contains:**
+  - Postgres, MySQL and MongoDB templates: a consistent native dump (`pg_dumpall`, `mysqldump --single-transaction`, `mongodump`), taken inside the running database container with credentials from its own environment, with no downtime.
+  - Any other volume (including Redis, whose append-only files are the reliable copy): a `tar` archive made by a locked-down helper container (pinned busybox, no network, the volume mounted read-only, one capability). It is crash-consistent: taken while the service runs.
+- **Encryption on the node:** every backup is gzip-compressed and encrypted with AES-256-GCM using a random per-backup key. The key is stored wrapped with the install's secret key, so the bucket provider never sees plaintext; restoring needs this install or its `TRAMLINE_SECRET_KEY`.
+- **Restore:**
+  - From the service's Backups tab, after a confirmation.
+  - The backup must decrypt and authenticate completely before anything is applied.
+  - Native dumps load into the running database. Postgres drops databases `WITH (FORCE)`, so connected apps can't make the restore load on top of the old data.
+  - Volume archives replace the volume while the service's containers are held stopped, and the containers start again afterwards.
+- **Schedules:** daily or weekly per volume, applied at once (no deploy), keeping the newest N scheduled backups and deleting older objects from the bucket. Jobs that don't finish within 6 hours are failed.
+- **Exit:** `e2e/backups.e2e.ts`:
+  - Postgres: a row is written, backed up, changed and restored; only the original row is back, and the object in the bucket is encrypted.
+  - A plain Redis volume: the same round trip while the service is stopped and started again.
+- **Next in 4b:** encrypted backups of the control plane's own SQLite database (Litestream or periodic snapshots to an install-wide bucket), and restore drills that verify the latest backup of each volume on a schedule.
+- **Deferred:** single uploads are capped at 5 GB (S3's limit for one PUT; multipart comes later); backups of databases in images other than the templates are archives, not dumps.
 
 **4c: networking and environments**
 

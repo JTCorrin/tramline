@@ -4,6 +4,17 @@ import { defineConfig } from '@playwright/test';
 const docker = process.env.TRAMLINE_E2E_DOCKER === '1';
 export const INGRESS_PORT = 8088;
 
+/** An S3-compatible bucket for the backup tests (Versity Gateway on a local directory). */
+export const E2E_S3 = {
+	port: 9900,
+	container: 'tramline-e2e-s3',
+	image:
+		'versity/versitygw:v1.8.0@sha256:30292fc2eeacc67a36993b01f7a7a5e3361a19cced0e80c1d71cfa2a4b0a2499',
+	bucket: 'tramline-e2e',
+	accessKeyId: 'e2e-access-key',
+	secretAccessKey: 'e2e-secret-key-not-for-production'
+};
+
 export default defineConfig({
 	testDir: 'e2e',
 	testMatch: '**/*.e2e.{ts,js}',
@@ -45,6 +56,19 @@ export default defineConfig({
 							TRAMLINE_AGENT_STATE_DIR: `${import.meta.dirname}/data/e2e-agent`,
 							TRAMLINE_AGENT_HEALTH_PORT: '7172'
 						}
+					},
+					{
+						// answers 403 to anonymous requests, which Playwright counts as up
+						command: [
+							'docker run --rm',
+							`--name ${E2E_S3.container}`,
+							`-p ${E2E_S3.port}:7070`,
+							'--entrypoint sh',
+							E2E_S3.image,
+							`-c 'mkdir -p /tmp/s3/${E2E_S3.bucket} && exec versitygw --access ${E2E_S3.accessKeyId} --secret ${E2E_S3.secretAccessKey} --port :7070 posix /tmp/s3'`
+						].join(' '),
+						url: `http://127.0.0.1:${E2E_S3.port}/`,
+						reuseExistingServer: false
 					}
 				]
 			: [])

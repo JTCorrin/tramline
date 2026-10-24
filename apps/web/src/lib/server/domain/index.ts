@@ -1,4 +1,5 @@
 export type { Ctx } from './context';
+export * as backups from './backups';
 export * as canvas from './canvas';
 export * as changes from './changes';
 export * as deployments from './deployments';

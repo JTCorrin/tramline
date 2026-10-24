@@ -1,4 +1,5 @@
 export * from './agent';
+export * from './backups';
 export * from './changes';
 export * from './deployments';
 export * from './environments';

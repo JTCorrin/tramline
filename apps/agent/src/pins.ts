@@ -24,6 +24,10 @@ export const RAILPACK = {
 export const BUILDKIT_IMAGE =
 	'moby/buildkit:v0.34.1-rootless@sha256:f68752a5a94acfcdad2d07867b7075601a421638e17fc5f28efc1c814d0c4f89';
 
+/** Runs `tar` against a volume for backups and restores, so service images don't need it. */
+export const HELPER_IMAGE =
+	'busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e';
+
 /** Trivy, the vulnerability scanner, run inside the rootless builder. */
 export const TRIVY = {
 	version: '0.75.0',

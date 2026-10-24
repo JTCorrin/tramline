@@ -1,4 +1,5 @@
 import { createHttp, type ClientOptions } from './http';
+import { backups } from './resources/backups';
 import { deployments } from './resources/deployments';
 import { environments } from './resources/environments';
 import { github } from './resources/github';
@@ -19,7 +20,8 @@ export function createClient(options: ClientOptions) {
 		variables: variables(http),
 		deployments: deployments(http),
 		nodes: nodes(http),
-		github: github(http)
+		github: github(http),
+		backups: backups(http)
 	};
 }
 

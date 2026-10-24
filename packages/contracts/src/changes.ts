@@ -53,7 +53,15 @@ export type Canvas = z.infer<typeof Canvas>;
 
 /** Server-sent event telling clients what to refetch. */
 export const ProjectEvent = z.object({
-	type: z.enum(['services', 'config', 'variables', 'changes', 'deployments', 'environments']),
+	type: z.enum([
+		'services',
+		'config',
+		'variables',
+		'changes',
+		'deployments',
+		'environments',
+		'backups'
+	]),
 	projectId: z.string(),
 	environmentId: z.string().optional(),
 	serviceId: z.string().optional()

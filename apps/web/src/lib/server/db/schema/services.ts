@@ -179,6 +179,11 @@ export const volume = sqliteTable(
 		}),
 		/** Where the data lives; deployments of the service are pinned to this node. */
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		backupSchedule: text('backup_schedule', { enum: ['off', 'daily', 'weekly'] })
+			.notNull()
+			.default('off'),
+		/** Scheduled backups kept; older ones are deleted. */
+		backupRetention: integer('backup_retention').notNull().default(7),
 		...timestamps
 	},
 	(table) => [uniqueIndex('volume_instance_idx').on(table.serviceId, table.environmentId)]
