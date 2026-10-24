@@ -6,6 +6,7 @@ import {
 	type StagedChanges
 } from '@tramline/contracts';
 import { and, eq } from 'drizzle-orm';
+import { parseCron } from '../cron';
 import { AppError } from '../api/errors';
 import type { DbOrTx } from '../db/client';
 import type { Secrets } from '../crypto';
@@ -94,6 +95,17 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 	}
 
 	for (const svc of affected) {
+		const schedule = svc.effective.deploy.cronSchedule;
+		if (schedule) {
+			try {
+				parseCron(schedule);
+			} catch (error) {
+				throw new AppError(
+					'conflict',
+					`${svc.service.name}'s cron schedule: ${(error as Error).message}`
+				);
+			}
+		}
 		if (svc.effective.volume?.mountPath && svc.effective.deploy.replicas > 1) {
 			// replicas would share one directory, which corrupts most databases
 			throw new AppError(
@@ -194,7 +206,7 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 	publish({ type: 'changes', projectId: env.projectId, environmentId });
 	publish({ type: 'deployments', projectId: env.projectId, environmentId });
 	publish({ type: 'services', projectId: env.projectId });
-	return created.map(deploymentDto);
+	return created.map((row) => deploymentDto(row));
 }
 
 function neverDeployed(db: DbOrTx, serviceId: string) {

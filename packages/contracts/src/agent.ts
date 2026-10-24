@@ -147,7 +147,9 @@ export const IngressRoute = z.object({
 	host: z.string(),
 	/** `alias:port` reachable on one of the environment networks. */
 	upstreams: z.array(z.string()),
-	network: z.string()
+	network: z.string(),
+	/** A user's own domain: HSTS covers this host only, never the domain's other subdomains. */
+	custom: z.boolean().optional()
 });
 
 export type IngressRoute = z.infer<typeof IngressRoute>;

@@ -95,6 +95,32 @@ describe('LogShipper', () => {
 		expect(runtime.followers.size).toBe(0);
 	});
 
+	it('reads a short job that already exited, once', async () => {
+		const runtime = new FakeRuntime();
+		const sent: string[] = [];
+		const shipper = new LogShipper(runtime, async (lines) => {
+			sent.push(...lines.map((l) => l.line));
+		});
+		await runtime.run(toRunSpec(desiredContainer({ name: 'tl-run_1' }), 'node_1'));
+		runtime.containers.get('tl-run_1')!.status = 'exited';
+
+		shipper.sync(await runtime.list());
+		const follower = runtime.followers.get('tl-run_1')!;
+		expect(follower.since).toBe(0);
+		follower.onLine('stdout', '2026-10-24T10:00:01.000Z', 'report generated');
+		follower.onEnd();
+		await shipper.flush();
+		expect(sent).toEqual(['report generated']);
+
+		// not re-read on every pass
+		runtime.followers.clear();
+		shipper.sync(await runtime.list());
+		expect(runtime.followers.size).toBe(0);
+		// forgotten once it is gone
+		await runtime.remove('tl-run_1');
+		shipper.sync([]);
+	});
+
 	it('keeps lines when sending fails', async () => {
 		const runtime = new FakeRuntime();
 		let fail = true;

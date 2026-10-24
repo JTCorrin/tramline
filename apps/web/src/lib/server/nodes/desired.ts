@@ -13,6 +13,7 @@ import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
 import { container, deployment, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
+import { runContainerName, runningRuns } from './cron';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
 export {
@@ -30,6 +31,7 @@ import {
 	RUNNING_STATUSES
 } from './names';
 import { backupJobs } from '../domain/backups';
+import { verifiedHostnames } from '../domain/domains';
 
 /**
  * Everything one node should be running. Deterministic: the same database
@@ -73,6 +75,14 @@ export function buildDesiredState(
 		reported
 	);
 
+	const hostnames = verifiedHostnames(db);
+	const runs = Map.groupBy(
+		runningRuns(
+			db,
+			rows.map((row) => row.deployment.id)
+		),
+		(run) => run.deploymentId
+	);
 	const containers: DesiredContainer[] = [];
 	const builds: DesiredBuild[] = [];
 	const scans: DesiredScan[] = [];
@@ -126,6 +136,31 @@ export function buildDesiredState(
 			(alias): alias is string => Boolean(alias)
 		);
 
+		// a cron service only has containers while a run is going
+		if (config.deploy.cronSchedule) {
+			for (const run of runs.get(dep.id) ?? []) {
+				containers.push({
+					name: runContainerName(run.id),
+					deploymentId: dep.id,
+					serviceId: dep.serviceId,
+					environmentId: dep.environmentId,
+					replica: 0,
+					image,
+					command: config.deploy.startCommand,
+					env,
+					network,
+					aliases: [],
+					restartPolicy: 'never',
+					port: null,
+					healthcheckPath: null,
+					memoryMb: config.deploy.memoryMb,
+					readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
+					volumes
+				});
+			}
+			continue;
+		}
+
 		for (let replica = 0; replica < config.deploy.replicas; replica++) {
 			containers.push({
 				name: containerName(dep.id, replica),
@@ -155,6 +190,17 @@ export function buildDesiredState(
 				upstreams: [`${deploymentAlias(dep.id)}:${config.networking.port}`],
 				network
 			});
+		}
+		// the user's own domains, once their ownership is proven
+		if (live && config.networking.port) {
+			for (const custom of hostnames.get(`${dep.serviceId}:${dep.environmentId}`) ?? []) {
+				routes.push({
+					host: custom.hostname,
+					upstreams: [`${deploymentAlias(dep.id)}:${config.networking.port}`],
+					network,
+					custom: true
+				});
+			}
 		}
 	}
 

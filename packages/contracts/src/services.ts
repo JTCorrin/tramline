@@ -59,7 +59,12 @@ export const BuildConfig = z.object({
 	dockerfilePath: optionalText,
 	buildCommand: optionalText,
 	/** Vulnerability scanning of the image before it runs (built and pulled images alike). */
-	scan: ScanMode
+	scan: ScanMode,
+	/**
+	 * Gitignore-style patterns, relative to the repository root: a push
+	 * deploys only if it changes a matching file. Empty means any change.
+	 */
+	watchPaths: z.array(z.string().trim().min(1).max(200)).max(50)
 });
 
 export const RESTART_POLICIES = ['on_failure', 'always', 'never'] as const;
@@ -120,7 +125,13 @@ export type ServiceConfigPatch = z.infer<typeof ServiceConfigPatch>;
 
 export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 	source: null,
-	build: { builder: 'railpack', dockerfilePath: null, buildCommand: null, scan: 'warn' },
+	build: {
+		builder: 'railpack',
+		dockerfilePath: null,
+		buildCommand: null,
+		scan: 'warn',
+		watchPaths: []
+	},
 	deploy: {
 		startCommand: null,
 		replicas: 1,

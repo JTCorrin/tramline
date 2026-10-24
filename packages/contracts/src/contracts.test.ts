@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	Hostname,
 	SaveBackupStorage,
 	VolumeConfig,
 	CreateProject,
@@ -156,5 +157,20 @@ describe('SaveBackupStorage', () => {
 		);
 		expect(issue({ bucket: 'Has_Upper' })).toBe('Not a valid bucket name');
 		expect(issue({ accessKeyId: ' ' })).toBe('Access key ID is required');
+	});
+});
+
+describe('Hostname', () => {
+	it('normalises case, whitespace and a trailing dot', () => {
+		expect(Hostname.parse(' Shop.Example.COM. ')).toBe('shop.example.com');
+	});
+
+	it('refuses IP addresses and malformed names', () => {
+		expect(Hostname.safeParse('10.0.0.1').error?.issues[0]?.message).toBe(
+			'Use a domain name, not an IP address'
+		);
+		expect(Hostname.safeParse('no-dot').error?.issues[0]?.message).toBe(
+			'Enter a domain like app.example.com'
+		);
 	});
 });

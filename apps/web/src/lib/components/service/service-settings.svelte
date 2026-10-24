@@ -3,6 +3,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
+	import { Textarea } from '#lib/components/ui/textarea/index.js';
 	import {
 		RESTART_POLICIES,
 		SCAN_MODES,
@@ -11,6 +12,7 @@
 		type ServiceConfigPatch,
 		type ServiceConfigView
 	} from '@tramline/contracts';
+	import type { Snippet } from 'svelte';
 	import CommitInput from './commit-input.svelte';
 	import Setting from './setting.svelte';
 
@@ -20,7 +22,8 @@
 		view,
 		onstage,
 		onrename,
-		ondelete
+		ondelete,
+		networking
 	}: {
 		service: CanvasService;
 		environmentName: string;
@@ -28,6 +31,8 @@
 		onstage: (patch: ServiceConfigPatch) => void;
 		onrename: (name: string) => void;
 		ondelete: () => void;
+		/** Extra settings at the end of the Networking section, e.g. custom domains. */
+		networking?: Snippet;
 	} = $props();
 
 	const config = $derived(view.effective);
@@ -182,6 +187,27 @@
 					/>
 				</Setting>
 			{/if}
+			<Setting
+				label="Watch paths"
+				for="build-watch-paths"
+				staged={staged('build', 'watchPaths')}
+				description="Deploy a push only if it changes a matching file. One gitignore-style pattern per line, e.g. src/** or !**/*.md. Empty: any change."
+			>
+				<Textarea
+					id="build-watch-paths"
+					class="min-h-16 font-mono text-xs"
+					placeholder="src/**"
+					value={(config.build.watchPaths ?? []).join('\n')}
+					onchange={(event) => {
+						const watchPaths = event.currentTarget.value
+							.split('\n')
+							.map((line) => line.trim())
+							.filter(Boolean);
+						if (JSON.stringify(watchPaths) !== JSON.stringify(config.build.watchPaths ?? []))
+							stage('build', { watchPaths });
+					}}
+				/>
+			</Setting>
 		</section>
 	{/if}
 
@@ -351,6 +377,7 @@
 				>{slug(service.name)}.{slug(environmentName)}.tramline.internal</code
 			>
 		</p>
+		{@render networking?.()}
 	</section>
 
 	{#if config.source}

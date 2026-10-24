@@ -1,10 +1,11 @@
-import type { Deployment } from '@tramline/contracts';
+import type { CronRun, Deployment } from '@tramline/contracts';
 import { and, desc, eq } from 'drizzle-orm';
 import { AppError, notFound } from '../api/errors';
-import { deployment, project, service } from '../db/schema';
+import { cronRun, deployment, project, service } from '../db/schema';
 import { publish } from '../events';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
+import { isCron, nextRunAt, startRun } from '../nodes/cron';
 import { systemLog } from '../nodes/logs';
 import type { DbOrTx } from '../db/client';
 import { requireInstance } from './access';
@@ -13,7 +14,7 @@ import { sourceLabel } from './staging';
 
 type DeploymentRow = typeof deployment.$inferSelect;
 
-export const toDto = (row: DeploymentRow): Deployment => ({
+export const toDto = (row: DeploymentRow, nextRunAt: Date | null = null): Deployment => ({
 	id: row.id,
 	serviceId: row.serviceId,
 	environmentId: row.environmentId,
@@ -21,6 +22,7 @@ export const toDto = (row: DeploymentRow): Deployment => ({
 	source: sourceLabel(row.config),
 	message: row.message,
 	commit: row.commit,
+	nextRunAt: nextRunAt?.toISOString() ?? null,
 	scan: row.scan ?? null,
 	createdBy: row.createdBy,
 	createdAt: row.createdAt.toISOString(),
@@ -41,7 +43,41 @@ export function list(ctx: Ctx, query: { serviceId: string; environmentId: string
 		.orderBy(desc(deployment.createdAt), desc(deployment.id))
 		.limit(50)
 		.all()
-		.map(toDto);
+		.map((row) => toDto(row, nextRunAt(ctx.db, row)));
+}
+
+/** A cron deployment's recent runs, newest first. */
+export function runs(ctx: Ctx, id: string): CronRun[] {
+	requireDeployment(ctx, id);
+	return ctx.db
+		.select()
+		.from(cronRun)
+		.where(eq(cronRun.deploymentId, id))
+		.orderBy(desc(cronRun.scheduledFor), desc(cronRun.id))
+		.limit(30)
+		.all()
+		.map((run) => ({
+			id: run.id,
+			deploymentId: run.deploymentId,
+			trigger: run.trigger,
+			status: run.status,
+			exitCode: run.exitCode,
+			scheduledFor: run.scheduledFor.toISOString(),
+			finishedAt: run.finishedAt?.toISOString() ?? null
+		}));
+}
+
+/** Starts a cron service's job now, outside its schedule. */
+export function runNow(ctx: Ctx, id: string): CronRun {
+	const { deployment: dep, projectId } = requireDeployment(ctx, id);
+	if (!isCron(dep) || !['active', 'crashed'].includes(dep.status)) {
+		throw new AppError('conflict', 'Only a live cron service can be run');
+	}
+	const run = startRun(ctx.db, ctx.settings.dataDir, dep, 'manual', new Date());
+	if (run.status === 'skipped') throw new AppError('conflict', 'A run is already going');
+	notifyNodes();
+	publish({ type: 'deployments', projectId, environmentId: dep.environmentId });
+	return runs(ctx, id).find((r) => r.id === run.id)!;
 }
 
 /** Latest deployment status per service in an environment. */
@@ -71,7 +107,8 @@ export function requireDeployment(ctx: Ctx, id: string) {
 }
 
 export function get(ctx: Ctx, id: string): Deployment {
-	return toDto(requireDeployment(ctx, id).deployment);
+	const row = requireDeployment(ctx, id).deployment;
+	return toDto(row, nextRunAt(ctx.db, row));
 }
 
 /**

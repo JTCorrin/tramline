@@ -1,18 +1,28 @@
 import {
 	DEFAULT_SERVICE_CONFIG,
 	type CreateEnvironment,
+	type DatabaseEngine,
 	type Environment,
 	type UpdateEnvironment
 } from '@tramline/contracts';
 import { asc, eq } from 'drizzle-orm';
-import { AppError } from '../api/errors';
+import { AppError, notFound } from '../api/errors';
 import type { DbOrTx } from '../db/client';
-import { environment, service, serviceInstance } from '../db/schema';
+import { environment, sealedVariable, service, serviceInstance } from '../db/schema';
 import { publish } from '../events';
 import { newId } from '../ids';
 import { requireEnvironment, requireProject } from './access';
 import type { Ctx } from './context';
-import { appliedConfig, diffConfig, effectiveConfig, getStaged, saveStaged } from './staging';
+import {
+	appliedConfig,
+	diffConfig,
+	effectiveConfig,
+	getStaged,
+	saveStaged,
+	scopeOf
+} from './staging';
+import { DATABASE_TEMPLATES } from './templates';
+import { effectiveVariables, sealedKeys } from './variables';
 
 type EnvironmentRow = typeof environment.$inferSelect;
 
@@ -49,7 +59,9 @@ export function createDefault(db: DbOrTx, projectId: string) {
 
 /**
  * Creates an environment containing every service, configured like the
- * project's first environment. Nothing runs until its changes are deployed.
+ * project's first environment, or a copy of `copyFrom` including its
+ * variables. Database services always get new credentials, so environments
+ * never share a password. Nothing runs until its changes are deployed.
  */
 export function create(ctx: Ctx, input: CreateEnvironment): Environment {
 	requireProject(ctx, input.projectId);
@@ -57,7 +69,11 @@ export function create(ctx: Ctx, input: CreateEnvironment): Environment {
 	if (existing.some((env) => env.name === input.name)) {
 		throw new AppError('conflict', `An environment named ${input.name} already exists`);
 	}
-	const template = existing[0];
+	const source = input.copyFrom ? existing.find((env) => env.id === input.copyFrom) : existing[0];
+	if (input.copyFrom && !source) throw notFound('Environment');
+	const copying = !!input.copyFrom;
+	const encrypted = (values: Record<string, string>) =>
+		Object.fromEntries(Object.entries(values).map(([k, v]) => [k, ctx.secrets.encrypt(v)]));
 
 	const created = ctx.db.transaction((tx) => {
 		const row = tx
@@ -66,28 +82,57 @@ export function create(ctx: Ctx, input: CreateEnvironment): Environment {
 			.returning()
 			.get();
 		const services = tx
-			.select({ id: service.id })
+			.select({ id: service.id, kind: service.kind, icon: service.icon })
 			.from(service)
 			.where(eq(service.projectId, input.projectId))
 			.all();
 		for (const svc of services) {
 			tx.insert(serviceInstance).values({ serviceId: svc.id, environmentId: row.id }).run();
-			const config = template
-				? effectiveConfig(
-						appliedConfig(tx, svc.id, template.id),
-						getStaged(tx, template.id, svc.id)
-					)
+			const config = source
+				? effectiveConfig(appliedConfig(tx, svc.id, source.id), getStaged(tx, source.id, svc.id))
 				: DEFAULT_SERVICE_CONFIG;
+			const template =
+				svc.kind === 'database' ? DATABASE_TEMPLATES[svc.icon as DatabaseEngine] : undefined;
+			const variables = template
+				? template.variables()
+				: copying
+					? effectiveVariables(tx, ctx.secrets, source!.id, svc.id)
+					: {};
 			saveStaged(tx, row.id, svc.id, {
 				create: true,
-				config: diffConfig(DEFAULT_SERVICE_CONFIG, config)
+				config: diffConfig(DEFAULT_SERVICE_CONFIG, config),
+				variables: { set: encrypted(variables), unset: [] }
 			});
+			if (copying && !template) copySeals(tx, source!.id, row.id, svc.id, variables);
+		}
+		if (copying) {
+			const shared = effectiveVariables(tx, ctx.secrets, source!.id, null);
+			saveStaged(tx, row.id, null, { variables: { set: encrypted(shared), unset: [] } });
+			copySeals(tx, source!.id, row.id, null, shared);
 		}
 		return row;
 	});
 
 	publish({ type: 'environments', projectId: input.projectId });
+	publish({ type: 'changes', projectId: input.projectId, environmentId: created.id });
 	return toDto(created);
+}
+
+/** Sealed values stay sealed in the copy. */
+function copySeals(
+	db: DbOrTx,
+	from: string,
+	to: string,
+	serviceId: string | null,
+	copied: Record<string, string>
+) {
+	for (const key of sealedKeys(db, from, serviceId)) {
+		if (!(key in copied)) continue;
+		db.insert(sealedVariable)
+			.values({ environmentId: to, serviceId, scope: scopeOf(serviceId), key })
+			.onConflictDoNothing()
+			.run();
+	}
 }
 
 export function update(ctx: Ctx, id: string, patch: UpdateEnvironment): Environment {

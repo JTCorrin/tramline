@@ -3,6 +3,7 @@ export * as backups from './backups';
 export * as canvas from './canvas';
 export * as changes from './changes';
 export * as deployments from './deployments';
+export * as domains from './domains';
 export * as environments from './environments';
 export * as nodes from './nodes';
 export * as organizations from './organizations';

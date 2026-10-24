@@ -1,6 +1,6 @@
 import type { Secrets } from '../crypto';
 import type { Db } from '../db/client';
-import { deployCommit, touchesRoot, trackedInstances } from '../domain/autodeploy';
+import { deployCommit, trackedInstances, wantsDeploy } from '../domain/autodeploy';
 import type { PlatformSettings } from '../settings';
 import { githubFullName } from './api';
 
@@ -41,7 +41,7 @@ export function handlePush(
 		if (githubFullName(source.repo) !== repo || source.branch !== branch) continue;
 		// webhooks and polling can both see the same commit
 		if (target.latestCommit === payload.after) continue;
-		if (complete && !touchesRoot(files, source.rootDirectory)) continue;
+		if (complete && !wantsDeploy(files, target.config)) continue;
 		const by = payload.pusher?.name ? ` by ${payload.pusher.name}` : '';
 		deployed.push(
 			deployCommit(

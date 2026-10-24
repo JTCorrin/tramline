@@ -2,7 +2,7 @@ import type { Secrets } from '../crypto';
 import type { Db } from '../db/client';
 import {
 	deployCommit,
-	touchesRoot,
+	wantsDeploy,
 	trackedInstances,
 	type TrackedInstance
 } from '../domain/autodeploy';
@@ -89,10 +89,12 @@ export async function pollRepositories(
 		const baseline = seen.get(key) ?? target.latestCommit;
 		seen.set(key, sha);
 		if (!baseline || baseline === sha) return null;
-		const root = target.config.source.rootDirectory;
-		if (root.replace(/\//g, '')) {
+		const filtered =
+			target.config.source.rootDirectory.replace(/\//g, '') ||
+			(target.config.build.watchPaths ?? []).length;
+		if (filtered) {
 			const files = await changedFiles(repo, baseline, sha, { token, fetcher });
-			if (!touchesRoot(files, root)) return null;
+			if (!wantsDeploy(files, target.config)) return null;
 		}
 		return deployCommit(
 			db,

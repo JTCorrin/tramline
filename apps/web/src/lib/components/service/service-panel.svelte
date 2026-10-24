@@ -10,6 +10,7 @@
 	import type { CanvasService, ServiceConfigPatch, ServiceConfigView } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import BackupsPanel from './backups-panel.svelte';
+	import CustomDomains from './custom-domains.svelte';
 	import DeploymentsList from './deployments-list.svelte';
 	import ServiceSettings from './service-settings.svelte';
 	import VariablesEditor from './variables-editor.svelte';
@@ -148,7 +149,16 @@
 						onstage={stage}
 						onrename={rename}
 						ondelete={remove}
-					/>
+					>
+						{#snippet networking()}
+							<CustomDomains
+								serviceId={service.id}
+								environmentId={workspace.environmentId}
+								version={workspace.version}
+								hasPort={view?.effective.networking.port !== null}
+							/>
+						{/snippet}
+					</ServiceSettings>
 				{/if}
 			</Tabs.Content>
 		</div>

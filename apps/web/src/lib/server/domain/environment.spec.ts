@@ -258,6 +258,66 @@ describe('environments', () => {
 		expect(() => environments.remove(ctx, env.id)).toThrow(/at least one environment/);
 	});
 
+	it('duplicate an environment with its variables, but new database credentials', () => {
+		const { ctx, project, env } = setup();
+		const pg = services.create(ctx, {
+			projectId: project.id,
+			kind: 'database',
+			engine: 'postgres'
+		});
+		const api = services.create(ctx, {
+			projectId: project.id,
+			kind: 'image',
+			source: { type: 'image', image: 'acme/api' }
+		});
+		services.stageConfig(ctx, api.id, env.id, { networking: { port: 3000 } });
+		variables.stage(ctx, {
+			environmentId: env.id,
+			serviceId: api.id,
+			set: { DATABASE_URL: '${{Postgres.DATABASE_URL}}', API_TOKEN: 'tok_live' },
+			unset: [],
+			seal: ['API_TOKEN']
+		});
+		variables.stage(ctx, { environmentId: env.id, set: { REGION: 'eu' }, unset: [] });
+		changes.deploy(ctx, env.id);
+
+		const staging = environments.create(ctx, {
+			projectId: project.id,
+			name: 'staging',
+			copyFrom: env.id
+		});
+		// config and variables come across, staged until the copy is deployed
+		expect(services.getConfig(ctx, api.id, staging.id).effective.networking.port).toBe(3000);
+		const copied = variables.effectiveVariables(ctx.db, testSecrets, staging.id, api.id);
+		expect(copied).toEqual({ DATABASE_URL: '${{Postgres.DATABASE_URL}}', API_TOKEN: 'tok_live' });
+		expect(variables.sealedKeys(ctx.db, staging.id, api.id)).toEqual(new Set(['API_TOKEN']));
+		expect(variables.effectiveVariables(ctx.db, testSecrets, staging.id, null)).toEqual({
+			REGION: 'eu'
+		});
+		// the copy's database gets its own password
+		const password = (environmentId: string) =>
+			variables.effectiveVariables(ctx.db, testSecrets, environmentId, pg.id).POSTGRES_PASSWORD;
+		expect(password(staging.id)).toBeTruthy();
+		expect(password(staging.id)).not.toBe(password(env.id));
+
+		expect(() =>
+			environments.create(ctx, { projectId: project.id, name: 'qa', copyFrom: 'env_missing' })
+		).toThrow('Environment not found');
+	});
+
+	it('give database services credentials in a plain new environment too', () => {
+		const { ctx, project } = setup();
+		const pg = services.create(ctx, {
+			projectId: project.id,
+			kind: 'database',
+			engine: 'postgres'
+		});
+		const preview = environments.create(ctx, { projectId: project.id, name: 'preview' });
+		expect(
+			variables.effectiveVariables(ctx.db, testSecrets, preview.id, pg.id).POSTGRES_PASSWORD
+		).toBeTruthy();
+	});
+
 	it('are isolated between organizations', () => {
 		const { ctx, project, env } = setup();
 		const other = seedCtx(ctx.db);

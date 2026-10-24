@@ -2,6 +2,7 @@ export * from './agent';
 export * from './backups';
 export * from './changes';
 export * from './deployments';
+export * from './domains';
 export * from './environments';
 export * from './errors';
 export * from './github';

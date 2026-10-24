@@ -24,6 +24,8 @@ export const Deployment = z.object({
 	message: z.string().nullable(),
 	/** The commit built, for source deployments. */
 	commit: z.string().nullable(),
+	/** For cron services: when the next run starts. */
+	nextRunAt: z.iso.datetime().nullable(),
 	/** Vulnerability scan of the image, when one ran. */
 	scan: ScanResult.nullable(),
 	createdBy: z.string().nullable(),
@@ -34,3 +36,17 @@ export const Deployment = z.object({
 export type Deployment = z.infer<typeof Deployment>;
 
 export type DeploymentQuery = { serviceId: string; environmentId: string };
+
+/** One run of a cron service. */
+export const CronRun = z.object({
+	id: z.string(),
+	deploymentId: z.string(),
+	trigger: z.enum(['schedule', 'manual']),
+	/** `skipped` when the previous run was still going. */
+	status: z.enum(['running', 'succeeded', 'failed', 'skipped']),
+	exitCode: z.number().int().nullable(),
+	scheduledFor: z.iso.datetime(),
+	finishedAt: z.iso.datetime().nullable()
+});
+
+export type CronRun = z.infer<typeof CronRun>;

@@ -9,6 +9,8 @@ export class LogShipper {
 	#followers = new Map<string, () => void>();
 	/** Last timestamp shipped per container, so re-attaching skips what was sent. */
 	#lastTs = new Map<string, string>();
+	/** Exited containers whose logs have been read to the end. */
+	#read = new Set<string>();
 	#buffer: LogLine[] = [];
 
 	constructor(
@@ -17,7 +19,11 @@ export class LogShipper {
 		private maxBatch = 1000
 	) {}
 
-	/** Attaches to new running containers and detaches from removed ones. */
+	/**
+	 * Attaches to new running containers, reads exited ones once (a short job,
+	 * like a cron run, can finish between two passes), and detaches from
+	 * removed ones.
+	 */
 	sync(containers: ManagedContainer[]) {
 		const workloads = containers.filter((c) => c.labels[LABELS.role] === 'workload');
 		const names = new Set(workloads.map((c) => c.name));
@@ -28,9 +34,14 @@ export class LogShipper {
 				this.#lastTs.delete(name);
 			}
 		}
+		for (const name of this.#read) if (!names.has(name)) this.#read.delete(name);
 		for (const container of workloads) {
-			if (container.status !== 'running' || this.#followers.has(container.name)) continue;
-			this.#attach(container);
+			if (this.#followers.has(container.name)) continue;
+			if (container.status === 'running') this.#attach(container);
+			else if (container.status === 'exited' && !this.#read.has(container.name)) {
+				this.#read.add(container.name);
+				this.#attach(container);
+			}
 		}
 	}
 

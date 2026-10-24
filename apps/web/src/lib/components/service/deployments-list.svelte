@@ -9,6 +9,7 @@
 	import type { Deployment } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import DeploymentLogs from './deployment-logs.svelte';
+	import CronRuns from './cron-runs.svelte';
 	import ScanSummary from './scan-summary.svelte';
 
 	let {
@@ -129,6 +130,9 @@
 				</div>
 				{#if open === deployment.id}
 					<div class="mt-3 space-y-3">
+						{#if deployment.nextRunAt}
+							<CronRuns {deployment} {version} />
+						{/if}
 						{#if deployment.scan?.findings.length}
 							<ScanSummary scan={deployment.scan} details />
 						{/if}

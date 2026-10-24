@@ -118,7 +118,18 @@ describe('caddyConfig', () => {
 			httpPort: 80,
 			tls: true,
 			routes: [
-				{ host: 'api.apps.example.com', upstreams: ['dep_1.tramline.internal:80'], network: 'n' }
+				{
+					host: 'api.apps.example.com',
+					upstreams: ['dep_1.tramline.internal:80'],
+					network: 'n',
+					custom: false
+				},
+				{
+					host: 'shop.example.com',
+					upstreams: ['dep_1.tramline.internal:80'],
+					network: 'n',
+					custom: true
+				}
 			]
 		}).apps.http.servers.tramline;
 		expect(server.listen).toEqual([':443']);
@@ -133,6 +144,10 @@ describe('caddyConfig', () => {
 				},
 				{ handler: 'reverse_proxy' }
 			]
+		});
+		// a user's own domain: HSTS for that host only
+		expect(server.routes[1]).toMatchObject({
+			handle: [{ response: { set: { 'Strict-Transport-Security': ['max-age=31536000'] } } }, {}]
 		});
 	});
 });

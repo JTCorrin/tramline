@@ -404,10 +404,25 @@ Database templates with generated credentials and connection variables, `${{Serv
   - **Why snapshots rather than Litestream:** they run in-process with no sidecar, and are encrypted before upload like every other backup. The trade-off is losing up to one interval (an hour by default) rather than seconds. Litestream can still come with the installer in Phase 9.
 - **Deferred:** single uploads are capped at 5 GB (S3's limit for one PUT; multipart comes later); backups of databases in images other than the templates are archives, not dumps.
 
-**4c: networking and environments**
+**4c: networking and environments** (custom domains, duplicating, cron and watch paths ✅; TCP proxy and the Postgres browser next)
 
-- Custom domains (CNAME verification, certificates), a TCP proxy for databases, duplicating an environment.
-- Cron services (deferred from Phase 2), watch paths (deferred from Phase 3b), and a "Data" tab with a table browser for Postgres.
+- **Custom domains**, in a service's Networking settings:
+  - **Ownership is proven before any traffic is routed:** a `_tramline.<domain>` TXT record must hold the domain's token. Tramline checks on demand and every few minutes for a week, and the UI shows the TXT and CNAME records to create.
+  - **No hijacking:** hostnames are unique across the install, names under the generated base domain and Tramline's own address are refused, and on a local `localhost` install no existing generated name can be claimed.
+  - **Serving:** once verified, the domain routes to the live deployment straight away and Caddy obtains its certificate. Its HSTS header covers that host only, never the domain's other subdomains (generated domains keep `includeSubDomains`).
+  - **Local development:** `.localhost` names need no proof.
+- **Duplicate an environment:** "Start from: a copy of …" brings every service's config and variables (sealed ones stay sealed) and the shared variables.
+  - Database services always get **new credentials**, so environments never share a password. This now applies to plain new environments too, which previously had none.
+  - Volumes, custom domains and generated domains are not copied.
+- **Cron services** (deferred from Phase 2): with a cron schedule (five fields or `@daily`-style, in UTC), a deployment goes live with no long-running container.
+  - At each due minute the control plane starts a one-off run container (`restart: never`) and records its exit code.
+  - A slot that comes round while a run is still going is skipped; slots missed during downtime collapse into one run; a run is failed after 24 hours.
+  - The deployment shows the next run, recent runs and **Run now**. Output goes to the deployment log, including for runs that finish between two agent passes.
+  - Invalid schedules are refused at deploy.
+- **Watch paths** (deferred from Phase 3b): gitignore-style patterns in Build settings.
+  - A push or poll deploys only if a changed file matches, in addition to the root directory.
+  - `**` crosses directories, a pattern without `/` matches at any depth, and `!` excludes, with the last match deciding.
+- **Next:** a TCP proxy for databases, and a "Data" tab with a table browser for Postgres.
 
 - **Exit:** add Postgres + an app that references `${{Postgres.DATABASE_URL}}`. The edge appears, the app connects over private networking, and data survives a redeploy. ✅ (4a)
 

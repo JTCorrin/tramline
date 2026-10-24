@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { deployment, node } from '../db/schema';
+import { cronRun, deployment, node } from '../db/schema';
 import * as changes from '../domain/changes';
 import * as deployments from '../domain/deployments';
 import * as environments from '../domain/environments';
@@ -13,6 +13,7 @@ import * as services from '../domain/services';
 import * as variables from '../domain/variables';
 import { seedCtx, testSecrets } from '../testing';
 import { buildDesiredState, containerName } from './desired';
+import { RUN_TIMEOUT_MS, runContainerName } from './cron';
 import { readLogs } from './logs';
 import { volumeFor, volumeName } from './volumes';
 import { BUILD_TIMEOUT_MS, DEPLOY_TIMEOUT_MS, reconcile, STABLE_AFTER_MS } from './reconciler';
@@ -43,6 +44,7 @@ function setup(
 		replicas?: number;
 		scan?: ScanMode;
 		mountPath?: string;
+		cron?: string;
 	} = {}
 ) {
 	const ctx = seedCtx();
@@ -57,7 +59,11 @@ function setup(
 	});
 	services.stageConfig(ctx, svc.id, env!.id, {
 		networking: { port: 80, publicDomain: options.publicDomain ?? false },
-		deploy: { healthcheckPath: options.healthcheck ?? null, replicas: options.replicas ?? 1 },
+		deploy: {
+			healthcheckPath: options.healthcheck ?? null,
+			replicas: options.replicas ?? 1,
+			cronSchedule: options.cron ?? null
+		},
 		// most tests are about deploying; scanning has its own
 		build: { scan: options.scan ?? 'off' },
 		volume: { mountPath: options.mountPath ?? null }
@@ -771,6 +777,135 @@ describe('volumes', () => {
 		recordReport(ctx.db, local.id, { revision: null, containers: [], volumes: [] });
 		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).deletedVolumes).toEqual(
 			[]
+		);
+	});
+});
+
+describe('cron services', () => {
+	const T0 = Date.UTC(2026, 9, 24, 9, 1);
+	const minute = 60_000;
+	const exited = (
+		ctx: ReturnType<typeof setup>['ctx'],
+		nodeId: string,
+		run: string,
+		exitCode: number
+	) =>
+		recordReport(ctx.db, nodeId, {
+			revision: null,
+			containers: [
+				{
+					...report('', { state: 'exited', exitCode }),
+					name: runContainerName(run),
+					deploymentId: statusOf(
+						ctx,
+						ctx.db.select().from(cronRun).where(eq(cronRun.id, run)).get()!.deploymentId
+					).id
+				}
+			]
+		});
+
+	function deployed(schedule = '*/5 * * * *') {
+		const s = setup({ cron: schedule });
+		recordHello(s.ctx.db, s.local.id, hello);
+		const [dep] = changes.deploy(s.ctx, s.env.id);
+		reconcile(s.ctx.db, s.ctx.settings, T0);
+		reconcile(s.ctx.db, s.ctx.settings, T0);
+		const runs = () =>
+			s.ctx.db
+				.select()
+				.from(cronRun)
+				.where(eq(cronRun.deploymentId, dep!.id))
+				.orderBy(cronRun.scheduledFor)
+				.all();
+		const desired = () => buildDesiredState(s.ctx.db, testSecrets, s.ctx.settings, s.local.id);
+		return { ...s, dep: dep!, runs, desired };
+	}
+
+	it('goes live with no container, and runs on its schedule', () => {
+		const { ctx, local, dep, runs, desired } = deployed();
+		ctx.db
+			.update(deployment)
+			.set({ startedAt: new Date(T0) })
+			.where(eq(deployment.id, dep.id))
+			.run();
+		expect(statusOf(ctx, dep.id).status).toBe('active');
+		expect(desired().containers).toEqual([]);
+		expect(deployments.get(ctx, dep.id).nextRunAt).not.toBeNull();
+
+		// 09:05 comes round
+		reconcile(ctx.db, ctx.settings, T0 + 4 * minute);
+		const [run] = runs();
+		expect(run).toMatchObject({ status: 'running', trigger: 'schedule' });
+		expect(run!.scheduledFor).toEqual(new Date(Date.UTC(2026, 9, 24, 9, 5)));
+		expect(desired().containers).toEqual([
+			expect.objectContaining({
+				name: runContainerName(run!.id),
+				deploymentId: dep.id,
+				restartPolicy: 'never',
+				port: null
+			})
+		]);
+
+		// the next slot finds it still going: skipped, not doubled up
+		reconcile(ctx.db, ctx.settings, T0 + 9 * minute);
+		expect(runs().map((r) => r.status)).toEqual(['running', 'skipped']);
+
+		exited(ctx, local.id, run!.id, 0);
+		reconcile(ctx.db, ctx.settings, T0 + 10 * minute);
+		expect(runs()[0]).toMatchObject({ status: 'succeeded', exitCode: 0 });
+		expect(desired().containers).toEqual([]);
+		// still live, with no container
+		expect(statusOf(ctx, dep.id).status).toBe('active');
+		expect(readLogs(ctx.settings.dataDir, dep.id).map((l) => l.line)).toContain(
+			`Run ${run!.id} finished`
+		);
+		expect(deployments.runs(ctx, dep.id)[0]).toMatchObject({ status: 'skipped' });
+	});
+
+	it('records failures, collapses missed slots after downtime, and times runs out', () => {
+		const { ctx, local, dep, runs } = deployed('0 * * * *');
+		ctx.db
+			.update(deployment)
+			.set({ startedAt: new Date(T0) })
+			.where(eq(deployment.id, dep.id))
+			.run();
+		// down for three hours: one run, for the latest slot
+		reconcile(ctx.db, ctx.settings, T0 + 3 * 60 * minute);
+		expect(runs()).toHaveLength(1);
+		expect(runs()[0]!.scheduledFor).toEqual(new Date(Date.UTC(2026, 9, 24, 12, 0)));
+		exited(ctx, local.id, runs()[0]!.id, 2);
+		reconcile(ctx.db, ctx.settings, T0 + 3 * 60 * minute + minute);
+		expect(runs()[0]).toMatchObject({ status: 'failed', exitCode: 2 });
+
+		const late = Date.now() + RUN_TIMEOUT_MS + 60 * minute;
+		reconcile(ctx.db, ctx.settings, late);
+		const stuck = runs().at(-1)!;
+		expect(stuck.status).toBe('running');
+		reconcile(ctx.db, ctx.settings, late + RUN_TIMEOUT_MS + minute);
+		expect(ctx.db.select().from(cronRun).where(eq(cronRun.id, stuck.id)).get()).toMatchObject({
+			status: 'failed',
+			error: 'Timed out'
+		});
+	});
+
+	it('runs on demand, one at a time, for live cron services only', () => {
+		const { ctx, dep } = deployed();
+		const run = deployments.runNow(ctx, dep.id);
+		expect(run).toMatchObject({ trigger: 'manual', status: 'running' });
+		expect(() => deployments.runNow(ctx, dep.id)).toThrow('A run is already going');
+
+		const plain = setup();
+		recordHello(plain.ctx.db, plain.local.id, hello);
+		const [other] = changes.deploy(plain.ctx, plain.env.id);
+		expect(() => deployments.runNow(plain.ctx, other!.id)).toThrow(
+			'Only a live cron service can be run'
+		);
+	});
+
+	it('refuses an invalid schedule at deploy', () => {
+		const { ctx, env } = setup({ cron: '61 * * * *' });
+		expect(() => changes.deploy(ctx, env.id)).toThrow(
+			"whoami's cron schedule: The minute field must be between 0 and 59"
 		);
 	});
 });

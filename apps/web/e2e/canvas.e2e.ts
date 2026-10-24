@@ -126,6 +126,20 @@ test('environments and shared variables', async ({ page }) => {
 	await expect(node(page, 'Redis')).toContainText(DEPLOYED);
 	await changesBar(page).getByRole('button', { name: 'Details' }).click();
 	await expect(page.getByText('+ REGION')).toBeVisible();
+	await page.keyboard.press('Escape');
+
+	// duplicating production brings its variables along
+	await page.getByTestId('environment-switcher').click();
+	await page.getByRole('menuitem', { name: 'New environment' }).click();
+	const dialog = page.getByRole('dialog');
+	await dialog.getByLabel('Name').fill('qa');
+	await dialog.getByRole('combobox', { name: 'Start from' }).click();
+	await page.getByRole('option', { name: 'A copy of production' }).click();
+	await expect(dialog).toContainText('Databases get new credentials');
+	await dialog.getByRole('button', { name: 'Create environment' }).click();
+	await expect(page.getByTestId('environment-switcher')).toContainText('qa');
+	await page.getByRole('button', { name: 'Shared variables' }).click();
+	await expect(page.getByRole('dialog').getByTestId('variables')).toContainText('REGION');
 });
 
 test('seal a variable so its value can never be shown again', async ({ page }) => {

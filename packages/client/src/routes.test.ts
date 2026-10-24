@@ -52,6 +52,8 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['github.manifest', (c) => c.github.manifest('acme'), 'POST /github/manifest'],
 	['github.repos', (c) => c.github.repos(), 'GET /github/repos'],
 	['github.disconnect', (c) => c.github.disconnect('42'), 'DELETE /github/installations/42'],
+	['deployments.runs', (c) => c.deployments.runs('dep_1'), 'GET /deployments/dep_1/runs'],
+	['deployments.runNow', (c) => c.deployments.runNow('dep_1'), 'POST /deployments/dep_1/runs'],
 	['backups.storage', (c) => c.backups.storage(), 'GET /backup-storage'],
 	[
 		'backups.saveStorage',
@@ -81,6 +83,18 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['backups.remove', (c) => c.backups.remove('bak_1'), 'DELETE /backups/bak_1'],
 	['backups.restore', (c) => c.backups.restore('bak_1'), 'POST /backups/bak_1/restore'],
 	['backups.verify', (c) => c.backups.verify('bak_1'), 'POST /backups/bak_1/verify'],
+	[
+		'domains.getAll',
+		(c) => c.domains.getAll({ serviceId: 's', environmentId: 'e' }),
+		'GET /domains?serviceId=s&environmentId=e'
+	],
+	[
+		'domains.create',
+		(c) => c.domains.create({ serviceId: 's', environmentId: 'e', hostname: 'app.example.com' }),
+		'POST /domains'
+	],
+	['domains.remove', (c) => c.domains.remove('dom_1'), 'DELETE /domains/dom_1'],
+	['domains.verify', (c) => c.domains.verify('dom_1'), 'POST /domains/dom_1/verify'],
 	[
 		'deployments.getAll',
 		(c) => c.deployments.getAll({ serviceId: 's', environmentId: 'e' }),

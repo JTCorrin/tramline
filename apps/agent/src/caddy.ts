@@ -17,7 +17,12 @@ export function caddyConfig(ingress: DesiredState['ingress']) {
 						{
 							handler: 'headers',
 							response: {
-								set: { 'Strict-Transport-Security': ['max-age=31536000; includeSubDomains'] }
+								set: {
+									// a user's own domain may have other subdomains that aren't on HTTPS
+									'Strict-Transport-Security': [
+										route.custom ? 'max-age=31536000' : 'max-age=31536000; includeSubDomains'
+									]
+								}
 							}
 						}
 					]

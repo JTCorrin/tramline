@@ -42,6 +42,16 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	await expect.poll(async () => (await ingress()).status, { timeout: 15_000 }).toBe(200);
 	expect((await ingress()).text).toContain('Hostname:');
 
+	// a custom domain (.localhost names need no DNS proof) routes to the same deployment
+	await panel.getByRole('tab', { name: 'Settings' }).click();
+	const domains = page.getByTestId('custom-domains');
+	await domains.getByLabel('Custom domain').fill('whoami-shop.localhost');
+	await domains.getByRole('button', { name: 'Add' }).click();
+	await expect(domains.getByTestId('custom-domain')).toContainText('Verified');
+	const custom = () => viaIngress(request, INGRESS_PORT, 'whoami-shop.localhost');
+	await expect.poll(async () => (await custom()).status, { timeout: 15_000 }).toBe(200);
+	expect((await custom()).text).toContain('Hostname:');
+
 	// logs stream into the deployments tab
 	await panel.getByRole('tab', { name: 'Deployments' }).click();
 	await expect(page.getByTestId('deployment-logs')).toContainText('Deployment is live');

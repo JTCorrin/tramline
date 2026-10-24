@@ -81,13 +81,16 @@ export function effectiveConfig(applied: ServiceConfig | null, staged: StagedPay
 
 const SECTIONS = ['build', 'deploy', 'networking', 'volume'] as const;
 
+/** Config values are primitives or lists of strings. */
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
 /** The smallest patch that turns `base` into `target`. */
 export function diffConfig(base: ServiceConfig, target: ServiceConfig): ServiceConfigPatch {
 	const patch: ServiceConfigPatch = {};
 	if (JSON.stringify(base.source) !== JSON.stringify(target.source)) patch.source = target.source;
 	for (const section of SECTIONS) {
 		const changed = Object.entries(target[section]).filter(
-			([key, value]) => (base[section] as Record<string, unknown>)[key] !== value
+			([key, value]) => !same((base[section] as Record<string, unknown>)[key], value)
 		);
 		if (changed.length) (patch as Record<string, unknown>)[section] = Object.fromEntries(changed);
 	}
@@ -96,7 +99,12 @@ export function diffConfig(base: ServiceConfig, target: ServiceConfig): ServiceC
 
 /** Human readable lines describing how `target` differs from `base`. */
 export function describeConfigChanges(base: ServiceConfig, target: ServiceConfig) {
-	const show = (value: unknown) => (value === null || value === '' ? '—' : String(value));
+	const show = (value: unknown) =>
+		value === null || value === '' || (Array.isArray(value) && !value.length)
+			? '—'
+			: Array.isArray(value)
+				? value.join(', ')
+				: String(value);
 	const lines: string[] = [];
 	if (JSON.stringify(base.source) !== JSON.stringify(target.source)) {
 		lines.push(`source: ${sourceLabel(base) ?? '—'} → ${sourceLabel(target) ?? '—'}`);
@@ -104,7 +112,7 @@ export function describeConfigChanges(base: ServiceConfig, target: ServiceConfig
 	for (const section of SECTIONS) {
 		for (const [key, value] of Object.entries(target[section])) {
 			const before = (base[section] as Record<string, unknown>)[key];
-			if (before !== value) lines.push(`${section}.${key}: ${show(before)} → ${show(value)}`);
+			if (!same(before, value)) lines.push(`${section}.${key}: ${show(before)} → ${show(value)}`);
 		}
 	}
 	return lines;

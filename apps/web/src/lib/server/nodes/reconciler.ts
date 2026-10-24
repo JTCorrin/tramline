@@ -6,6 +6,7 @@ import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
 import { isOnline, ONLINE_WINDOW_MS } from './registry';
+import { isCron, runCronSchedules } from './cron';
 import { ensureVolume, recreatePlan, volumeFor } from './volumes';
 
 /** A replica must stay up this long before a deployment without a healthcheck counts as live. */
@@ -128,9 +129,10 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 		} else apply(dep, { ...health(dep, replicas), set: pin(dep, replicas) });
 	}
 
-	if (changed.size) {
+	const runs = runCronSchedules(db, settings.dataDir, new Date(now));
+	if (changed.size || runs.length) {
 		notifyNodes();
-		announce(db, [...changed.values()]);
+		announce(db, [...changed.values(), ...runs]);
 	}
 	return [...changed.values()];
 }
@@ -255,6 +257,8 @@ function waitForPrevious(dep: DeploymentRow, now: number): Transition {
 }
 
 function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Transition {
+	// a cron service has no long-running container: it is live once its schedule is armed
+	if (isCron(dep)) return { status: 'active', message: null, log: 'Running on its schedule' };
 	const wanted = dep.config.deploy.replicas;
 	const failed = replicas.find((c) => c.state === 'error');
 	if (failed) return { status: 'failed', message: failed.error, log: `Failed: ${failed.error}` };
@@ -296,6 +300,8 @@ function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Tr
 }
 
 function health(dep: DeploymentRow, replicas: ContainerRow[]): Transition {
+	// runs come and go; how each went is recorded on the run
+	if (isCron(dep)) return { message: dep.message };
 	const running = replicas.filter((c) => c.state === 'running');
 	if (dep.status === 'active' && replicas.length && !running.length) {
 		const last = replicas[0]!;

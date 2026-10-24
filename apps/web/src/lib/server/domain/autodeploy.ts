@@ -62,6 +62,53 @@ export function trackedInstances(db: Db): TrackedInstance[] {
 	});
 }
 
+/** A gitignore-style pattern as a regular expression over repository paths. */
+function globRegex(pattern: string) {
+	let glob = pattern.replace(/^\/+/, '');
+	// like .gitignore, a pattern without a slash matches at any depth
+	if (!pattern.includes('/') || pattern.endsWith('/')) glob = `**/${glob}`;
+	if (glob.endsWith('/')) glob += '**';
+	let source = '';
+	for (let i = 0; i < glob.length; i++) {
+		const c = glob[i]!;
+		if (glob.startsWith('**/', i)) {
+			source += '(?:.*/)?';
+			i += 2;
+		} else if (glob.startsWith('**', i)) {
+			source += '.*';
+			i += 1;
+		} else if (c === '*') source += '[^/]*';
+		else if (c === '?') source += '[^/]';
+		else source += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+	}
+	return new RegExp(`^${source}(?:/.*)?$`);
+}
+
+/**
+ * Whether any changed file matches the watch paths. Patterns apply in order
+ * and the last one matching a file decides, so `!` excludes (e.g. `src/**`
+ * then `!**\/*.md`). No patterns means every change counts.
+ */
+export function touchesWatchPaths(files: string[], patterns: string[]) {
+	if (!patterns.length) return true;
+	const rules = patterns.map((p) =>
+		p.startsWith('!')
+			? { include: false, re: globRegex(p.slice(1)) }
+			: { include: true, re: globRegex(p) }
+	);
+	return files.some((file) => {
+		let included = false;
+		for (const rule of rules) if (rule.re.test(file)) included = rule.include;
+		return included;
+	});
+}
+
+/** Whether a push touching `files` should deploy the service. */
+export const wantsDeploy = (files: string[], config: ServiceConfig) =>
+	config.source?.type === 'repo' &&
+	touchesRoot(files, config.source.rootDirectory) &&
+	touchesWatchPaths(files, config.build.watchPaths ?? []);
+
 /** Whether any changed file is inside the service's root directory. */
 export function touchesRoot(files: string[], rootDirectory: string) {
 	const root = rootDirectory.replace(/^\/+|\/+$/g, '');

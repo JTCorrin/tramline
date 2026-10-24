@@ -368,6 +368,7 @@ function deployedRepo(
 		installationId?: string | null;
 		autoDeploy?: boolean;
 		commit?: string | null;
+		watchPaths?: string[];
 	} = {}
 ) {
 	const ctx = seedApp();
@@ -391,6 +392,9 @@ function deployedRepo(
 		set: { MODE: 'live' },
 		unset: []
 	});
+	if (options.watchPaths) {
+		services.stageConfig(ctx, svc.id, env!.id, { build: { watchPaths: options.watchPaths } });
+	}
 	const [first] = changes.deploy(ctx, env!.id);
 	if (options.commit !== null) {
 		ctx.db
@@ -465,6 +469,15 @@ describe('deploy on push', () => {
 				push({ commits: [{ added: ['services/api/app.js'] }] })
 			)
 		).toHaveLength(1);
+	});
+
+	it('deploys only pushes that touch the watch paths', () => {
+		const { ctx } = deployedRepo({ watchPaths: ['src/**', '!**/*.md'] });
+		const pushOf = (...files: string[]) =>
+			handlePush(ctx.db, testSecrets, testSettings, push({ commits: [{ modified: files }] }));
+		expect(pushOf('docs/guide.md', 'README.md')).toEqual([]);
+		expect(pushOf('src/notes.md')).toEqual([]);
+		expect(pushOf('src/app.ts')).toHaveLength(1);
 	});
 
 	it('respects deploy on push being turned off', () => {

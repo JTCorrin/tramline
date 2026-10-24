@@ -188,3 +188,46 @@ export const volume = sqliteTable(
 	},
 	(table) => [uniqueIndex('volume_instance_idx').on(table.serviceId, table.environmentId)]
 );
+
+/**
+ * A user's own domain for a service in one environment. Hostnames are unique
+ * across the install, and traffic is only routed once a TXT record proves
+ * ownership, so nobody can claim a domain they don't control.
+ */
+export const customDomain = sqliteTable('custom_domain', {
+	id: text('id').primaryKey(),
+	serviceId: text('service_id')
+		.notNull()
+		.references(() => service.id, { onDelete: 'cascade' }),
+	environmentId: text('environment_id')
+		.notNull()
+		.references(() => environment.id, { onDelete: 'cascade' }),
+	hostname: text('hostname').notNull().unique(),
+	/** Expected in the `_tramline.<hostname>` TXT record. */
+	token: text('token').notNull(),
+	status: text('status', { enum: ['pending', 'verified'] }).notNull(),
+	error: text('error'),
+	checkedAt: integer('checked_at', { mode: 'timestamp_ms' }),
+	verifiedAt: integer('verified_at', { mode: 'timestamp_ms' }),
+	...timestamps
+});
+
+/** One run of a cron service's deployment: a container started on schedule that runs to completion. */
+export const cronRun = sqliteTable(
+	'cron_run',
+	{
+		id: text('id').primaryKey(),
+		deploymentId: text('deployment_id')
+			.notNull()
+			.references(() => deployment.id, { onDelete: 'cascade' }),
+		trigger: text('trigger', { enum: ['schedule', 'manual'] }).notNull(),
+		status: text('status', { enum: ['running', 'succeeded', 'failed', 'skipped'] }).notNull(),
+		exitCode: integer('exit_code'),
+		error: text('error'),
+		/** The schedule's minute this run belongs to. */
+		scheduledFor: integer('scheduled_for', { mode: 'timestamp_ms' }).notNull(),
+		finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
+		...timestamps
+	},
+	(table) => [index('cron_run_deployment_idx').on(table.deploymentId)]
+);
