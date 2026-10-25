@@ -131,7 +131,8 @@ export class DockerRuntime implements ContainerRuntime {
 
 	async remove(name: string) {
 		try {
-			await this.docker.getContainer(name).remove({ force: true });
+			// v: also the anonymous volumes an image declares (redis:7's /data); named ones stay
+			await this.docker.getContainer(name).remove({ force: true, v: true });
 		} catch (error) {
 			if (statusCode(error) !== 404) throw error;
 		}

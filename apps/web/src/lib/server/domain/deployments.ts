@@ -119,6 +119,17 @@ export function get(ctx: Ctx, id: string): Deployment {
  */
 export function redeploy(ctx: Ctx, id: string): Deployment {
 	const { deployment: source, projectId } = requireDeployment(ctx, id);
+	// snapshots from before volumes existed take the service's volume, so a
+	// database never goes back to keeping its data in the container
+	const config =
+		source.config.volume === undefined
+			? {
+					...source.config,
+					volume: appliedConfig(ctx.db, source.serviceId, source.environmentId)?.volume ?? {
+						mountPath: null
+					}
+				}
+			: source.config;
 	const row = ctx.db
 		.insert(deployment)
 		.values({
@@ -126,7 +137,7 @@ export function redeploy(ctx: Ctx, id: string): Deployment {
 			serviceId: source.serviceId,
 			environmentId: source.environmentId,
 			status: 'queued',
-			config: source.config,
+			config,
 			variables: source.variables,
 			// the exact image again: the built one, or the digest the original pulled
 			image: source.image ?? source.resolvedImage,
