@@ -2,6 +2,7 @@ import {
 	DesiredState,
 	type AgentHello,
 	type AgentReportInput,
+	type QueryResult,
 	type LogLine
 } from '@tramline/contracts';
 
@@ -57,6 +58,14 @@ export class ControlPlane {
 		const response = await this.#request(`/desired${query}`, { signal });
 		// parsed, so fields a slightly older control plane leaves out get their defaults
 		return response.status === 204 ? null : DesiredState.parse(await response.json());
+	}
+
+	/** Answers a data browser query. */
+	async answer(id: string, result: QueryResult) {
+		await this.#request(`/queries/${encodeURIComponent(id)}`, {
+			method: 'POST',
+			body: JSON.stringify(result)
+		});
 	}
 
 	async report(report: AgentReportInput) {

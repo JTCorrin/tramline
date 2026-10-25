@@ -20,6 +20,7 @@ Tramline is pre-1.0. Only the latest `main` receives security fixes.
 - **The control plane's database:** with `TRAMLINE_BACKUP_S3_*` set, it is snapshotted hourly, encrypted with a key derived from `TRAMLINE_SECRET_KEY` before upload, and drilled daily.
 - **GitHub:** Tramline's GitHub App asks only for read access to repository contents and metadata. Its private key and webhook secret are encrypted at rest, installation tokens live for an hour and are never stored, and push webhooks are verified with HMAC in constant time.
 - **Custom domains:** traffic is routed only after a TXT record proves the domain is yours, hostnames are unique across the install, and generated names can't be claimed. HSTS on a custom domain covers that host only.
+- **Data browser:** read-only by construction: the control plane builds every query, each runs in a `READ ONLY` transaction with a statement timeout inside the database container, and table names are checked against the database's own list.
 - **Agents:** they connect outbound with per-node tokens (stored hashed), may only write logs for their own deployments, and need no inbound control port.
 - **Web app:** a nonce-based Content Security Policy with no inline or eval scripts, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, HSTS over HTTPS, rate-limited sign-in, and organization scoping on every query.
 - **Ingress:** HTTPS with automatic certificates and HSTS on real domains. Caddy's admin API is never exposed.

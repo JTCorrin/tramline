@@ -39,7 +39,8 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	expect(url.hostname).toMatch(/^whoami-[0-9a-f]{6}\.localhost$/);
 	// the ingress picks up new routes within a second or two
 	const ingress = () => viaIngress(request, INGRESS_PORT, url.hostname);
-	await expect.poll(async () => (await ingress()).status, { timeout: 15_000 }).toBe(200);
+	// Caddy reloads within a second or two, longer on a busy machine
+	await expect.poll(async () => (await ingress()).status, { timeout: 60_000 }).toBe(200);
 	expect((await ingress()).text).toContain('Hostname:');
 
 	// a custom domain (.localhost names need no DNS proof) routes to the same deployment

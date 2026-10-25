@@ -186,3 +186,23 @@ export const UpdateService = z
 	.partial();
 
 export type UpdateService = z.infer<typeof UpdateService>;
+
+/** A table (or view) in the Postgres data browser. */
+export const DataTable = z.object({
+	schema: z.string(),
+	name: z.string(),
+	/** Postgres's estimate, from the last ANALYZE; -1 when unknown. */
+	estimate: z.number().int()
+});
+
+export type DataTable = z.infer<typeof DataTable>;
+
+/** One page of a table's rows. Long values are cut short. */
+export const DataRows = z.object({
+	columns: z.array(z.string()),
+	rows: z.array(z.record(z.string(), z.unknown())),
+	offset: z.number().int(),
+	hasMore: z.boolean()
+});
+
+export type DataRows = z.infer<typeof DataRows>;

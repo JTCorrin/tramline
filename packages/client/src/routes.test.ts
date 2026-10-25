@@ -93,6 +93,16 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.domains.create({ serviceId: 's', environmentId: 'e', hostname: 'app.example.com' }),
 		'POST /domains'
 	],
+	[
+		'data.tables',
+		(c) => c.data.tables({ serviceId: 's', environmentId: 'e' }),
+		'GET /data/tables?serviceId=s&environmentId=e'
+	],
+	[
+		'data.rows',
+		(c) => c.data.rows({ serviceId: 's', environmentId: 'e', schema: 'public', table: 'notes' }),
+		'GET /data/rows?serviceId=s&environmentId=e&schema=public&table=notes&offset=0'
+	],
 	['domains.remove', (c) => c.domains.remove('dom_1'), 'DELETE /domains/dom_1'],
 	['domains.verify', (c) => c.domains.verify('dom_1'), 'POST /domains/dom_1/verify'],
 	[

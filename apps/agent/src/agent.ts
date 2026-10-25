@@ -8,6 +8,7 @@ import {
 import os from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Backups } from './backups';
+import { runQuery } from './query';
 import { Builder } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
@@ -18,7 +19,8 @@ import { observe } from './state';
 
 export interface AgentOptions {
 	runtime: ContainerRuntime;
-	client: Pick<ControlPlane, 'hello' | 'desired' | 'report' | 'logs'>;
+	client: Pick<ControlPlane, 'hello' | 'desired' | 'report' | 'logs'> &
+		Partial<Pick<ControlPlane, 'answer'>>;
 	stateDir: string;
 	version: string;
 	reportIntervalMs?: number;
@@ -64,6 +66,8 @@ export class Agent {
 	 */
 	#queues = { build: Promise.resolve(), scan: Promise.resolve(), data: Promise.resolve() };
 
+	/** Data browser queries already answered (or being answered), until the control plane drops them. */
+	#queries = new Set<string>();
 	#abort = new AbortController();
 	#lastHeal = 0;
 	#log: (message: string) => void;
@@ -192,6 +196,7 @@ export class Agent {
 		this.desired = next;
 		if (!this.dockerError) {
 			this.#startBuilds(next);
+			this.#answerQueries(next);
 			await this.converger.run(next);
 			this.#lastHeal = Date.now();
 		}
@@ -274,6 +279,19 @@ export class Agent {
 				this.#log(`${kind} ${job.id} ${result.state}${result.error ? `: ${result.error}` : ''}`);
 				reports.set(job.id, result);
 			});
+		}
+	}
+
+	/** Runs new data browser queries straight away; they are small and read-only. */
+	#answerQueries(desired: DesiredState) {
+		const wanted = new Set(desired.queries.map((q) => q.id));
+		for (const id of this.#queries) if (!wanted.has(id)) this.#queries.delete(id);
+		for (const query of desired.queries) {
+			if (this.#queries.has(query.id)) continue;
+			this.#queries.add(query.id);
+			void runQuery(this.options.runtime, query)
+				.then((result) => this.options.client.answer?.(query.id, result))
+				.catch((error) => this.#log(`query ${query.id}: ${errorMessage(error)}`));
 		}
 	}
 

@@ -14,6 +14,7 @@ import type { DbOrTx } from '../db/client';
 import { container, deployment, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
+import { pendingQueries } from './queries';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
 export {
@@ -211,6 +212,7 @@ export function buildDesiredState(
 		scans,
 		deletedVolumes: deletedVolumes(db, nodeId),
 		...backupJobs(db, nodeId),
+		queries: pendingQueries(nodeId),
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

@@ -11,6 +11,7 @@
 	import { toast } from 'svelte-sonner';
 	import BackupsPanel from './backups-panel.svelte';
 	import CustomDomains from './custom-domains.svelte';
+	import DataBrowser from './data-browser.svelte';
 	import DeploymentsList from './deployments-list.svelte';
 	import ServiceSettings from './service-settings.svelte';
 	import VariablesEditor from './variables-editor.svelte';
@@ -105,6 +106,9 @@
 		<Tabs.List class="mx-4 mt-3">
 			<Tabs.Trigger value="deployments">Deployments</Tabs.Trigger>
 			<Tabs.Trigger value="variables">Variables</Tabs.Trigger>
+			{#if service.kind === 'database' && service.icon === 'postgres'}
+				<Tabs.Trigger value="data">Data</Tabs.Trigger>
+			{/if}
 			{#if service.volumeMountPath}
 				<Tabs.Trigger value="backups">Backups</Tabs.Trigger>
 			{/if}
@@ -127,6 +131,12 @@
 					version={workspace.version}
 					{suggestions}
 				/>
+			</Tabs.Content>
+			<Tabs.Content value="data" class="p-4">
+				<!-- mounted only while open, so it reads the database fresh each time -->
+				{#if tab === 'data'}
+					<DataBrowser serviceId={service.id} environmentId={workspace.environmentId} />
+				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="backups" class="p-4">
 				<BackupsPanel

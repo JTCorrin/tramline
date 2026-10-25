@@ -203,6 +203,7 @@ export function desiredState(
 		backups: [],
 		restores: [],
 		drills: [],
+		queries: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

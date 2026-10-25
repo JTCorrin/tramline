@@ -74,16 +74,25 @@ test('back up Postgres to the bucket, encrypted, and restore it', async ({ page 
 
 	const env = await currentEnvironment(page);
 	const psql = (sql: string) => execIn(env, 'postgres:17', `psql -U postgres -d app -tAc "${sql}"`);
+	// a fresh database initialises before it accepts connections
 	await expect
-		.poll(() => {
-			try {
-				return psql('select 1');
-			} catch {
-				return 'not ready';
-			}
-		})
+		.poll(
+			() => {
+				try {
+					return psql('select 1');
+				} catch {
+					return 'not ready';
+				}
+			},
+			{ timeout: 60_000 }
+		)
 		.toBe('1');
 	psql("create table notes (body text); insert into notes values ('before the backup')");
+
+	// the read-only Data tab shows what's in the database
+	await page.getByTestId('service-panel').getByRole('tab', { name: 'Data' }).click();
+	await page.getByTestId('data-tables').getByRole('button', { name: /notes/ }).click();
+	await expect(page.getByTestId('data-rows')).toContainText('before the backup');
 
 	await backUpAndRestore(page, () =>
 		psql(

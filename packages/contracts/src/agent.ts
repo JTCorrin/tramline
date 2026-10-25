@@ -143,6 +143,27 @@ export const DesiredDrill = z.object({
 
 export type DesiredDrill = z.infer<typeof DesiredDrill>;
 
+/**
+ * A read-only query for the data browser: the agent runs `sql` with psql
+ * inside the database container (in a READ ONLY transaction with a statement
+ * timeout) and posts the JSON result to `/api/agent/v1/queries/:id`.
+ */
+export const DesiredQuery = z.object({
+	id: z.string(),
+	container: z.string(),
+	/** Built by the control plane; it returns one JSON value. */
+	sql: z.string()
+});
+
+export type DesiredQuery = z.infer<typeof DesiredQuery>;
+
+export const QueryResult = z.discriminatedUnion('ok', [
+	z.object({ ok: z.literal(true), json: z.string() }),
+	z.object({ ok: z.literal(false), error: z.string() })
+]);
+
+export type QueryResult = z.infer<typeof QueryResult>;
+
 export const IngressRoute = z.object({
 	host: z.string(),
 	/** `alias:port` reachable on one of the environment networks. */
@@ -166,6 +187,7 @@ export const DesiredState = z.object({
 	backups: z.array(DesiredBackup).default([]),
 	restores: z.array(DesiredRestore).default([]),
 	drills: z.array(DesiredDrill).default([]),
+	queries: z.array(DesiredQuery).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */

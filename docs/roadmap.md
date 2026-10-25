@@ -252,7 +252,7 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
 - **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
 - **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
-- **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view.
+- **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view, and the database TCP proxy (opt-in, TLS enforced by the database, IP allowlist in the host firewall).
 - **Phase 7:** provider firewalls and security groups, no public SSH by default on cloud nodes.
 
 ## Phases
@@ -404,7 +404,7 @@ Database templates with generated credentials and connection variables, `${{Serv
   - **Why snapshots rather than Litestream:** they run in-process with no sidecar, and are encrypted before upload like every other backup. The trade-off is losing up to one interval (an hour by default) rather than seconds. Litestream can still come with the installer in Phase 9.
 - **Deferred:** single uploads are capped at 5 GB (S3's limit for one PUT; multipart comes later); backups of databases in images other than the templates are archives, not dumps.
 
-**4c: networking and environments** (custom domains, duplicating, cron and watch paths ✅; TCP proxy and the Postgres browser next)
+**4c: networking and environments ✅** (the TCP proxy moves to Phase 6)
 
 - **Custom domains**, in a service's Networking settings:
   - **Ownership is proven before any traffic is routed:** a `_tramline.<domain>` TXT record must hold the domain's token. Tramline checks on demand and every few minutes for a week, and the UI shows the TXT and CNAME records to create.
@@ -422,7 +422,10 @@ Database templates with generated credentials and connection variables, `${{Serv
 - **Watch paths** (deferred from Phase 3b): gitignore-style patterns in Build settings.
   - A push or poll deploys only if a changed file matches, in addition to the root directory.
   - `**` crosses directories, a pattern without `/` matches at any depth, and `!` excludes, with the last match deciding.
-- **Next:** a TCP proxy for databases, and a "Data" tab with a table browser for Postgres.
+- **Postgres data browser:** a read-only "Data" tab on Postgres services lists tables and pages through rows, 50 at a time.
+  - **How it runs:** the control plane builds the SQL and hands it to the node as a query job. It travels in memory only, alongside the desired state, and is never stored. The agent runs it with `psql` inside the database container, with the SQL passed in the environment.
+  - **Safety:** every query is a `READ ONLY` transaction with a 5 s statement timeout. Table names must match the database's own list and are quoted, and long values are cut short.
+- **TCP proxy → Phase 6:** the agreed design is TLS enforced by the database itself (Postgres and MySQL negotiate TLS inside their protocols, so a TLS-terminating proxy doesn't work with standard clients), plus an IP allowlist. Building that properly needs two things Tramline doesn't have yet: a fixed source address for proxied connections, so the database can require TLS from them without breaking internal apps; and a host firewall that sees real client IPs (Docker's port publishing can rewrite them). Both arrive with Phase 6's node hardening.
 
 - **Exit:** add Postgres + an app that references `${{Postgres.DATABASE_URL}}`. The edge appears, the app connects over private networking, and data survives a redeploy. ✅ (4a)
 
