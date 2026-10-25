@@ -41,7 +41,9 @@ export function toRunSpec(container: DesiredContainer, nodeId: string): RunSpec 
 			capabilities: WORKLOAD_CAPABILITIES,
 			pidsLimit: WORKLOAD_PIDS_LIMIT,
 			memoryMb: container.memoryMb,
-			readOnlyRootFilesystem: container.readOnlyRootFilesystem
+			readOnlyRootFilesystem: container.readOnlyRootFilesystem,
+			// not part of the spec hash, so running containers keep going until their next deploy
+			init: true
 		},
 		aliases: container.aliases,
 		restart:

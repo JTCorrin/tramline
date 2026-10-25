@@ -1,8 +1,5 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ingressName } from './caddy';
+import { INGRESS_CONFIG_PATH, ingressName } from './caddy';
 import { Converger } from './converge';
 import { LABELS } from './runtime';
 import { desiredContainer, desiredState, FakeRuntime } from './testing';
@@ -11,15 +8,24 @@ const INGRESS_NAME = ingressName('node_1');
 
 function setup() {
 	const runtime = new FakeRuntime();
-	const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
 	const clock = { now: 1_000_000 };
-	const converger = new Converger(runtime, { stateDir, nodeId: 'node_1', now: () => clock.now });
-	return { runtime, stateDir, converger, clock };
+	const logs: string[] = [];
+	const converger = new Converger(runtime, {
+		nodeId: 'node_1',
+		now: () => clock.now,
+		log: (line) => logs.push(line)
+	});
+	/** The Caddy config the agent last pushed into the ingress. */
+	const routes = (node = 'node_1') => {
+		const file = runtime.files.get(`${ingressName(node)}:${INGRESS_CONFIG_PATH}`);
+		return file ? JSON.parse(file.toString()) : null;
+	};
+	return { runtime, converger, clock, routes, logs };
 }
 
 describe('Converger', () => {
 	it('creates networks, pulls images and starts containers and the ingress', async () => {
-		const { runtime, converger, stateDir } = setup();
+		const { runtime, converger, routes } = setup();
 		const route = {
 			host: 'whoami-abc.localhost',
 			upstreams: ['dep_1.tramline.internal:80'],
@@ -33,12 +39,14 @@ describe('Converger', () => {
 
 		const ingress = runtime.containers.get(INGRESS_NAME)!;
 		expect(ingress.spec.ports).toEqual([{ container: 80, host: 8080 }]);
-		expect(ingress.spec.binds?.[0]).toMatch(/caddy:\/etc\/tramline:ro$/);
+		// no host files are shared with the ingress: routes are pushed into it and reloaded
+		expect(ingress.spec.binds).toBeUndefined();
+		expect(ingress.spec.cmd).toEqual(['caddy', 'run', '--resume']);
 		expect(ingress.spec.security.capabilities).toEqual(['NET_BIND_SERVICE']);
-		const config = JSON.parse(readFileSync(path.join(stateDir, 'caddy', 'caddy.json'), 'utf8'));
-		expect(config.apps.http.servers.tramline.routes[0].match[0].host).toEqual([
+		expect(routes().apps.http.servers.tramline.routes[0].match[0].host).toEqual([
 			'whoami-abc.localhost'
 		]);
+		expect(runtime.calls).toContain(`exec ${INGRESS_NAME} ${INGRESS_CONFIG_PATH}`);
 	});
 
 	it('is idempotent', async () => {
@@ -96,9 +104,9 @@ describe('Converger', () => {
 	});
 
 	it("never touches another node's containers", async () => {
-		const { runtime, stateDir } = setup();
-		const other = new Converger(runtime, { stateDir, nodeId: 'node_2', drainMs: 0 });
-		const mine = new Converger(runtime, { stateDir, nodeId: 'node_1', drainMs: 0 });
+		const { runtime } = setup();
+		const other = new Converger(runtime, { nodeId: 'node_2', drainMs: 0 });
+		const mine = new Converger(runtime, { nodeId: 'node_1', drainMs: 0 });
 		await other.run(
 			desiredState([desiredContainer({ name: 'tl-dep_9-0', deploymentId: 'dep_9' })])
 		);
@@ -110,7 +118,7 @@ describe('Converger', () => {
 	});
 
 	it('drops routes when the last deployment goes away', async () => {
-		const { converger, stateDir } = setup();
+		const { converger, routes } = setup();
 		const route = {
 			host: 'a.localhost',
 			upstreams: ['dep_1.tramline.internal:80'],
@@ -118,12 +126,11 @@ describe('Converger', () => {
 		};
 		await converger.run(desiredState(undefined, [route]));
 		await converger.run(desiredState([], []));
-		const config = JSON.parse(readFileSync(path.join(stateDir, 'caddy', 'caddy.json'), 'utf8'));
-		expect(config.apps.http.servers.tramline.routes).toHaveLength(1); // only the 404 fallback
+		expect(routes().apps.http.servers.tramline.routes).toHaveLength(1); // only the 404 fallback
 	});
 
 	it('refuses to run before it knows its node', async () => {
-		const converger = new Converger(new FakeRuntime(), { stateDir: tmpdir() });
+		const converger = new Converger(new FakeRuntime(), {});
 		await expect(converger.run(desiredState())).rejects.toThrow('nodeId is not known yet');
 	});
 
@@ -231,5 +238,82 @@ describe('Converger', () => {
 		clock.now += 60_000;
 		await converger.run(desiredState([]));
 		expect(runtime.calls).toContain('stop tl-dep_1-0 10');
+	});
+
+	it('publishes routes straight away, even while another container’s image is still pulling', async () => {
+		const { runtime, converger, routes } = setup();
+		const live = desiredContainer({ name: 'tl-dep_1-0', deploymentId: 'dep_1' });
+		await converger.run(desiredState([live]));
+
+		// a second service's image takes a long time to pull
+		let finishPull = () => {};
+		const pulling = new Promise<void>((resolve) => (finishPull = resolve));
+		const pull = runtime.pull.bind(runtime);
+		runtime.pull = async (image) => {
+			if (image === 'postgres:17') await pulling;
+			return pull(image);
+		};
+		const slow = desiredContainer({
+			name: 'tl-dep_2-0',
+			deploymentId: 'dep_2',
+			image: 'postgres:17'
+		});
+		const first = converger.run(desiredState([live, slow]));
+
+		// meanwhile dep_1 goes live and gets a public route
+		const route = {
+			host: 'whoami-abc.localhost',
+			upstreams: ['dep_1.tramline.internal:80'],
+			network: 'tl-env_1'
+		};
+		const second = converger.run(desiredState([live, slow], [route]));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(JSON.stringify(routes())).toContain('whoami-abc.localhost');
+
+		finishPull();
+		await Promise.all([first, second]);
+		expect(runtime.containers.has('tl-dep_2-0')).toBe(true);
+	});
+
+	it('retries routes the ingress refused, and pushes them again to a new ingress', async () => {
+		const { runtime, converger, routes, logs } = setup();
+		const route = {
+			host: 'a.localhost',
+			upstreams: ['dep_1.tramline.internal:80'],
+			network: 'tl-env_1'
+		};
+		runtime.execExit = 1;
+		await converger.run(desiredState(undefined, [route]));
+		expect(logs.some((line) => line.startsWith('the ingress refused its routes'))).toBe(true);
+
+		// accepted on the next pass, and not pushed again while nothing changes
+		runtime.execExit = 0;
+		await converger.run(desiredState(undefined, [route]));
+		const reloads = () =>
+			runtime.calls.filter((c) => c === `exec ${INGRESS_NAME} ${INGRESS_CONFIG_PATH}`).length;
+		const before = reloads();
+		await converger.run(desiredState(undefined, [route]));
+		expect(reloads()).toBe(before);
+
+		// the ingress was removed (e.g. by hand): it is recreated and gets its routes again
+		await runtime.remove(INGRESS_NAME);
+		runtime.files.clear();
+		await converger.run(desiredState(undefined, [route]));
+		expect(routes().apps.http.servers.tramline.routes[0].match[0].host).toEqual(['a.localhost']);
+	});
+
+	it('logs a failure to reach the ingress and carries on', async () => {
+		const { runtime, converger, logs } = setup();
+		await converger.run(desiredState());
+		runtime.putFile = async () => {
+			throw new Error('no such container');
+		};
+		const route = {
+			host: 'b.localhost',
+			upstreams: ['dep_1.tramline.internal:80'],
+			network: 'tl-env_1'
+		};
+		await converger.run(desiredState(undefined, [route]));
+		expect(logs).toContain('updating the ingress failed: no such container');
 	});
 });

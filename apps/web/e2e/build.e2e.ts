@@ -45,8 +45,8 @@ test('build a GitHub repository from source, serve it, and redeploy without rebu
 
 	const url = new URL(await page.getByTestId('service-url').innerText());
 	const ingress = () => viaIngress(request, INGRESS_PORT, url.hostname);
-	// Caddy reloads within a second or two, longer on a busy machine
-	await expect.poll(async () => (await ingress()).status, { timeout: 60_000 }).toBe(200);
+	// routes go out as soon as the deployment is live; Caddy reloads within a second or two
+	await expect.poll(async () => (await ingress()).status, { timeout: 15_000 }).toBe(200);
 	expect((await ingress()).text).toContain('Node.js Getting Started');
 
 	await panel.getByRole('tab', { name: 'Deployments' }).click();

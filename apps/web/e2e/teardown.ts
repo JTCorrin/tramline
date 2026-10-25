@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const AGENT_HEALTH_PORT = '7172';
@@ -47,8 +47,26 @@ export default function teardown() {
 	stopAgent();
 
 	const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8' }).trim();
+	// keep the ingress's own account of the run: route reloads and errors explain most 404s
+	try {
+		// Caddy logs to stderr
+		const logs = execFileSync('sh', ['-c', `docker logs tramline-ingress-${node.id} 2>&1`], {
+			encoding: 'utf8'
+		});
+		mkdirSync(path.resolve(import.meta.dirname, '../test-results'), { recursive: true });
+		writeFileSync(path.resolve(import.meta.dirname, '../test-results/ingress.log'), logs);
+	} catch {
+		// no ingress this run
+	}
 	const containers = docker('ps', '-aq', '--filter', `label=tramline.node=${node.id}`);
-	if (containers) docker('rm', '-f', ...containers.split('\n'));
+	// one at a time: a container Docker can't kill (e.g. a zombie PID 1) mustn't stop the rest
+	for (const id of containers.split('\n').filter(Boolean)) {
+		try {
+			execFileSync('docker', ['rm', '-f', id], { stdio: 'ignore' });
+		} catch {
+			console.warn(`[teardown] could not remove container ${id}`);
+		}
+	}
 	// the builder's cache volume and the images built for this run's services
 	try {
 		execFileSync('docker', ['volume', 'rm', '-f', `tramline-buildkit-${node.id}`], {

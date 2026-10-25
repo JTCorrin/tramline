@@ -60,7 +60,9 @@ describe('workload hardening', () => {
 			],
 			pidsLimit: 1024,
 			memoryMb: 512,
-			readOnlyRootFilesystem: true
+			readOnlyRootFilesystem: true,
+			// an init forwards stop signals and reaps zombies
+			init: true
 		});
 		expect(spec.security.capabilities).not.toContain('NET_RAW');
 		expect(spec.binds).toBeUndefined();

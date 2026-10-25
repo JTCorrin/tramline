@@ -40,7 +40,7 @@ export default defineConfig({
 		{
 			// fresh database and data directory per run so tests never depend on leftover state
 			command:
-				'rm -rf data/e2e data/e2e.db* data/e2e-agent/caddy && pnpm build && pnpm preview --port 4173 --strictPort',
+				'rm -rf data/e2e data/e2e.db* && pnpm build && pnpm preview --port 4173 --strictPort',
 			port: 4173,
 			reuseExistingServer: false,
 			env: {

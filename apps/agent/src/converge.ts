@@ -1,13 +1,9 @@
 import type { DesiredState } from '@tramline/contracts';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
 import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
 import { hash, toRunSpec } from './spec';
 
 export interface ConvergeOptions {
-	/** Host directory for agent state; the ingress config is written under it. */
-	stateDir: string;
 	/** Usually learned from the control plane at hello; required before the first run. */
 	nodeId?: string;
 	/**
@@ -20,6 +16,8 @@ export interface ConvergeOptions {
 }
 
 export const DEFAULT_DRAIN_MS = 10_000;
+
+const quiet = () => {};
 
 /** How long a workload gets to shut down after SIGTERM; more for ones with data on a volume. */
 export const STOP_TIMEOUT_SECONDS = 10;
@@ -46,6 +44,12 @@ export class Converger {
 	#latest: DesiredState | null = null;
 	/** When each no-longer-desired container was first seen, for draining. */
 	#leaving = new Map<string, number>();
+	/** Route updates for the ingress, one at a time. */
+	#routes: Promise<void> = Promise.resolve();
+	/** The Caddy config the ingress last accepted. */
+	#applied: string | null = null;
+	/** Whether the ingress container has been seen or started, so routes can be pushed to it. */
+	#ingressUp = false;
 
 	constructor(
 		private runtime: ContainerRuntime,
@@ -84,6 +88,10 @@ export class Converger {
 	/** Converges to `desired`; overlapping calls coalesce into one follow-up run. */
 	async run(desired: DesiredState): Promise<void> {
 		this.#latest = desired;
+		// Routes only ever point at live deployments, whose containers already run, so
+		// they can go out at once. Waiting for the pass in progress would hold a new
+		// route back for as long as another service's image takes to pull.
+		void this.#publishRoutes(desired);
 		if (this.#running) {
 			this.#again = true;
 			return this.#running;
@@ -102,7 +110,7 @@ export class Converger {
 	}
 
 	async #converge(desired: DesiredState) {
-		const log = this.options.log ?? (() => {});
+		const log = this.options.log ?? quiet;
 		const nodeId = this.#node();
 		for (const network of desired.networks) await this.runtime.ensureNetwork(network);
 
@@ -153,8 +161,8 @@ export class Converger {
 		}
 
 		// 2. point routes at the new deployments (and drop routes to removed ones, even the last)
-		this.#writeIngressConfig(desired);
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
+		await this.#publishRoutes(desired);
 
 		// 3. only then drain and remove what is no longer wanted
 		const now = this.#now();
@@ -198,32 +206,52 @@ export class Converger {
 			.sort();
 	}
 
-	get #ingressDir() {
-		return path.join(this.options.stateDir, 'caddy');
-	}
-
-	#writeIngressConfig(desired: DesiredState) {
-		const dir = this.#ingressDir;
-		const file = path.join(dir, 'caddy.json');
+	/**
+	 * Hands Caddy its routes: the config is copied into the ingress container
+	 * and loaded with `caddy reload`, which reports whether Caddy accepted it.
+	 * Updates run one at a time, and a config is only recorded as applied once
+	 * Caddy has taken it, so a failed reload is retried on the next pass.
+	 *
+	 * (Sharing a file from the host with `caddy run --watch` instead was flaky:
+	 * Caddy could read a half-written file, and some file-sharing layers kept
+	 * showing the container a stale copy, so new routes never went live.)
+	 */
+	#publishRoutes(desired: DesiredState) {
 		const config = JSON.stringify(caddyConfig(desired.ingress), null, 2);
-		mkdirSync(dir, { recursive: true });
-		let current: string | null = null;
-		try {
-			current = readFileSync(file, 'utf8');
-		} catch {
-			// first run
-		}
-		// Caddy runs with --watch, so rewriting the file reloads it without dropping connections
-		if (current !== config) writeFileSync(file, config);
+		this.#routes = this.#routes.then(async () => {
+			if (!this.#ingressUp || config === this.#applied) return;
+			const log = this.options.log ?? quiet;
+			try {
+				await this.runtime.putFile(
+					this.ingressName,
+					INGRESS_CONFIG_PATH,
+					Buffer.from(config),
+					0o644
+				);
+				const reload = await this.runtime.exec(this.ingressName, [
+					'caddy',
+					'reload',
+					'--config',
+					INGRESS_CONFIG_PATH
+				]);
+				if (reload.exitCode === 0) this.#applied = config;
+				else log(`the ingress refused its routes: ${reload.output.trim().split('\n').at(-1)}`);
+			} catch (error) {
+				log(
+					`updating the ingress failed: ${error instanceof Error ? error.message : String(error)}`
+				);
+			}
+		});
+		return this.#routes;
 	}
 
 	async #ensureIngress(desired: DesiredState, existing: ManagedContainer[]) {
 		const name = this.ingressName;
-		const dir = this.#ingressDir;
 		const spec = {
 			name,
 			image: INGRESS_IMAGE,
-			cmd: ['caddy', 'run', '--config', INGRESS_CONFIG_PATH, '--watch'],
+			// routes are pushed by #publishRoutes; --resume brings the last ones back after a restart
+			cmd: ['caddy', 'run', '--resume'],
 			env: {},
 			network: desired.networks[0]!,
 			aliases: [],
@@ -232,7 +260,6 @@ export class Converger {
 				{ container: 80, host: desired.ingress.httpPort },
 				...(desired.ingress.tls ? [{ container: 443, host: 443 }] : [])
 			],
-			binds: [`${path.resolve(dir)}:${path.dirname(INGRESS_CONFIG_PATH)}:ro`],
 			// Caddy only needs to bind ports 80/443 inside its container
 			security: {
 				capabilities: ['NET_BIND_SERVICE'],
@@ -244,7 +271,11 @@ export class Converger {
 				[LABELS.managed]: 'true',
 				[LABELS.node]: this.#node(),
 				[LABELS.role]: 'ingress',
-				[LABELS.spec]: hash({ port: desired.ingress.httpPort, tls: desired.ingress.tls, dir })
+				[LABELS.spec]: hash({
+					port: desired.ingress.httpPort,
+					tls: desired.ingress.tls,
+					routes: 'pushed'
+				})
 			}
 		};
 
@@ -256,7 +287,10 @@ export class Converger {
 		if (!ingress) {
 			if (!(await this.runtime.hasImage(INGRESS_IMAGE))) await this.runtime.pull(INGRESS_IMAGE);
 			await this.runtime.run(spec);
+			// a new ingress starts without routes
+			this.#applied = null;
 		}
+		this.#ingressUp = true;
 		// the ingress joins every environment network so it can reach (and health-check) services
 		const joined = new Set(ingress?.networks ?? [spec.network]);
 		for (const network of desired.networks) {

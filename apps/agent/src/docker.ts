@@ -113,6 +113,7 @@ export class DockerRuntime implements ContainerRuntime {
 					ReadOnly: v.readOnly ?? false
 				})),
 				PidsLimit: spec.security.pidsLimit,
+				Init: spec.security.init ?? false,
 				Privileged: false,
 				...(spec.security.memoryMb ? { Memory: spec.security.memoryMb * 1024 * 1024 } : {}),
 				...(spec.security.readOnlyRootFilesystem

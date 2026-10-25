@@ -74,7 +74,7 @@ export class Agent {
 
 	constructor(private options: AgentOptions) {
 		this.#log = options.log ?? ((message) => console.log(`[agent] ${message}`));
-		this.converger = new Converger(options.runtime, { stateDir: options.stateDir, log: this.#log });
+		this.converger = new Converger(options.runtime, { log: this.#log });
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
 		this.builder = new Builder(options.runtime, {

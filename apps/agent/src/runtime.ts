@@ -93,6 +93,11 @@ export interface SecurityOptions {
 	readOnlyRootFilesystem: boolean;
 	/** Defaults to true. Only the rootless builder turns it off (its user namespace setup needs setuid helpers). */
 	noNewPrivileges?: boolean;
+	/**
+	 * Run a minimal init as PID 1 (Docker's `--init`): it forwards stop signals to
+	 * the app and reaps zombie processes, so `sh -c` commands shut down cleanly.
+	 */
+	init?: boolean;
 	/** Defaults to false. Only the rootless builder needs Docker's seccomp and AppArmor profiles relaxed. */
 	unconfined?: boolean;
 }

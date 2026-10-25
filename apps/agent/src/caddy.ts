@@ -3,8 +3,8 @@ import type { DesiredState } from '@tramline/contracts';
 /** One ingress per node, so several agents can share a Docker host (e.g. dev and e2e). */
 export const ingressName = (nodeId: string) => `tramline-ingress-${nodeId}`;
 export const INGRESS_IMAGE = 'caddy:2-alpine';
-/** Where the generated config lives inside the ingress container. */
-export const INGRESS_CONFIG_PATH = '/etc/tramline/caddy.json';
+/** Where the agent puts the routes inside the ingress container (the image has /etc/caddy). */
+export const INGRESS_CONFIG_PATH = '/etc/caddy/tramline.json';
 
 /** Caddy JSON config routing each public hostname to its live deployment. */
 export function caddyConfig(ingress: DesiredState['ingress']) {
