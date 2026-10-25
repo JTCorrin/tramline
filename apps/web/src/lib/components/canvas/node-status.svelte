@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { api } from '#lib/api.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { cn } from '#lib/utils.js';
@@ -34,6 +36,7 @@
 			<Tooltip.Trigger
 				class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
 				data-testid="node-status"
+				onclick={() => goto(resolve('/(app)/nodes'))}
 			>
 				<ServerIcon class="size-3.5" />
 				<span class={cn('size-2 rounded-full', online ? 'bg-emerald-400' : 'bg-red-500')}></span>

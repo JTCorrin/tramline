@@ -1,10 +1,11 @@
-import type { AgentHello, AgentReportInput } from '@tramline/contracts';
-import { eq } from 'drizzle-orm';
+import type { AgentHello, AgentJoined, AgentReportInput } from '@tramline/contracts';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DbOrTx } from '../db/client';
-import { build, container, node } from '../db/schema';
+import { AppError } from '../api/errors';
+import { build, container, joinToken, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
 import { recordVolumes } from './volumes';
@@ -17,6 +18,8 @@ export const hashToken = (token: string) => createHash('sha256').update(token).d
 
 export type NodeRow = typeof node.$inferSelect;
 
+const newNodeToken = () => `tlnode_${randomBytes(32).toString('base64url')}`;
+
 export function isOnline(row: NodeRow, now = Date.now()) {
 	return Boolean(
 		row.lastSeenAt &&
@@ -24,6 +27,13 @@ export function isOnline(row: NodeRow, now = Date.now()) {
 		!row.error &&
 		row.info?.docker
 	);
+}
+
+/** Memory a deployment reserves on its node: its limit times its replicas, 0 without a limit. */
+export function requestedMemory(config: {
+	deploy: { memoryMb?: number | null; replicas: number };
+}) {
+	return (config.deploy.memoryMb ?? 0) * config.deploy.replicas;
 }
 
 export function nodeStatus(row: NodeRow, now = Date.now()) {
@@ -44,7 +54,7 @@ export function ensureLocalNode(db: DbOrTx, dataDir: string) {
 		if (hashToken(token) === existing.tokenHash) return { node: existing, tokenFile };
 	}
 
-	const token = `tlnode_${randomBytes(32).toString('base64url')}`;
+	const token = newNodeToken();
 	mkdirSync(dataDir, { recursive: true });
 	writeFileSync(tokenFile, token + '\n', { mode: 0o600 });
 
@@ -61,6 +71,48 @@ export function ensureLocalNode(db: DbOrTx, dataDir: string) {
 				.returning()
 				.get();
 	return { node: row, tokenFile };
+}
+
+/**
+ * Enrolls a machine: a valid, unused join token becomes a node with its own
+ * token, which only the agent ever sees. The join token can't be used again.
+ */
+export function join(db: DbOrTx, token: string, hello: AgentHello, now = new Date()): AgentJoined {
+	return db.transaction((tx) => {
+		const invite = tx
+			.select()
+			.from(joinToken)
+			.where(
+				and(
+					eq(joinToken.tokenHash, hashToken(token)),
+					isNull(joinToken.usedAt),
+					gt(joinToken.expiresAt, now)
+				)
+			)
+			.get();
+		// one message for unknown, used and expired tokens alike
+		if (!invite) throw new AppError('unauthenticated', 'This join token is invalid or has expired');
+		if (tx.select({ id: node.id }).from(node).where(eq(node.name, invite.name)).get()) {
+			throw new AppError('conflict', `There is already a node called ${invite.name}`);
+		}
+		const nodeToken = newNodeToken();
+		const row = tx
+			.insert(node)
+			.values({
+				id: newId('node'),
+				name: invite.name,
+				tokenHash: hashToken(nodeToken),
+				cordoned: invite.cordoned
+			})
+			.returning()
+			.get();
+		tx.update(joinToken)
+			.set({ usedAt: now, nodeId: row.id })
+			.where(eq(joinToken.id, invite.id))
+			.run();
+		recordHello(tx, row.id, hello);
+		return { nodeId: row.id, name: row.name, token: nodeToken };
+	});
 }
 
 export function authenticate(db: DbOrTx, token: string | null) {

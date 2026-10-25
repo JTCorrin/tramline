@@ -17,7 +17,8 @@ export const ID_PREFIXES = {
 	domain: 'dom',
 	run: 'run',
 	token: 'tok',
-	trust: 'trs'
+	trust: 'trs',
+	join: 'jtk'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

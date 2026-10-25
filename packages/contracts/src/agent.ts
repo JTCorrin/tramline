@@ -289,7 +289,63 @@ export const NodeSummary = z.object({
 	error: z.string().nullable(),
 	lastSeenAt: z.iso.datetime().nullable(),
 	hostname: z.string().nullable(),
-	dockerVersion: z.string().nullable()
+	dockerVersion: z.string().nullable(),
+	/** Which compute adapter manages it; `manual` for machines enrolled by hand. */
+	adapter: z.string(),
+	cpus: z.number().int().nullable(),
+	memoryMb: z.number().int().nullable(),
+	/** Memory promised to the deployments placed here (their limits). */
+	allocatedMemoryMb: z.number().int(),
+	/** Live deployments placed on the node. */
+	deployments: z.number().int(),
+	/** Takes no new deployments. */
+	cordoned: z.boolean(),
+	/** Its stateless deployments are moving elsewhere. */
+	draining: z.boolean(),
+	createdAt: z.iso.datetime()
 });
 
 export type NodeSummary = z.infer<typeof NodeSummary>;
+
+export const NODE_NAME = z
+	.string()
+	.trim()
+	.min(1)
+	.max(40)
+	.regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, {
+		message: 'Use lowercase letters, numbers and dashes'
+	});
+
+export const CreateJoinToken = z.object({
+	name: NODE_NAME,
+	/** Enroll it cordoned, to look it over before it takes deployments. */
+	cordoned: z.boolean().default(false)
+});
+export type CreateJoinToken = z.input<typeof CreateJoinToken>;
+
+/** A one-time token for enrolling a machine as a node. Shown once. */
+export const CreatedJoinToken = z.object({
+	name: z.string(),
+	token: z.string(),
+	expiresAt: z.iso.datetime(),
+	/** Ready to paste into a shell on the new machine. */
+	command: z.string()
+});
+export type CreatedJoinToken = z.infer<typeof CreatedJoinToken>;
+
+export const UpdateNode = z.object({ cordoned: z.boolean() });
+export type UpdateNode = z.infer<typeof UpdateNode>;
+
+/** What draining did: deployments moved, and those that stay with their volume. */
+export const DrainResult = z.object({
+	moved: z.number().int(),
+	kept: z.array(z.object({ deploymentId: z.string(), service: z.string() }))
+});
+export type DrainResult = z.infer<typeof DrainResult>;
+
+/** The agent trades a join token for its own node token, once. */
+export const AgentJoin = z.object({ token: z.string().min(1).max(200), hello: AgentHello });
+export type AgentJoin = z.infer<typeof AgentJoin>;
+
+export const AgentJoined = z.object({ nodeId: z.string(), name: z.string(), token: z.string() });
+export type AgentJoined = z.infer<typeof AgentJoined>;

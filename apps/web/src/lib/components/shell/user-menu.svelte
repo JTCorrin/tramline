@@ -6,6 +6,7 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import ServerIcon from '@lucide/svelte/icons/server';
 	import MoonIcon from '@lucide/svelte/icons/moon';
 	import SunIcon from '@lucide/svelte/icons/sun';
 	import { mode, toggleMode } from 'mode-watcher';
@@ -42,6 +43,9 @@
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item onSelect={() => goto(resolve('/(app)/settings'))}>
 			<SettingsIcon /> Settings
+		</DropdownMenu.Item>
+		<DropdownMenu.Item onSelect={() => goto(resolve('/(app)/nodes'))}>
+			<ServerIcon /> Nodes
 		</DropdownMenu.Item>
 		<DropdownMenu.Item onSelect={toggleMode}>
 			{#if mode.current === 'dark'}<SunIcon /> Light mode{:else}<MoonIcon /> Dark mode{/if}

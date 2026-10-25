@@ -155,7 +155,7 @@ export class Agent {
 	async hello() {
 		for (;;) {
 			try {
-				const { nodeId } = await this.options.client.hello(await this.#describe());
+				const { nodeId } = await this.options.client.hello(await this.describe());
 				this.converger.nodeId = nodeId;
 				return;
 			} catch (error) {
@@ -165,7 +165,8 @@ export class Agent {
 		}
 	}
 
-	async #describe(): Promise<AgentHello> {
+	/** What the agent tells the control plane about this machine. */
+	async describe(): Promise<AgentHello> {
 		let docker: AgentHello['docker'] = null;
 		try {
 			docker = { version: await this.options.runtime.version() };

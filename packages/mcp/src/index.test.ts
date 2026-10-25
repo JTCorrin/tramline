@@ -67,6 +67,7 @@ describe('Tramline MCP server', () => {
 			'get_staged_changes',
 			'list_deployments',
 			'list_environments',
+			'list_nodes',
 			'list_projects',
 			'set_variables',
 			'update_service_config'
@@ -79,6 +80,7 @@ describe('Tramline MCP server', () => {
 
 	it.each([
 		['list_projects', {}, 'GET', '/projects', undefined],
+		['list_nodes', {}, 'GET', '/nodes', undefined],
 		[
 			'list_environments',
 			{ projectId: 'prj_1' },

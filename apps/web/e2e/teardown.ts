@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { E2E_NODE } from '../playwright.config';
 
 const AGENT_HEALTH_PORT = '7172';
 
@@ -80,6 +81,12 @@ export default function teardown() {
 		execFileSync('docker', ['rm', '-f', 'tramline-e2e-s3'], { stdio: 'ignore' });
 	} catch {
 		// not running
+	}
+	try {
+		// the Docker-in-Docker node, with everything that ran inside it
+		execFileSync('docker', ['rm', '-f', '-v', E2E_NODE.container], { stdio: 'ignore' });
+	} catch {
+		// not started
 	}
 	// volumes the agent created for this run's services
 	const volumes = docker(

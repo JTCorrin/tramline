@@ -48,6 +48,16 @@ export function createTramlineServer(client: TramlineClient, version = '0.1.0') 
 	);
 
 	server.registerTool(
+		'list_nodes',
+		{
+			description:
+				"List the machines services run on: status, capacity, and whether they are cordoned. Pin a service to one with update_service_config's deploy.node.",
+			annotations: readOnly
+		},
+		() => run(() => client.nodes.getAll())
+	);
+
+	server.registerTool(
 		'list_environments',
 		{
 			description:

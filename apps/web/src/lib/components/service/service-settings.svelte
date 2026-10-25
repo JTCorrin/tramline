@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { api } from '#lib/api.js';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
@@ -8,6 +9,7 @@
 		RESTART_POLICIES,
 		SCAN_MODES,
 		type CanvasService,
+		type NodeSummary,
 		type ServiceConfig,
 		type ServiceConfigPatch,
 		type ServiceConfigView
@@ -60,6 +62,22 @@
 		off: 'Off'
 	};
 	const scanMode = $derived(config.build.scan ?? 'warn');
+
+	const ANY_NODE = 'any';
+	let nodes = $state<NodeSummary[]>([]);
+	$effect(() => {
+		api()
+			.nodes.getAll()
+			.then(
+				(list) => (nodes = list),
+				() => {}
+			);
+	});
+	const nodeLabel = $derived(
+		config.deploy.node
+			? (nodes.find((n) => n.id === config.deploy.node)?.name ?? 'A removed node')
+			: 'Any node'
+	);
 
 	const POLICY_LABELS: Record<(typeof RESTART_POLICIES)[number], string> = {
 		on_failure: 'On failure',
@@ -337,6 +355,25 @@
 				value={config.deploy.cronSchedule}
 				onsave={(v) => stage('deploy', { cronSchedule: v })}
 			/>
+		</Setting>
+		<Setting
+			label="Run on"
+			staged={staged('deploy', 'node')}
+			description="Pin this service to one node, or let Tramline choose. A service with a volume always runs where its data is."
+		>
+			<Select.Root
+				type="single"
+				value={config.deploy.node ?? ANY_NODE}
+				onValueChange={(v) => stage('deploy', { node: v === ANY_NODE ? null : v })}
+			>
+				<Select.Trigger class="w-full" aria-label="Run on">{nodeLabel}</Select.Trigger>
+				<Select.Content>
+					<Select.Item value={ANY_NODE}>Any node</Select.Item>
+					{#each nodes as n (n.id)}
+						<Select.Item value={n.id}>{n.name}{n.cordoned ? ' (cordoned)' : ''}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		</Setting>
 	</section>
 

@@ -8,6 +8,8 @@ export interface PlatformSettings {
 	dataDir: string;
 	/** Public URL of this install (TRAMLINE_URL), for GitHub callbacks and webhooks. */
 	publicUrl: string | null;
+	/** Who manages nodes (TRAMLINE_ADMIN_EMAILS); empty means the first user to sign up. */
+	adminEmails?: string[];
 }
 
 /** GitHub can only deliver webhooks to an address it can reach. */
