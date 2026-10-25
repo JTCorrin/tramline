@@ -1,91 +1,175 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+  <img src="docs/images/logo-light.svg" alt="Tramline logo" width="88" height="88">
+</picture>
+
 # Tramline
 
-An open-source, self-hosted, slimmed-down [Railway](https://railway.com): projects are a canvas of services you deploy onto compute you choose: local Docker, Proxmox, or a cloud provider.
+**The deploy experience you love, on infrastructure you own.**
 
-> **Status:** Phases 0–5 complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Images are scanned for vulnerabilities before they run, and databases keep their data on volumes, with encrypted backups to any S3-compatible bucket. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
+An open-source, self-hosted platform inspired by [Railway](https://railway.com). Draw your stack on a canvas, push to deploy, and keep your code, secrets and data on hardware you control.
 
-## Repository layout
+[![CI](https://github.com/joecorrin/tramline/actions/workflows/ci.yml/badge.svg)](https://github.com/joecorrin/tramline/actions/workflows/ci.yml)
+[![Security](https://github.com/joecorrin/tramline/actions/workflows/security.yml/badge.svg)](https://github.com/joecorrin/tramline/actions/workflows/security.yml)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange.svg)](docs/roadmap.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-```
-apps/web/            SvelteKit app: UI, REST API (/api/v1), agent API (/api/agent/v1), control plane
-apps/agent/          node agent: converges Docker to the desired state, runs the Caddy ingress
-packages/contracts/  zod schemas shared by the API, client, CLI and agent
-packages/client/     typed API client + resource definitions
-packages/mcp/        MCP server for AI agents, built on the client
-```
+[Why Tramline](#why-tramline) · [Tour](#a-quick-tour) · [Get started](#get-started) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
-### The resource model
+<br>
 
-UI code never calls `fetch` directly. It goes through typed resources:
+<img src="docs/images/canvas.png" alt="The Tramline canvas: a Postgres database, a Docker image and a GitHub repo as connected services, with the right-click menu open to add a database" width="100%">
 
-```ts
-import { api } from '#lib/api.js';
+</div>
 
-const projects = await api(fetch).projects.getAll();
-await api().projects.update(id, { name: 'Renamed' });
-```
+<br>
 
-`packages/client` maps `getAll / get / create / update / remove` onto REST routes in `apps/web/src/routes/api/v1`. Those routes validate input with the `packages/contracts` schemas and call domain functions in `apps/web/src/lib/server/domain`. In components, `Collection` (`#lib/resources/collection.svelte.js`) wraps a resource with reactive, optimistic state.
+## Why Tramline
 
-To add a resource:
+Platforms like Railway made deploying feel effortless: a canvas instead of YAML, a database in two clicks, a URL on every push. But your code, your customers' data and your secrets live on someone else's machines, and you pay their prices. Tramline brings that experience home.
 
-1. Add its schemas to `packages/contracts`.
-2. Add `defineResource(...)` in `packages/client/src/resources` and register it in `createClient`.
-3. Add domain functions in `apps/web/src/lib/server/domain`, plus a spec.
-4. Add thin `+server.ts` handlers using `endpoint()` and `body()`.
+<table>
+<tr>
+<td width="33%" valign="top">
 
-## Development
+### 🔒 Private
 
-Requires Node 24 (see `.nvmrc`) and pnpm 10.
+Your code, data and secrets never leave your infrastructure. Run it on a laptop, a homelab or your own servers. No telemetry, no vendor lock-in.
+
+</td>
+<td width="33%" valign="top">
+
+### 🛡️ Secure by default
+
+The safe choice is the default. Secrets are encrypted at rest, containers are locked down, builds are rootless, every image is scanned for vulnerabilities, and backups are encrypted before they leave the node.
+
+</td>
+<td width="33%" valign="top">
+
+### ⚡ Actually pleasant
+
+A real canvas, live logs, zero-downtime deploys, push-to-deploy from GitHub, one-click databases, and a data browser. All the comfort of a hosted platform.
+
+</td>
+</tr>
+</table>
+
+## A quick tour
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Deploy anything, watch it live**<br>
+Builds from a GitHub repo (no Dockerfile needed, thanks to [Railpack](https://railpack.com)) or any Docker image. Logs stream in as it happens, and every old deployment is a one-click rollback.
+
+<img src="docs/images/deployments.png" alt="Deployment history with live logs and rollback">
+
+</td>
+<td width="50%" valign="top">
+
+**Look inside your database**<br>
+Postgres, MySQL, Redis and MongoDB in a click, each with a volume and generated credentials. Browse your Postgres tables right in the panel, read-only by construction.
+
+<img src="docs/images/data-browser.png" alt="Read-only Postgres data browser showing a customers table">
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Variables that connect your stack**<br>
+Reference one service from another with `${{Postgres.DATABASE_URL}}` and the canvas draws the connection for you. Values are encrypted, and sealed variables can be written but never read back.
+
+<img src="docs/images/variables.png" alt="Service variables with an encrypted value">
+
+</td>
+<td width="50%" valign="top">
+
+**Push to deploy**<br>
+Connect GitHub once, then every push to your branch ships. Watch paths skip rebuilds that don't matter, and changes are staged so you review them before they go out.
+
+<img src="docs/images/source.png" alt="Service settings: GitHub source, deploy on push, builder and watch paths">
+
+</td>
+</tr>
+</table>
+
+### Built for AI agents too
+
+Tramline ships an [MCP](https://modelcontextprotocol.io) server, so Claude, Cursor and other agents can inspect your projects, read logs and deploy. Each agent's access is limited to the scopes of its token, and everything it does is recorded in the audit log.
 
 ```bash
-nvm use
+claude mcp add tramline --transport http https://tramline.example.com/mcp \
+  --header "Authorization: Bearer tl_…"
+```
+
+<p align="center"><img src="docs/images/api-tokens.png" alt="Creating a scoped API token" width="560"></p>
+
+## Everything in the box today
+
+| Area           | What you get                                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Canvas**     | Projects as a live canvas of services, environments (with one-click duplication), shared variables and staged changes |
+| **Deploys**    | Docker images or builds from Git (Railpack or Dockerfile), zero-downtime swaps, rollbacks, cron services              |
+| **Networking** | Automatic URLs through a Caddy ingress, custom domains with verified ownership and automatic HTTPS                    |
+| **Data**       | Postgres, MySQL, Redis and MongoDB templates, persistent volumes, a read-only Postgres data browser                   |
+| **Backups**    | Encrypted backups to any S3-compatible bucket with restore drills, including Tramline's own database                  |
+| **Security**   | Encrypted secrets, hardened containers, rootless builds, Trivy image scanning, CSP, 2FA and passkeys                  |
+| **Automation** | REST API, scoped API tokens, an audit log, an MCP server, and GitHub Actions deploys with no stored secrets (OIDC)    |
+
+Want the details? [SECURITY.md](SECURITY.md) explains exactly how each protection works.
+
+## Get started
+
+> [!WARNING]
+> Tramline is **pre-alpha**. It works well on a single machine today, but expect rough edges and breaking changes. Please don't run production workloads on it yet.
+
+You'll need Node 24, pnpm 10 and Docker (Docker Desktop, OrbStack or Colima).
+
+```bash
+git clone https://github.com/joecorrin/tramline.git && cd tramline
 pnpm install
-cp apps/web/.env.example apps/web/.env   # then set TRAMLINE_SECRET_KEY (openssl rand -base64 32)
+cp apps/web/.env.example apps/web/.env   # set TRAMLINE_SECRET_KEY: openssl rand -base64 32
 pnpm dev
 ```
 
-The SQLite database is created at `apps/web/data/tramline.db`, and migrations run automatically on start. `pnpm dev` also starts the agent, which needs a running Docker daemon (Docker Desktop, OrbStack or Colima). Deployed services are served at `http://<service>-<id>.localhost` through the ingress on port 80 (set `TRAMLINE_INGRESS_PORT` to change it). To run the e2e test that deploys real containers: `TRAMLINE_E2E_DOCKER=1 pnpm test:e2e`.
-
-To deploy private repositories and redeploy on push, open **Settings → GitHub** and create the GitHub App (set `TRAMLINE_URL` first). GitHub sends push webhooks when the install is reachable over HTTPS; otherwise Tramline polls tracked branches every `TRAMLINE_GIT_POLL_SECONDS`.
-
-| Command                                   | What it does                                  |
-| ----------------------------------------- | --------------------------------------------- |
-| `pnpm dev`                                | Start the web app on http://localhost:5173    |
-| `pnpm check`                              | Type-check every workspace                    |
-| `pnpm lint`                               | Prettier + ESLint/tsc                         |
-| `pnpm test`                               | Unit, API and component tests                 |
-| `pnpm test:coverage`                      | Same, with coverage gates (as CI runs it)     |
-| `pnpm test:e2e`                           | Playwright against a production build         |
-| `pnpm --filter @tramline/web db:generate` | Generate a migration after editing the schema |
-
-Vitest reads `apps/web/.env.test` (an in-memory database and a throwaway secret). Coverage thresholds live in each workspace's Vitest config and should only ever go up. CI (`.github/workflows/ci.yml`) runs lint and type-check, unit tests with coverage, and Playwright as separate jobs.
-
-The better-auth tables in `apps/web/src/lib/server/db/schema/auth.ts` are generated by `@better-auth/cli generate`. Regenerate them rather than editing by hand.
-
-## Letting AI agents use Tramline (MCP)
-
-Create a token in **Settings → API tokens** (give it `deploy` only if the agent should be able to deploy), then add Tramline to your agent. With Claude Code:
-
-```bash
-claude mcp add tramline --transport http https://tramline.example.com/mcp --header "Authorization: Bearer tl_…"
-```
-
-Or run the stdio server locally: `TRAMLINE_URL=https://tramline.example.com TRAMLINE_TOKEN=tl_… pnpm --filter @tramline/mcp start`. Agents stage changes and deploy through the same API as the UI, limited to the token's scopes, and every change they make appears in the audit log.
+Open **http://localhost:5173**, create an account, right-click the canvas and deploy your first service. It'll be live at `http://<service>-<id>.localhost` within moments.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for the full plan.
+Tramline is being built in phases. The [full roadmap](docs/roadmap.md) has the details.
 
-0. **Foundations**: monorepo, auth + organizations, resource model, projects ✅
-1. **Canvas and configuration**: Svelte Flow canvas, service panel, variables and references, environments, staged changes ✅
-2. **Agent + local Docker deploys**: node agent, reconciler, Caddy ingress, live logs, zero-downtime swaps ✅
-   - 2.5 **Secure-by-default hardening** ✅: container defaults, sealed variables, log redaction, CSP and security headers, CI security scanning (see [SECURITY.md](SECURITY.md))
-3. **Builds from source**: rootless BuildKit, Railpack or Dockerfile, GitHub App, push webhooks and polling ✅
-   - 3.5 **Image vulnerability scanning** ✅: Trivy scans every built and pulled image before it runs; warn or block per service
-4. **Data and networking**: databases and references (Phase 1), volumes ✅ (4a), encrypted backups to S3 with restore drills, including the control plane's own database ✅ (4b), custom domains, environment duplication, cron services, watch paths and a read-only Postgres browser ✅ (4c)
-5. **Agent access**: API tokens with scopes, an audit log, an MCP server over stdio and `/mcp`, GitHub Actions OIDC, 2FA and passkeys ✅
-6. Multi-node, adapter SDK, Proxmox adapter
-7. Cloud adapters (Hetzner, AWS, GCP, Azure) + node pools
-8. Price engine and placement
-9. Production readiness, CLI, PR environments
+- [x] **Foundations**: accounts, organizations, projects
+- [x] **Canvas and configuration**: services, variables, environments, staged changes
+- [x] **Local deploys**: agent, ingress, live logs, zero-downtime swaps, hardened defaults
+- [x] **Builds from source**: rootless BuildKit, Railpack, GitHub App, image scanning
+- [x] **Data and networking**: volumes, encrypted backups, custom domains, cron, data browser
+- [x] **Agent access**: API tokens, audit log, MCP server, GitHub OIDC, 2FA and passkeys
+- [ ] **Multiple machines**: multi-node scheduling, an adapter SDK, Proxmox
+- [ ] **Cloud providers**: Hetzner, AWS, GCP and Azure, plus node pools
+- [ ] **Price engine**: compare providers and place each workload where it's cheapest
+- [ ] **Production ready**: a `tram` CLI, PR environments, a one-line installer
+
+## Contributing
+
+Tramline is built in the open, and it's early enough that your work will shape what it becomes. Whether it's fixing a typo, filing a bug, polishing the UI or writing the Proxmox adapter, contributions of every size are welcome.
+
+- 🐛 **Found a bug or have an idea?** [Open an issue](https://github.com/joecorrin/tramline/issues).
+- 🛠️ **Want to write code?** [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, architecture and tests.
+- 🗺️ **Looking for something big?** Phase 6 (multi-node and compute adapters) is up next on the [roadmap](docs/roadmap.md).
+- 🔐 **Found a vulnerability?** Please report it privately. See [SECURITY.md](SECURITY.md).
+
+If Tramline looks useful to you, a ⭐ helps other people find it.
+
+## License
+
+Tramline is free software under the [GNU Affero General Public License v3.0](LICENSE). You can use, modify and self-host it freely. If you offer a modified version as a service, you share your changes too.
+
+<div align="center">
+<br>
+<sub>Built with SvelteKit, Svelte Flow, Docker, BuildKit, Railpack, Caddy and Trivy.</sub>
+</div>
