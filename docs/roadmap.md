@@ -250,7 +250,7 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
   - Webhooks are HMAC-verified in constant time; the manifest, install and setup redirects are bound to a state cookie; installations are verified with GitHub before they're connected and never shared across organizations.
 - **Phase 3.5 ✅:** image vulnerability scanning with Trivy, warning by default or blocking fixable critical findings, on built and registry images alike.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
-- **Phase 5:** token scopes, 2FA and passkeys, audit log (moved forward from Phase 9), and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets).
+- **Phase 5:** token scopes and the audit log ✅ (5a); 2FA and passkeys, and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets) next.
 - **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
 - **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view, and the database TCP proxy (opt-in, TLS enforced by the database, IP allowlist in the host firewall).
 - **Phase 7:** provider firewalls and security groups, no public SSH by default on cloud nodes.
@@ -431,15 +431,35 @@ Database templates with generated credentials and connection variables, `${{Serv
 
 ### Phase 5: Agent access: API tokens + MCP server
 
-- **API tokens** (moved forward from the last phase): org-scoped bearer tokens with optional scopes (read, write, deploy) and expiry, managed in organization settings. `endpoint()` accepts a token as well as a session cookie, and every token action goes to the audit log.
-- **`apps/mcp`**: an MCP server built on `@modelcontextprotocol/sdk` that wraps `packages/client`, so agents use the same public API as the UI and CLI. It never touches the database directly.
-  - **Transports:** stdio for local agents (`npx @tramline/mcp`, with `TRAMLINE_URL` and `TRAMLINE_TOKEN`), and Streamable HTTP served by Tramline itself at `/mcp`, authenticated with tokens and, later, OAuth.
-  - **Tools** (zod input schemas taken from `packages/contracts`): `list_projects`, `get_canvas`, `create_service`, `update_service_config`, `set_variables`, `get_staged_changes`, `deploy`, `discard_changes`, `list_deployments`, `get_deployment_logs`, `create_environment`. Later phases add `list_nodes`, `add_node` and `compare_prices`.
-  - **Resources:** `tramline://project/{id}/canvas` and `tramline://deployment/{id}/logs`.
-  - **Prompts:** for example "deploy this repo with a Postgres database".
-  - **Safety:** mutations go through staged changes. `deploy` and anything destructive are separate tools marked with MCP's `destructiveHint`, and a token without the deploy scope can only stage changes.
-- **Tests:** a tool-level contract test for every tool against an in-process Tramline, plus an e2e test in which an MCP client creates a service, stages a variable and deploys.
-- **Exit:** from Claude Code, `claude mcp add tramline …` lets an agent add Postgres and an app, wire `DATABASE_URL`, deploy, and read the deployment logs.
+**5a: API tokens, audit log and the MCP server ✅** (e2e in CI)
+
+- **API tokens**, in Settings → API tokens:
+  - **Format:** `tl_` plus 32 random bytes, shown once and stored only as a SHA-256 hash.
+  - **Expiry:** 30 days, 90 days, a year, or never.
+  - **Who it acts as:** the member who created it, in their organization. It stops working if they leave.
+  - **Scopes:** `read` (every GET), `write` (stage changes) and `deploy` (deploy, redeploy, remove, run, restore and delete backups). Write and deploy each include read, so a token without `deploy` can only stage.
+  - **Session only:** tokens can't create or list tokens, read the audit log, or touch backup storage or the GitHub app.
+  - **Visibility:** members see and revoke their own tokens; owners and admins see and revoke everyone's.
+- **Audit log:** every change through the API (any non-GET), by a person or a token, is recorded with the route, its parameters and the result. Owners and admins read it in Settings; events are kept for 90 days.
+- **`packages/mcp`:** an MCP server (SDK 1.32.1) built only on `packages/client`, so an agent can do exactly what its token allows and never touches the database.
+  - **Transports:** stdio (`TRAMLINE_URL=… TRAMLINE_TOKEN=… pnpm --filter @tramline/mcp start`), and stateless Streamable HTTP served by Tramline at `/mcp` with the token as a bearer.
+  - **Tools:** `list_projects`, `list_environments`, `create_environment` (with `copyFrom`), `get_canvas`, `create_service` (image, repo or database), `update_service_config`, `set_variables`, `get_staged_changes`, `deploy`, `discard_changes`, `list_deployments` and `get_deployment_logs`.
+    - `deploy` and `discard_changes` carry `destructiveHint`; reads carry `readOnlyHint`.
+    - API errors (e.g. a missing scope) come back as tool errors the model can act on.
+  - **Resources:** `tramline://environment/{id}/canvas` and `tramline://deployment/{id}/logs`.
+  - **Prompt:** `deploy_repo_with_postgres`.
+  - **Also new:** deployment logs have a JSON mode (`?format=json&tail=N`) for agents.
+- **Exit:**
+  - `e2e/mcp.e2e.ts`: a person creates a token in Settings. An MCP client over HTTP adds Postgres and an app, wires `DATABASE_URL` (the edge appears), reviews the staged changes, deploys and reads the logs, and the audit log shows it was the token.
+  - Over stdio, a token without `deploy` stages a service but is refused the deploy.
+  - Connecting Claude Code: `claude mcp add tramline --transport http https://<tramline>/mcp --header "Authorization: Bearer tl_…"`.
+
+**5b: next**
+
+- 2FA and passkeys.
+- **GitHub Actions OIDC for deploying to Tramline** (no CI secrets): a workflow's OIDC token, from a repository and branch the organization trusts, is exchanged for a short-lived `deploy` token.
+- OAuth for `/mcp`, so agents can sign in without pasting a token.
+- Tools for nodes and prices (`list_nodes`, `add_node`, `compare_prices`) arrive with Phases 6 to 8.
 
 ### Phase 6: Multi-node + adapter SDK + Proxmox adapter
 

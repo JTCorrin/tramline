@@ -1,4 +1,4 @@
-import type { CronRun, Deployment, DeploymentQuery } from '@tramline/contracts';
+import type { CronRun, Deployment, DeploymentQuery, LogLine } from '@tramline/contracts';
 import type { Http } from '../http';
 
 export const deployments = (http: Http) => ({
@@ -10,6 +10,9 @@ export const deployments = (http: Http) => ({
 	remove: (id: string) => http.post<Deployment>(`/deployments/${id}/remove`),
 	runs: (id: string) => http.get<CronRun[]>(`/deployments/${id}/runs`),
 	runNow: (id: string) => http.post<CronRun>(`/deployments/${id}/runs`),
+	/** The last `tail` log lines. */
+	logs: (id: string, tail = 200) =>
+		http.get<LogLine[]>(`/deployments/${id}/logs`, { format: 'json', tail }),
 	/** Path of the server-sent events stream of this deployment's logs. */
 	logsPath: (id: string) => `/deployments/${id}/logs`
 });

@@ -5,4 +5,6 @@ import { deployments } from '#lib/server/domain/index.js';
 export const GET = endpoint((ctx, { params }) => deployments.runs(ctx, params.id!));
 
 /** Runs a cron service's job now. */
-export const POST = endpoint((ctx, { params }) => deployments.runNow(ctx, params.id!));
+export const POST = endpoint((ctx, { params }) => deployments.runNow(ctx, params.id!), {
+	scope: 'deploy'
+});

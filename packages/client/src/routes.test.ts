@@ -103,6 +103,19 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.data.rows({ serviceId: 's', environmentId: 'e', schema: 'public', table: 'notes' }),
 		'GET /data/rows?serviceId=s&environmentId=e&schema=public&table=notes&offset=0'
 	],
+	[
+		'deployments.logs',
+		(c) => c.deployments.logs('dep_1', 50),
+		'GET /deployments/dep_1/logs?format=json&tail=50'
+	],
+	['tokens.getAll', (c) => c.tokens.getAll(), 'GET /tokens'],
+	[
+		'tokens.create',
+		(c) => c.tokens.create({ name: 'ci', scopes: ['deploy'], expiresInDays: 30 }),
+		'POST /tokens'
+	],
+	['tokens.revoke', (c) => c.tokens.revoke('tok_1'), 'DELETE /tokens/tok_1'],
+	['tokens.auditLog', (c) => c.tokens.auditLog(), 'GET /audit-log'],
 	['domains.remove', (c) => c.domains.remove('dom_1'), 'DELETE /domains/dom_1'],
 	['domains.verify', (c) => c.domains.verify('dom_1'), 'POST /domains/dom_1/verify'],
 	[

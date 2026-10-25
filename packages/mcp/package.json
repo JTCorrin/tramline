@@ -1,0 +1,32 @@
+{
+	"name": "@tramline/mcp",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "MCP server for Tramline: lets AI agents manage projects through the public API",
+	"bin": {
+		"tramline-mcp": "./src/stdio.ts"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"start": "tsx src/stdio.ts",
+		"check": "tsc --noEmit",
+		"lint": "tsc --noEmit",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "1.32.1",
+		"@tramline/client": "workspace:*",
+		"@tramline/contracts": "workspace:*",
+		"zod": "^4.1.12"
+	},
+	"devDependencies": {
+		"@types/node": "^22.20.5",
+		"@vitest/coverage-v8": "^4.1.12",
+		"tsx": "^4.23.15",
+		"vitest": "^4.1.12"
+	}
+}

@@ -1,31 +1,81 @@
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit';
 import { and, eq } from 'drizzle-orm';
+import type { TokenScope } from '@tramline/contracts';
 import type { z } from 'zod';
 import { TRAMLINE_SECRET_KEY } from '$app/env/private';
 import { createSecrets } from '../crypto';
 import { db, schema } from '../db';
 import { settings } from '../settings.server';
 import type { Ctx } from '../domain';
+import { allows, authenticate, record } from '../domain/tokens';
 import { AppError, validationFailed } from './errors';
 
 export const secrets = createSecrets(TRAMLINE_SECRET_KEY);
 
+export interface EndpointOptions {
+	/**
+	 * What an API token needs: `read` for GETs and `write` for other methods
+	 * unless set. `deploy` marks endpoints that apply changes.
+	 */
+	scope?: TokenScope;
+	/** Only a signed-in person may call it, never a token (e.g. creating tokens). */
+	session?: boolean;
+}
+
 /**
- * Wraps an `/api/v1` handler: authenticates the caller, builds the domain
- * context, serialises the result as JSON and maps errors to the envelope.
- * Return `undefined` for a 204.
+ * Wraps an `/api/v1` handler: authenticates the caller (a session or an API
+ * token), checks the token's scopes, builds the domain context, serialises
+ * the result as JSON, maps errors to the envelope, and records every change
+ * in the audit log. Return `undefined` for a 204.
  */
-export function endpoint(fn: (ctx: Ctx, event: RequestEvent) => unknown): RequestHandler {
+export function endpoint(
+	fn: (ctx: Ctx, event: RequestEvent) => unknown,
+	options: EndpointOptions = {}
+): RequestHandler {
 	return async (event) => {
+		let ctx: Ctx | undefined;
+		let response: Response;
 		try {
-			const result = await fn(context(event), event);
-			if (result instanceof Response) return result;
-			if (result === undefined) return new Response(null, { status: 204 });
-			return Response.json(result, { status: event.request.method === 'POST' ? 201 : 200 });
+			ctx = context(event);
+			authorize(ctx, event, options);
+			const result = await fn(ctx, event);
+			response =
+				result instanceof Response
+					? result
+					: result === undefined
+						? new Response(null, { status: 204 })
+						: Response.json(result, { status: event.request.method === 'POST' ? 201 : 200 });
 		} catch (error) {
-			return errorResponse(error);
+			response = errorResponse(error);
 		}
+		if (ctx && event.request.method !== 'GET') audit(ctx, event, response.status);
+		return response;
 	};
+}
+
+function authorize(ctx: Ctx, event: RequestEvent, options: EndpointOptions) {
+	if (!ctx.token) return;
+	if (options.session) {
+		throw new AppError('forbidden', 'API tokens cannot do this; sign in to Tramline instead');
+	}
+	const scope = options.scope ?? (event.request.method === 'GET' ? 'read' : 'write');
+	if (!allows(ctx.token.scopes, scope)) {
+		throw new AppError('forbidden', `This token needs the ${scope} scope`);
+	}
+}
+
+/** e.g. `POST environments/[id]/deploy`, with the route's parameters. */
+function audit(ctx: Ctx, event: RequestEvent, status: number) {
+	const route = (event.route?.id ?? event.url.pathname).replace(/^\/api\/v1\//, '');
+	try {
+		record(db, ctx, {
+			action: `${event.request.method} ${route}`,
+			params: { ...event.params } as Record<string, string>,
+			status
+		});
+	} catch (error) {
+		console.error('[audit]', error);
+	}
 }
 
 /** Parses and validates a JSON request body against a contract schema. */
@@ -56,6 +106,20 @@ export function param(event: RequestEvent, name: string) {
 }
 
 export function context(event: RequestEvent): Ctx {
+	const bearer = event.request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
+	if (bearer) {
+		const token = authenticate(db, bearer.trim());
+		if (!token) throw new AppError('unauthenticated', 'Unknown or revoked API token');
+		return {
+			db,
+			secrets,
+			settings,
+			userId: token.userId,
+			organizationId: token.organizationId,
+			token: { id: token.id, name: token.name, scopes: token.scopes }
+		};
+	}
+
 	const { user, session } = event.locals;
 	if (!user || !session) throw new AppError('unauthenticated', 'You need to sign in');
 

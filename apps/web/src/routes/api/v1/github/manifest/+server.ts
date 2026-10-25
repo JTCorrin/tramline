@@ -7,8 +7,11 @@ import { z } from 'zod';
 const Body = z.object({ owner: z.string().trim().max(100).nullable().optional() });
 
 /** Starts the manifest flow: returns the form the browser posts to GitHub. */
-export const POST = endpoint(async (ctx, event) => {
-	const { owner } = Body.parse(await event.request.json().catch(() => ({})));
-	const state = issueState(event.cookies, event.url.protocol === 'https:');
-	return manifestForm(ctx, settings, state, owner || null);
-});
+export const POST = endpoint(
+	async (ctx, event) => {
+		const { owner } = Body.parse(await event.request.json().catch(() => ({})));
+		const state = issueState(event.cookies, event.url.protocol === 'https:');
+		return manifestForm(ctx, settings, state, owner || null);
+	},
+	{ session: true }
+);

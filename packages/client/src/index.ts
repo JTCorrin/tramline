@@ -8,6 +8,7 @@ import { github } from './resources/github';
 import { nodes } from './resources/nodes';
 import { projects } from './resources/projects';
 import { services } from './resources/services';
+import { tokens } from './resources/tokens';
 import { variables } from './resources/variables';
 
 export { ApiError, createHttp, type ClientOptions, type Http, type Query } from './http';
@@ -25,7 +26,8 @@ export function createClient(options: ClientOptions) {
 		github: github(http),
 		backups: backups(http),
 		domains: domains(http),
-		data: data(http)
+		data: data(http),
+		tokens: tokens(http)
 	};
 }
 

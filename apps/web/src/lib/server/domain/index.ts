@@ -10,4 +10,5 @@ export * as nodes from './nodes';
 export * as organizations from './organizations';
 export * as projects from './projects';
 export * as services from './services';
+export * as tokens from './tokens';
 export * as variables from './variables';

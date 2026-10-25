@@ -22,6 +22,9 @@ test('a cron service runs to completion, on demand and on its schedule', async (
 	await page.getByLabel('Start command').press('Enter');
 	await page.getByLabel('Cron schedule').fill('* * * * *');
 	await page.getByLabel('Cron schedule').press('Enter');
+	// not what this test is about, and scans queue behind other tests' on a shared node
+	await page.getByRole('combobox', { name: 'Vulnerability scan' }).click();
+	await page.getByRole('option', { name: 'Off' }).click();
 	await page.getByTestId('changes-bar').getByRole('button', { name: 'Deploy' }).click();
 
 	// live with no long-running container

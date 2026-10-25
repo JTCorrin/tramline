@@ -106,6 +106,13 @@
       "when": 1792841422581,
       "tag": "0014_cron_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1792893462590,
+      "tag": "0015_api_tokens",
+      "breakpoints": true
     }
   ]
 }

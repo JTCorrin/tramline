@@ -15,7 +15,8 @@ export const ID_PREFIXES = {
 	restore: 'rst',
 	drill: 'drl',
 	domain: 'dom',
-	run: 'run'
+	run: 'run',
+	token: 'tok'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

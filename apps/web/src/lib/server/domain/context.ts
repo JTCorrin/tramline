@@ -1,3 +1,4 @@
+import type { TokenScope } from '@tramline/contracts';
 import type { Secrets } from '../crypto';
 import type { Db } from '../db/client';
 import type { PlatformSettings } from '../settings';
@@ -12,4 +13,6 @@ export interface Ctx {
 	settings: PlatformSettings;
 	userId: string;
 	organizationId: string;
+	/** Set when the caller authenticated with an API token rather than a session. */
+	token?: { id: string; name: string; scopes: TokenScope[] };
 }

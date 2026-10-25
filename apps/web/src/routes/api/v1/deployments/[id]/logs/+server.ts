@@ -6,13 +6,20 @@ import type { RequestHandler } from './$types';
 
 const HEARTBEAT_MS = 25_000;
 
-/** Server-sent events: the last 1000 log lines, then new lines as they arrive. */
+/**
+ * Server-sent events: the last 1000 log lines, then new lines as they arrive.
+ * With `?format=json`, just the last `tail` lines (default 200), e.g. for agents.
+ */
 export const GET: RequestHandler = (event) => {
 	const id = event.params.id;
 	try {
 		deployments.requireDeployment(context(event), id);
 	} catch (error) {
 		return errorResponse(error);
+	}
+	if (event.url.searchParams.get('format') === 'json') {
+		const tail = Math.min(1000, Math.max(1, Number(event.url.searchParams.get('tail')) || 200));
+		return Response.json(readLogs(settings.dataDir, id).slice(-tail));
 	}
 
 	const encoder = new TextEncoder();

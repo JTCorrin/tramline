@@ -2,6 +2,8 @@
 	import { page } from '$app/state';
 	import { invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api.js';
+	import ApiTokens from '#lib/components/settings/api-tokens.svelte';
+	import AuditLog from '#lib/components/settings/audit-log.svelte';
 	import BackupStorage from '#lib/components/settings/backup-storage.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -145,11 +147,17 @@
 		</Card.Content>
 	</Card.Root>
 
+	<ApiTokens tokens={data.tokens} />
+
 	<BackupStorage
 		storage={data.backups.storage}
 		canManage={data.backups.canManage}
 		controlPlane={data.backups.controlPlane}
 	/>
+
+	{#if data.audit}
+		<AuditLog events={data.audit} />
+	{/if}
 </main>
 
 {#if manifest}
