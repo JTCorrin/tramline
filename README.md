@@ -11,8 +11,8 @@
 
 An open-source, self-hosted platform inspired by [Railway](https://railway.com). Draw your stack on a canvas, push to deploy, and keep your code, secrets and data on hardware you control.
 
-[![CI](https://github.com/joecorrin/tramline/actions/workflows/ci.yml/badge.svg)](https://github.com/joecorrin/tramline/actions/workflows/ci.yml)
-[![Security](https://github.com/joecorrin/tramline/actions/workflows/security.yml/badge.svg)](https://github.com/joecorrin/tramline/actions/workflows/security.yml)
+[![CI](https://github.com/JTCorrin/tramline/actions/workflows/ci.yml/badge.svg)](https://github.com/JTCorrin/tramline/actions/workflows/ci.yml)
+[![Security](https://github.com/JTCorrin/tramline/actions/workflows/security.yml/badge.svg)](https://github.com/JTCorrin/tramline/actions/workflows/security.yml)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange.svg)](docs/roadmap.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -131,7 +131,7 @@ Want the details? [SECURITY.md](SECURITY.md) explains exactly how each protectio
 You'll need Node 24, pnpm 10 and Docker (Docker Desktop, OrbStack or Colima).
 
 ```bash
-git clone https://github.com/joecorrin/tramline.git && cd tramline
+git clone https://github.com/JTCorrin/tramline.git && cd tramline
 pnpm install
 cp apps/web/.env.example apps/web/.env   # set TRAMLINE_SECRET_KEY: openssl rand -base64 32
 pnpm dev
@@ -158,7 +158,7 @@ Tramline is being built in phases. The [full roadmap](docs/roadmap.md) has the d
 
 Tramline is built in the open, and it's early enough that your work will shape what it becomes. Whether it's fixing a typo, filing a bug, polishing the UI or writing the Proxmox adapter, contributions of every size are welcome.
 
-- 🐛 **Found a bug or have an idea?** [Open an issue](https://github.com/joecorrin/tramline/issues).
+- 🐛 **Found a bug or have an idea?** [Open an issue](https://github.com/JTCorrin/tramline/issues).
 - 🛠️ **Want to write code?** [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, architecture and tests.
 - 🗺️ **Looking for something big?** Phase 6 (multi-node and compute adapters) is up next on the [roadmap](docs/roadmap.md).
 - 🔐 **Found a vulnerability?** Please report it privately. See [SECURITY.md](SECURITY.md).
