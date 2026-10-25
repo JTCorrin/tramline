@@ -6,6 +6,7 @@ import { domains } from './resources/domains';
 import { environments } from './resources/environments';
 import { github } from './resources/github';
 import { nodes } from './resources/nodes';
+import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
 import { services } from './resources/services';
 import { tokens } from './resources/tokens';
@@ -27,7 +28,8 @@ export function createClient(options: ClientOptions) {
 		backups: backups(http),
 		domains: domains(http),
 		data: data(http),
-		tokens: tokens(http)
+		tokens: tokens(http),
+		oidc: oidc(http)
 	};
 }
 

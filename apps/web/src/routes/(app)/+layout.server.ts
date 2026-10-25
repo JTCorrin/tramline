@@ -24,7 +24,8 @@ export const load: LayoutServerLoad = async ({ locals, request }) => {
 			id: locals.user.id,
 			name: locals.user.name,
 			email: locals.user.email,
-			image: locals.user.image ?? null
+			image: locals.user.image ?? null,
+			twoFactorEnabled: Boolean(locals.user.twoFactorEnabled)
 		},
 		organizations: orgs,
 		activeOrganization: orgs.find((org) => org.id === activeId)!

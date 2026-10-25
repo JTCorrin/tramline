@@ -126,8 +126,9 @@ export function deployCommit(
 	secrets: Secrets,
 	settings: PlatformSettings,
 	target: Pick<TrackedInstance, 'serviceId' | 'environmentId' | 'projectId'>,
-	commit: string,
-	reason: string
+	commit: string | null,
+	reason: string,
+	createdBy: string | null = null
 ): Deployment {
 	const env = db.select().from(environment).where(eq(environment.id, target.environmentId)).get()!;
 	const state = loadEnvironmentState(db, secrets, env);
@@ -160,7 +161,7 @@ export function deployCommit(
 			config: svc.applied!,
 			variables: secrets.encrypt(JSON.stringify(variables.get(target.serviceId) ?? {})),
 			commit,
-			createdBy: null
+			createdBy
 		})
 		.returning()
 		.get();

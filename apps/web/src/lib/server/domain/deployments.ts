@@ -10,7 +10,8 @@ import { systemLog } from '../nodes/logs';
 import type { DbOrTx } from '../db/client';
 import { requireInstance } from './access';
 import type { Ctx } from './context';
-import { sourceLabel } from './staging';
+import { deployCommit } from './autodeploy';
+import { appliedConfig, sourceLabel } from './staging';
 
 type DeploymentRow = typeof deployment.$inferSelect;
 
@@ -158,4 +159,33 @@ export function remove(ctx: Ctx, id: string): Deployment {
 	notifyNodes();
 	publish({ type: 'deployments', projectId, environmentId: dep.environmentId });
 	return toDto(row);
+}
+
+/**
+ * Deploys a service as it is deployed now (config and variables; staged
+ * edits stay staged), optionally at an exact commit: what CI calls after
+ * testing a commit.
+ */
+export function deployService(
+	ctx: Ctx,
+	input: { serviceId: string; environmentId: string; commit?: string | null }
+): Deployment {
+	const { service: svc } = requireInstance(ctx, input.serviceId, input.environmentId);
+	const applied = appliedConfig(ctx.db, input.serviceId, input.environmentId);
+	if (!applied?.source) {
+		throw new AppError('conflict', `Deploy ${svc.name}'s staged changes first`);
+	}
+	if (input.commit && applied.source.type !== 'repo') {
+		throw new AppError('validation_failed', 'Only services built from a repository take a commit');
+	}
+	const by = ctx.token ? `token “${ctx.token.name}”` : 'hand';
+	return deployCommit(
+		ctx.db,
+		ctx.secrets,
+		ctx.settings,
+		{ serviceId: input.serviceId, environmentId: input.environmentId, projectId: svc.projectId },
+		input.commit ?? null,
+		`Deployed${input.commit ? ` ${input.commit.slice(0, 7)}` : ''} by ${by}`,
+		ctx.userId
+	);
 }

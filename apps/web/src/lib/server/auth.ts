@@ -9,7 +9,8 @@ import {
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
-import { organization } from 'better-auth/plugins';
+import { organization, twoFactor } from 'better-auth/plugins';
+import { passkey } from '@better-auth/passkey';
 import { db, schema } from './db';
 
 export const githubAuthEnabled = Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET);
@@ -27,6 +28,14 @@ export const auth = betterAuth({
 		: {},
 	plugins: [
 		organization(),
+		// TOTP with backup codes; the secret is encrypted by better-auth with TRAMLINE_SECRET_KEY
+		twoFactor({ issuer: 'Tramline' }),
+		// WebAuthn credentials are tied to this install's hostname
+		passkey({
+			rpID: new URL(TRAMLINE_URL ?? 'http://localhost').hostname,
+			rpName: 'Tramline',
+			origin: TRAMLINE_URL ? new URL(TRAMLINE_URL).origin : undefined
+		}),
 		// must be last so cookies set by server-side auth.api calls reach the response
 		sveltekitCookies(getRequestEvent)
 	]

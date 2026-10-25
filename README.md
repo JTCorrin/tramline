@@ -2,7 +2,7 @@
 
 An open-source, self-hosted, slimmed-down [Railway](https://railway.com): projects are a canvas of services you deploy onto compute you choose: local Docker, Proxmox, or a cloud provider.
 
-> **Status:** Phases 0–4 and 5a complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Images are scanned for vulnerabilities before they run, and databases keep their data on volumes, with encrypted backups to any S3-compatible bucket. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
+> **Status:** Phases 0–5 complete. `pnpm dev` runs the control plane and a local agent. Services deploy from Docker images or build from Git (Railpack or a Dockerfile, in a rootless BuildKit) to your machine behind a Caddy ingress with live logs, and redeploy on every push through a one-click GitHub App. Images are scanned for vulnerabilities before they run, and databases keep their data on volumes, with encrypted backups to any S3-compatible bucket. Security is a first-class goal: see [Secure by default](docs/roadmap.md#secure-by-default).
 
 ## Repository layout
 
@@ -84,7 +84,7 @@ See [docs/roadmap.md](docs/roadmap.md) for the full plan.
 3. **Builds from source**: rootless BuildKit, Railpack or Dockerfile, GitHub App, push webhooks and polling ✅
    - 3.5 **Image vulnerability scanning** ✅: Trivy scans every built and pulled image before it runs; warn or block per service
 4. **Data and networking**: databases and references (Phase 1), volumes ✅ (4a), encrypted backups to S3 with restore drills, including the control plane's own database ✅ (4b), custom domains, environment duplication, cron services, watch paths and a read-only Postgres browser ✅ (4c)
-5. **Agent access**: API tokens with scopes, an audit log, and an MCP server over stdio and `/mcp` ✅ (5a); 2FA, passkeys and GitHub Actions OIDC next
+5. **Agent access**: API tokens with scopes, an audit log, an MCP server over stdio and `/mcp`, GitHub Actions OIDC, 2FA and passkeys ✅
 6. Multi-node, adapter SDK, Proxmox adapter
 7. Cloud adapters (Hetzner, AWS, GCP, Azure) + node pools
 8. Price engine and placement

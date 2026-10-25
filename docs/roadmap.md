@@ -250,7 +250,7 @@ The best secret is one that doesn't exist. Rather than pasting AWS, GCP or Azure
   - Webhooks are HMAC-verified in constant time; the manifest, install and setup redirects are bound to a state cookie; installations are verified with GitHub before they're connected and never shared across organizations.
 - **Phase 3.5 ✅:** image vulnerability scanning with Trivy, warning by default or blocking fixable critical findings, on built and registry images alike.
 - **Phase 4:** off-site backups and Litestream (moved forward from Phase 9), plus restore drills.
-- **Phase 5:** token scopes and the audit log ✅ (5a); 2FA and passkeys, and **GitHub Actions OIDC for deploying to Tramline** (no CI secrets) next.
+- **Phase 5 ✅:** token scopes and the audit log (5a); 2FA, passkeys and **GitHub Actions OIDC for deploying to Tramline** with no CI secrets (5b).
 - **Phase 5.5 (workload identity):** Tramline as an OIDC issuer (discovery, JWKS and key rotation), per-deployment tokens mounted and refreshed by the agent, AWS, GCP, Azure and Vault federation with trust-policy snippets on the canvas, and publishing the JWKS for private installs. Tested end to end against real AWS STS in a scheduled CI job.
 - **Phase 6:** node hardening baseline, `tramline` user, firewall, fail2ban, WireGuard-only node traffic, mTLS agents, posture view, and the database TCP proxy (opt-in, TLS enforced by the database, IP allowlist in the host firewall).
 - **Phase 7:** provider firewalls and security groups, no public SSH by default on cloud nodes.
@@ -286,7 +286,7 @@ Each phase ends with a demoable result. Phases 0–2 are the MVP spine.
   - Uses dockerode, behind a `ContainerRuntime` interface so it can be tested with a fake.
   - Runs three loops: a sync loop (long-poll, then converge), a report loop (observe, health-check, report, and re-converge periodically to repair drift), and a log shipper.
   - Detects Docker outages and reports them.
-- **Ingress:** a `tramline-ingress` Caddy container. Its config file is rewritten and Caddy runs with `--watch`, so the admin port is never exposed. It joins every environment network, which lets it run healthchecks too.
+- **Ingress:** a `tramline-ingress` Caddy container. The agent pushes its routes into the container and loads them with `caddy reload`, so Caddy's admin API never leaves the container and no host files are shared with it. (It first used a bind-mounted file with `--watch`; Caddy could read a half-written file and some file-sharing layers served it a stale copy, so new routes intermittently never went live.) It joins every environment network, which lets it run healthchecks too.
 - **Control plane:**
   - Registry for the built-in `local` node; its token is written to `data/local-agent.token`.
   - A deterministic desired-state builder with a revision hash.
@@ -454,11 +454,30 @@ Database templates with generated credentials and connection variables, `${{Serv
   - Over stdio, a token without `deploy` stages a service but is refused the deploy.
   - Connecting Claude Code: `claude mcp add tramline --transport http https://<tramline>/mcp --header "Authorization: Bearer tl_…"`.
 
-**5b: next**
+**5b: GitHub Actions OIDC, 2FA and passkeys ✅** (e2e in CI)
 
-- 2FA and passkeys.
-- **GitHub Actions OIDC for deploying to Tramline** (no CI secrets): a workflow's OIDC token, from a repository and branch the organization trusts, is exchanged for a short-lived `deploy` token.
+- **GitHub Actions OIDC** (no CI secrets), in Settings → GitHub Actions, for owners and admins.
+  - **Trust rules:** trust a repository, optionally limited to a ref pattern (`refs/heads/main`, `refs/tags/v*`) and a GitHub deployment environment, with chosen scopes.
+  - **The exchange:** a workflow posts its OIDC token, requested with this install's URL as the audience, to `POST /api/v1/oidc/github`.
+  - **Verification:** RS256 only (no `none`, no HMAC), against GitHub's published keys, which are refetched when an unknown key appears. Tramline checks the issuer, audience, expiry and not-before, and that the repository, ref and environment match a rule.
+  - **Renamed or re-created repos:** the rule pins the repository's numeric ID on first use.
+  - **What the workflow gets:** a 15-minute API token with the rule's scopes, acting as the member who created the rule. Each exchange is audited, and expired tokens are cleaned up.
+  - **New endpoint:** `POST /api/v1/services/:id/deploy { environmentId, commit? }` deploys a service as it is deployed now, at the exact commit CI tested.
+  - **Example:** the Settings card shows a ready-made workflow step.
+- **Two-factor authentication:** TOTP with backup codes, via better-auth's plugin, from Settings → Your account's security.
+  - Enrolment shows a QR code (rendered as SVG, never injected markup) and the key, confirms a code, then shows the backup codes once.
+  - Sign-in asks for a code, or a backup code, after the password.
+- **Passkeys:** WebAuthn credentials tied to this install's hostname, via better-auth's passkey plugin. Add and remove them in Settings, and "Sign in with a passkey" needs no password.
+- **Exit:** `e2e/security.e2e.ts`:
+  - **2FA:** enrol with real TOTP codes, sign in with a code and with a backup code, and a wrong code is refused.
+  - **Passkeys:** add one with Chromium's virtual authenticator, then sign in with it alone.
+  - **GitHub Actions:** trust a repository in the UI, and the exchange refuses unsigned tokens.
+  - Signature, claim, rule and pinning checks are unit-tested against a real RSA key.
+
+**Later in Phase 5**
+
 - OAuth for `/mcp`, so agents can sign in without pasting a token.
+- Requiring 2FA for an organization.
 - Tools for nodes and prices (`list_nodes`, `add_node`, `compare_prices`) arrive with Phases 6 to 8.
 
 ### Phase 6: Multi-node + adapter SDK + Proxmox adapter

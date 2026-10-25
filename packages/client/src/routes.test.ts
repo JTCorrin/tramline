@@ -108,6 +108,25 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.deployments.logs('dep_1', 50),
 		'GET /deployments/dep_1/logs?format=json&tail=50'
 	],
+	['oidc.trust', (c) => c.oidc.trust(), 'GET /oidc/trust'],
+	[
+		'oidc.createTrust',
+		(c) =>
+			c.oidc.createTrust({
+				repository: 'acme/api',
+				refPattern: null,
+				environment: null,
+				scopes: ['deploy']
+			}),
+		'POST /oidc/trust'
+	],
+	['oidc.removeTrust', (c) => c.oidc.removeTrust('trs_1'), 'DELETE /oidc/trust/trs_1'],
+	['oidc.exchangeGitHub', (c) => c.oidc.exchangeGitHub('jwt'), 'POST /oidc/github'],
+	[
+		'services.deploy',
+		(c) => c.services.deploy('svc_1', { environmentId: 'env_1', commit: 'abc1234' }),
+		'POST /services/svc_1/deploy'
+	],
 	['tokens.getAll', (c) => c.tokens.getAll(), 'GET /tokens'],
 	[
 		'tokens.create',

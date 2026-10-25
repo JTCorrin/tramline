@@ -28,6 +28,21 @@
 			error = result.error.message ?? 'Could not sign in';
 			return;
 		}
+		// accounts with two-factor authentication confirm a code next
+		if (result.data && 'twoFactorRedirect' in result.data && result.data.twoFactorRedirect) {
+			await goto(resolve('/(auth)/two-factor'));
+			return;
+		}
+		await goto(resolve('/(app)'), { invalidateAll: true });
+	}
+
+	async function withPasskey() {
+		error = '';
+		const result = await authClient.signIn.passkey();
+		if (result?.error) {
+			error = result.error.message ?? 'Could not sign in with a passkey';
+			return;
+		}
 		await goto(resolve('/(app)'), { invalidateAll: true });
 	}
 </script>
@@ -62,6 +77,13 @@
 					{#if error}<Field.Error>{error}</Field.Error>{/if}
 				</Field.Field>
 				<Button type="submit" class="w-full" disabled={!ready.current || pending}>Sign in</Button>
+				<Button
+					type="button"
+					variant="outline"
+					class="w-full"
+					disabled={!ready.current}
+					onclick={withPasskey}>Sign in with a passkey</Button
+				>
 				<Field.Description class="text-center">
 					No account yet? <a href={resolve('/(auth)/sign-up')}>Create one</a>
 				</Field.Description>

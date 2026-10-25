@@ -113,6 +113,20 @@
       "when": 1792893462590,
       "tag": "0015_api_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1792895958977,
+      "tag": "0016_oidc_trust",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792896207184,
+      "tag": "0017_two_factor_passkeys",
+      "breakpoints": true
     }
   ]
 }

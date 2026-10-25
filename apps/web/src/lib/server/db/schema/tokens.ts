@@ -40,3 +40,22 @@ export const auditEvent = sqliteTable(
 	},
 	(table) => [index('audit_event_org_idx').on(table.organizationId, table.createdAt)]
 );
+
+/** A repository whose GitHub Actions workflows may exchange OIDC tokens for short-lived API tokens. */
+export const oidcTrust = sqliteTable('oidc_trust', {
+	id: text('id').primaryKey(),
+	organizationId: text('organization_id')
+		.notNull()
+		.references(() => organization.id, { onDelete: 'cascade' }),
+	/** The tokens it issues act as this member. */
+	userId: text('user_id')
+		.notNull()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	repository: text('repository').notNull(),
+	repositoryId: text('repository_id'),
+	refPattern: text('ref_pattern'),
+	environment: text('environment'),
+	scopes: text('scopes', { mode: 'json' }).$type<TokenScope[]>().notNull(),
+	lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+	...timestamps
+});

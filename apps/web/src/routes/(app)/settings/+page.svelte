@@ -2,9 +2,11 @@
 	import { page } from '$app/state';
 	import { invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api.js';
+	import AccountSecurity from '#lib/components/settings/account-security.svelte';
 	import ApiTokens from '#lib/components/settings/api-tokens.svelte';
 	import AuditLog from '#lib/components/settings/audit-log.svelte';
 	import BackupStorage from '#lib/components/settings/backup-storage.svelte';
+	import GithubActions from '#lib/components/settings/github-actions.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -147,7 +149,13 @@
 		</Card.Content>
 	</Card.Root>
 
+	<AccountSecurity twoFactorEnabled={data.user.twoFactorEnabled} />
+
 	<ApiTokens tokens={data.tokens} />
+
+	{#if data.trust}
+		<GithubActions rules={data.trust} audience={data.oidcAudience} />
+	{/if}
 
 	<BackupStorage
 		storage={data.backups.storage}

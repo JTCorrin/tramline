@@ -22,6 +22,8 @@ Tramline is pre-1.0. Only the latest `main` receives security fixes.
 - **Custom domains:** traffic is routed only after a TXT record proves the domain is yours, hostnames are unique across the install, and generated names can't be claimed. HSTS on a custom domain covers that host only.
 - **Data browser:** read-only by construction: the control plane builds every query, each runs in a `READ ONLY` transaction with a statement timeout inside the database container, and table names are checked against the database's own list.
 - **API tokens:** shown once and stored as SHA-256 hashes; scoped (`read`, `write`, `deploy`), optionally expiring, and tied to their creator's membership. Tokens cannot create tokens or change organization settings, and every change made through the API is recorded in the audit log.
+- **Sign-in:** optional TOTP two-factor authentication with backup codes, and passkeys (WebAuthn) bound to the install's hostname.
+- **CI without secrets:** GitHub Actions workflows from trusted repositories (pinned by repository id, optionally limited to refs and environments) exchange their OIDC token, verified against GitHub's keys with the issuer, audience and expiry checked, for an API token that lasts 15 minutes.
 - **Agents:** they connect outbound with per-node tokens (stored hashed), may only write logs for their own deployments, and need no inbound control port.
 - **Web app:** a nonce-based Content Security Policy with no inline or eval scripts, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, HSTS over HTTPS, rate-limited sign-in, and organization scoping on every query.
 - **Ingress:** HTTPS with automatic certificates and HSTS on real domains. Caddy's admin API is never exposed.

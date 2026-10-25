@@ -50,3 +50,51 @@ export const AuditEvent = z.object({
 });
 
 export type AuditEvent = z.infer<typeof AuditEvent>;
+
+/**
+ * Lets GitHub Actions workflows in a repository exchange their OIDC token for
+ * a short-lived API token, so CI needs no stored secret.
+ */
+export const OidcTrust = z.object({
+	id: z.string(),
+	/** `owner/repo`. */
+	repository: z.string(),
+	/** Pinned on first use, so a deleted and re-created repository can't take over. */
+	repositoryId: z.string().nullable(),
+	/** Which refs may exchange, e.g. `refs/heads/main` or `refs/tags/v*`; null for any. */
+	refPattern: z.string().nullable(),
+	/** A GitHub deployment environment the job must run in; null for any. */
+	environment: z.string().nullable(),
+	scopes: z.array(TokenScope),
+	createdBy: z.object({ id: z.string(), name: z.string() }),
+	lastUsedAt: z.iso.datetime().nullable(),
+	createdAt: z.iso.datetime()
+});
+
+export type OidcTrust = z.infer<typeof OidcTrust>;
+
+export const CreateOidcTrust = z.object({
+	repository: z
+		.string()
+		.trim()
+		.toLowerCase()
+		.regex(/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/, 'Use owner/repository'),
+	refPattern: z
+		.string()
+		.trim()
+		.regex(/^refs\/(heads|tags|pull)\/\S+$/, 'Use a full ref, like refs/heads/main')
+		.nullable(),
+	environment: z.string().trim().min(1).max(255).nullable(),
+	scopes: z.array(TokenScope).min(1, 'Choose at least one scope')
+});
+
+export type CreateOidcTrust = z.infer<typeof CreateOidcTrust>;
+
+/** What a workflow gets back for its OIDC token. */
+export const OidcExchange = z.object({
+	token: z.string(),
+	expiresAt: z.iso.datetime(),
+	scopes: z.array(TokenScope)
+});
+
+export type OidcExchange = z.infer<typeof OidcExchange>;
