@@ -336,11 +336,13 @@ export class Backups {
 		}
 		const file = `/tmp/tramline-drill-${job.id}.gz`;
 		await this.runtime.putArchive(name, '/tmp', tarOf(path.basename(file), dump));
+		// the same rewrite as a real restore: the scratch server's own superuser stays put
 		const load = await run(
-			guarded(
-				`gunzip -c ${file}`,
-				'psql -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres'
-			)
+			'POSTGRES_USER=postgres; ' +
+				guarded(
+					`gunzip -c ${file}`,
+					`${POSTGRES_PREPARE} | psql -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres`
+				)
 		);
 		if (load.code !== 0) throw new Error(lastLines(load.errors) || 'psql failed');
 		const counted = await run(

@@ -361,7 +361,12 @@ describe('Backups.drill', () => {
 		s.runtime.onExec = (cmd, { onLine }) => {
 			const script = cmd.at(-1)!;
 			if (script.startsWith('pg_isready')) return ++checks > (options.readyAfter ?? 1) ? 0 : 2;
-			if (script.includes('gunzip')) return options.loadExit ?? 0;
+			if (script.includes('gunzip')) {
+				// a drill rewrites the dump like a restore, so the superuser isn't dropped
+				expect(script).toContain('DROP ROLE IF EXISTS|CREATE ROLE');
+				expect(script).toContain('ON_ERROR_STOP=1');
+				return options.loadExit ?? 0;
+			}
 			if (script.startsWith('for db')) {
 				if (options.countExit) {
 					onLine('stderr', 'psql: error: connection refused');
