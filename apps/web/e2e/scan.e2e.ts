@@ -1,4 +1,4 @@
-import { createProject, expect, signUp, test } from './helpers';
+import { ALL_NODES_ONLINE, createProject, expect, signUp, test } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // the first scan downloads Trivy's vulnerability database
@@ -7,7 +7,7 @@ test.setTimeout(600_000);
 test('block mode refuses an image with fixable critical vulnerabilities', async ({ page }) => {
 	await signUp(page);
 	await createProject(page, 'Scanning');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 

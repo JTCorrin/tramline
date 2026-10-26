@@ -1,4 +1,4 @@
-import { createProject, expect, signUp, test } from './helpers';
+import { ALL_NODES_ONLINE, createProject, expect, signUp, test } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 test.setTimeout(300_000);
@@ -6,7 +6,7 @@ test.setTimeout(300_000);
 test('a cron service runs to completion, on demand and on its schedule', async ({ page }) => {
 	await signUp(page);
 	await createProject(page, 'Cron');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 
