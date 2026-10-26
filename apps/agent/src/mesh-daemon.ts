@@ -49,9 +49,11 @@ export const WG = 'wg0';
 export async function applyTunnel(config: MeshConfig, exec: Run = run) {
 	const links = await exec('ip', ['link', 'show']);
 	if (!links.includes(`${WG}:`)) await exec('ip', ['link', 'add', WG, 'type', 'wireguard']);
+	// Node hands a child its stdin as a socket, which wg can't open as /dev/stdin; cat puts
+	// the key on a real pipe
 	await exec(
-		'wg',
-		['set', WG, 'listen-port', String(config.listenPort), 'private-key', '/dev/stdin'],
+		'sh',
+		['-c', `cat | wg set ${WG} listen-port ${config.listenPort} private-key /dev/stdin`],
 		config.privateKey + '\n'
 	);
 	const prefix = config.cidr.split('/')[1];
