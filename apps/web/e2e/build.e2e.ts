@@ -1,5 +1,5 @@
 import { INGRESS_PORT } from '../playwright.config';
-import { createProject, expect, signUp, test, viaIngress } from './helpers';
+import { ALL_NODES_ONLINE, createProject, expect, signUp, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // a cold Railpack build downloads Node and npm packages, and a cold builder
@@ -14,7 +14,7 @@ test('build a GitHub repository from source, serve it, and redeploy without rebu
 }) => {
 	await signUp(page);
 	await createProject(page, 'Source');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 

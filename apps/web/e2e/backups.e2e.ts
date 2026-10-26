@@ -2,7 +2,15 @@ import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
 import path from 'node:path';
 import { controlPlaneBackupEnv, E2E_S3 } from '../playwright.config';
-import { createProject, currentEnvironment, execIn, expect, signUp, test } from './helpers';
+import {
+	ALL_NODES_ONLINE,
+	createProject,
+	currentEnvironment,
+	execIn,
+	expect,
+	signUp,
+	test
+} from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // images to pull and scan, and a database to start, back up and restore
@@ -62,7 +70,7 @@ test('back up Postgres to the bucket, encrypted, and restore it', async ({ page 
 	await signUp(page);
 	await setUpStorage(page);
 	await createProject(page, 'Backups');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 
@@ -119,7 +127,7 @@ test('back up a plain volume and restore it while the service is stopped', async
 	await signUp(page, 'Volumes Org');
 	await setUpStorage(page);
 	await createProject(page, 'Volumes');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 
