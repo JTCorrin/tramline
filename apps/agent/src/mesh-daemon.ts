@@ -20,18 +20,24 @@ export type Run = (cmd: string, args: string[], input?: string) => Promise<strin
 /** Runs a command, writing `input` to its standard input; rejects with its stderr on failure. */
 export const run: Run = (cmd, args, input) =>
 	new Promise((resolve, reject) => {
-		const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+		const child = spawn(cmd, args, {
+			stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
+		});
 		let stdout = '';
 		let stderr = '';
-		child.stdout.on('data', (chunk) => (stdout += chunk));
-		child.stderr.on('data', (chunk) => (stderr += chunk));
+		child.stdout!.on('data', (chunk) => (stdout += chunk));
+		child.stderr!.on('data', (chunk) => (stderr += chunk));
 		child.on('error', reject);
 		child.on('close', (code) =>
 			code === 0
 				? resolve(stdout)
 				: reject(new Error(`${cmd} ${args[0]} failed: ${stderr.trim() || `exit ${code}`}`))
 		);
-		child.stdin.end(input ?? '');
+		if (input !== undefined) {
+			// a command that exits without reading its input must not take the daemon down
+			child.stdin!.on('error', () => {});
+			child.stdin!.end(input);
+		}
 	});
 
 export const WG = 'wg0';
