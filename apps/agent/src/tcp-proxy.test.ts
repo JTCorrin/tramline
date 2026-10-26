@@ -31,6 +31,8 @@ async function fakePostgres(answer = 'S') {
 	const received: Buffer[] = [];
 	const port = await listen(
 		net.createServer((socket) => {
+			// the proxy may hang up first; that's not a failure here
+			socket.on('error', () => {});
 			let first = true;
 			socket.on('data', (chunk) => {
 				received.push(chunk);
