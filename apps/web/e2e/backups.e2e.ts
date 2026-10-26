@@ -109,8 +109,9 @@ test('back up Postgres to the bucket, encrypted, and restore it', async ({ page 
 	);
 
 	// what reached the bucket is encrypted
-	const [object] = bucketObjects();
-	expect(object).toMatch(/\.sql\.gz\.enc$/);
+	// the install's own snapshots share the bucket, so look for this service's dump
+	const object = bucketObjects().find((key) => key.endsWith('.sql.gz.enc'));
+	expect(object).toBeDefined();
 	expect(magic(object!)).toBe('TLB1');
 });
 
