@@ -10,6 +10,13 @@ import { DEFAULT_MESH_IMAGE } from './mesh';
 
 const VERSION = '0.1.0';
 
+// TCP proxies run this same program in proxy mode
+if (process.argv[2] === 'proxy') {
+	const { runTcpProxy } = await import('./tcp-proxy');
+	await runTcpProxy(JSON.parse(process.argv[3]!));
+	await new Promise(() => {});
+}
+
 // the mesh container runs this same program in mesh mode
 if (process.argv[2] === 'mesh') {
 	const { runMeshDaemon } = await import('./mesh-daemon');

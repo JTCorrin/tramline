@@ -59,7 +59,15 @@ export const DesiredContainer = z.object({
 	memoryMb: z.number().int().nullable(),
 	readOnlyRootFilesystem: z.boolean(),
 	/** Named volumes the agent creates (labelled as its own) and mounts. */
-	volumes: z.array(z.object({ name: z.string(), target: z.string() })).default([])
+	volumes: z.array(z.object({ name: z.string(), target: z.string() })).default([]),
+	/**
+	 * Serve TLS with a certificate the agent creates on the node for these
+	 * names (the key never leaves the node). Postgres only for now.
+	 */
+	tls: z
+		.object({ kind: z.literal('postgres'), names: z.array(z.string()).min(1) })
+		.nullable()
+		.default(null)
 });
 
 export type DesiredContainer = z.infer<typeof DesiredContainer>;
@@ -252,6 +260,25 @@ export const DesiredMesh = z.object({
 
 export type DesiredMesh = z.infer<typeof DesiredMesh>;
 
+/**
+ * A public TCP port for one service on an edge node. Connections from
+ * outside `allow` are dropped, and a Postgres connection has to start TLS
+ * with the database before anything else crosses.
+ */
+export const TcpProxy = z.object({
+	/** Container name, e.g. `tl-tcp-env_1-svc_1`. */
+	name: z.string(),
+	/** Host port. */
+	port: z.number().int(),
+	protocol: z.literal('postgres'),
+	allow: z.array(z.string()),
+	/** `host:port` on `network`. */
+	target: z.string(),
+	network: z.string()
+});
+
+export type TcpProxy = z.infer<typeof TcpProxy>;
+
 export const DesiredState = z.object({
 	/** Hash of the document; the agent echoes it to long-poll for changes. */
 	revision: z.string(),
@@ -267,6 +294,7 @@ export const DesiredState = z.object({
 	queries: z.array(DesiredQuery).default([]),
 	/** null on a single-node install, or before the node has a mesh key. */
 	mesh: DesiredMesh.nullable().default(null),
+	tcpProxies: z.array(TcpProxy).default([]),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */

@@ -15,6 +15,8 @@ export interface ServiceState {
 	effectiveVariables: Record<string, string>;
 	/** Generated public hostname, once one exists. */
 	domain: string | null;
+	/** Edge port of its TCP proxy, once assigned. */
+	tcpPort: number | null;
 }
 
 export interface EnvironmentState {
@@ -50,6 +52,13 @@ export function loadEnvironmentState(
 		services: services.map((svc) => {
 			const applied = appliedConfig(db, svc.id, env.id);
 			const staged = getStaged(db, env.id, svc.id);
+			const instance = db
+				.select({ domain: serviceInstance.domain, tcpPort: serviceInstance.tcpPort })
+				.from(serviceInstance)
+				.where(
+					and(eq(serviceInstance.serviceId, svc.id), eq(serviceInstance.environmentId, env.id))
+				)
+				.get();
 			return {
 				service: svc,
 				applied,
@@ -57,14 +66,8 @@ export function loadEnvironmentState(
 				effective: effectiveConfig(applied, staged),
 				appliedVariables: appliedVariables(db, secrets, env.id, svc.id),
 				effectiveVariables: effectiveVariables(db, secrets, env.id, svc.id),
-				domain:
-					db
-						.select({ domain: serviceInstance.domain })
-						.from(serviceInstance)
-						.where(
-							and(eq(serviceInstance.serviceId, svc.id), eq(serviceInstance.environmentId, env.id))
-						)
-						.get()?.domain ?? null
+				domain: instance?.domain ?? null,
+				tcpPort: instance?.tcpPort ?? null
 			};
 		})
 	};

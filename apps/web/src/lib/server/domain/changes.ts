@@ -5,7 +5,7 @@ import {
 	type Deployment,
 	type StagedChanges
 } from '@tramline/contracts';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { parseCron } from '../cron';
 import { AppError } from '../api/errors';
 import type { DbOrTx } from '../db/client';
@@ -106,6 +106,21 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 				);
 			}
 		}
+		const networking = svc.effective.networking;
+		if (networking.tcpProxy) {
+			if (svc.service.kind !== 'database' || svc.service.icon !== 'postgres') {
+				throw new AppError(
+					'conflict',
+					`${svc.service.name}: the TCP proxy supports Postgres only, for now`
+				);
+			}
+			if (!networking.tcpAllowlist.length) {
+				throw new AppError(
+					'conflict',
+					`${svc.service.name}: list the addresses the TCP proxy should let in (0.0.0.0/0 for anyone)`
+				);
+			}
+		}
 		if (svc.effective.volume?.mountPath && svc.effective.deploy.replicas > 1) {
 			// replicas would share one directory, which corrupts most databases
 			throw new AppError(
@@ -177,6 +192,9 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 					)
 					.run();
 			}
+		}
+		for (const svc of state.services) {
+			if (svc.effective.networking.tcpProxy) assignTcpPort(tx, svc.service.id, environmentId);
 		}
 		tx.delete(stagedChange).where(eq(stagedChange.environmentId, environmentId)).run();
 		pruneSeals(tx, ctx.secrets, environmentId, null);
@@ -276,4 +294,31 @@ function generateDomain(serviceName: string, settings: PlatformSettings) {
 		.slice(0, 40);
 	const suffix = randomBytes(4).toString('hex').slice(0, 6);
 	return `${slug || 'service'}-${suffix}.${settings.baseDomain}`;
+}
+
+/** The first edge port for TCP proxies; ports are kept once assigned. */
+export const TCP_PORTS = { first: 30_000, last: 32_767 };
+
+/** Gives a service its TCP proxy port the first time it's deployed with one. */
+function assignTcpPort(tx: DbOrTx, serviceId: string, environmentId: string) {
+	const where = and(
+		eq(serviceInstance.serviceId, serviceId),
+		eq(serviceInstance.environmentId, environmentId)
+	);
+	if (tx.select({ port: serviceInstance.tcpPort }).from(serviceInstance).where(where).get()?.port)
+		return;
+	const taken = new Set(
+		tx
+			.select({ port: serviceInstance.tcpPort })
+			.from(serviceInstance)
+			.where(isNotNull(serviceInstance.tcpPort))
+			.all()
+			.map((row) => row.port)
+	);
+	for (let port = TCP_PORTS.first; port <= TCP_PORTS.last; port++) {
+		if (taken.has(port)) continue;
+		tx.update(serviceInstance).set({ tcpPort: port }).where(where).run();
+		return;
+	}
+	throw new AppError('conflict', 'Every TCP proxy port is in use');
 }

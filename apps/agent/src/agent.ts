@@ -13,6 +13,7 @@ import { Builder, type BuilderOptions } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
 import { meshKeys } from './mesh';
+import { serviceCertificate } from './tls';
 import { HealthChecker } from './health';
 import { LogShipper } from './logs';
 import type { ContainerRuntime, ManagedContainer } from './runtime';
@@ -37,7 +38,8 @@ export interface AgentOptions {
 	tools?: BuilderOptions['tools'];
 	log?: (message: string) => void;
 	/**
-	 * Join the WireGuard mesh: the image the mesh container runs and where
+	 * Join the WireGuard mesh: the agent's own image (which the mesh container
+	 * and TCP proxies run) and where
 	 * other nodes reach this one (`host:port`, UDP; null behind NAT). The key
 	 * pair is created in the state directory.
 	 */
@@ -88,6 +90,8 @@ export class Agent {
 		this.#meshPublicKey = keys?.publicKey ?? null;
 		this.converger = new Converger(options.runtime, {
 			log: this.#log,
+			agentImage: options.mesh?.image,
+			certificates: (id, names) => serviceCertificate(options.stateDir, id, names),
 			mesh: options.mesh && keys ? { ...options.mesh, privateKey: keys.privateKey } : undefined
 		});
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);

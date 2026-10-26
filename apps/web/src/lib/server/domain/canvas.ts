@@ -1,5 +1,5 @@
 import type { Canvas } from '@tramline/contracts';
-import { publicUrl } from '../settings';
+import { publicUrl, tcpProxyHost } from '../settings';
 import { requireEnvironment } from './access';
 import type { Ctx } from './context';
 import { latestStatuses } from './deployments';
@@ -36,7 +36,11 @@ export function get(ctx: Ctx, environmentId: string): Canvas {
 			staged: hasStaged(svc.staged),
 			publicDomain: svc.effective.networking.publicDomain,
 			volumeMountPath: svc.effective.volume.mountPath,
-			url: svc.domain ? publicUrl(ctx.settings, svc.domain) : null
+			url: svc.domain ? publicUrl(ctx.settings, svc.domain) : null,
+			tcpProxy:
+				svc.tcpPort && svc.applied?.networking.tcpProxy
+					? `${tcpProxyHost(ctx.settings, svc.domain)}:${svc.tcpPort}`
+					: null
 		})),
 		edges
 	};

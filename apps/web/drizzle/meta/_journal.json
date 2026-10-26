@@ -148,6 +148,13 @@
       "when": 1793007601110,
       "tag": "0020_node_mesh",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1793011034675,
+      "tag": "0021_tcp_proxy",
+      "breakpoints": true
     }
   ]
 }

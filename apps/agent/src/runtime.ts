@@ -83,10 +83,21 @@ export interface RunSpec {
 	ports?: { container: number; host: number; protocol?: 'tcp' | 'udp' }[];
 	/** Namespaced kernel settings, e.g. IP forwarding inside the mesh container. */
 	sysctls?: Record<string, string>;
+	/** Written into the container before it starts (absolute paths), e.g. a TLS key. */
+	files?: ContainerFile[];
 	binds?: string[];
 	/** Named Docker volumes. */
 	volumes?: { name: string; target: string; readOnly?: boolean }[];
 	security: SecurityOptions;
+}
+
+export interface ContainerFile {
+	path: string;
+	content: Buffer;
+	mode: number;
+	/** Owner, e.g. 999 for the postgres user in the official image. */
+	uid?: number;
+	gid?: number;
 }
 
 export interface SecurityOptions {

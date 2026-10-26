@@ -34,7 +34,9 @@ export const CanvasService = z.object({
 	/** Where its volume is mounted, when it has one. */
 	volumeMountPath: z.string().nullable(),
 	/** Public URL once a domain has been generated. */
-	url: z.string().nullable()
+	url: z.string().nullable(),
+	/** `host:port` of its TCP proxy, once deployed with one. */
+	tcpProxy: z.string().nullable()
 });
 
 export type CanvasService = z.infer<typeof CanvasService>;
