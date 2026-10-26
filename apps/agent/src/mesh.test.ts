@@ -298,5 +298,7 @@ describe('mesh daemon', () => {
 		await expect(run('sh', ['-c', 'echo oops >&2; exit 3'])).rejects.toThrow('sh -c failed: oops');
 		await expect(run('sh', ['-c', 'exit 4'])).rejects.toThrow('sh -c failed: exit 4');
 		await expect(run('/no/such/command', [])).rejects.toThrow('ENOENT');
+		// input for a command that never reads it is dropped, not a crash
+		expect(await run('true', [], 'x'.repeat(1_000_000))).toBe('');
 	});
 });
