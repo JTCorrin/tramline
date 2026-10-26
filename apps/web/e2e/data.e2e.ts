@@ -1,5 +1,5 @@
 import { INGRESS_PORT } from '../playwright.config';
-import { createProject, expect, signUp, test, viaIngress } from './helpers';
+import { ALL_NODES_ONLINE, createProject, expect, signUp, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // two images to pull and scan, then a database to initialise
@@ -14,7 +14,7 @@ test('an app reaches Postgres through a reference, and the data survives a redep
 }) => {
 	await signUp(page);
 	await createProject(page, 'Data');
-	await expect(page.getByTestId('node-status')).toContainText('1/1 node online', {
+	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, {
 		timeout: 30_000
 	});
 

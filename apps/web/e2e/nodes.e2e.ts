@@ -50,6 +50,14 @@ test.afterEach(async ({}, testInfo) => {
 		run(`${remote} logs ${remoteMesh}`),
 		'== second node: wg show',
 		run(`${remote} exec ${remoteMesh} wg show`),
+		'== local mesh: addresses, routes, listeners',
+		run(`docker exec ${local} sh -c "ip -br addr; ip route; ss -ltn"`),
+		'== local mesh: connecting to each remote forward',
+		run(
+			`docker exec ${local} node -e "const net=require('net');const c=JSON.parse(require('fs').readFileSync('/etc/tramline/mesh.json','utf8'));for(const f of c.forwards.filter(f=>f.to==='remote')){const s=net.connect(f.port,f.address);s.setTimeout(3000);s.on('connect',()=>{console.log(f.address+':'+f.port,'connected');s.destroy()});s.on('timeout',()=>{console.log(f.address+':'+f.port,'timed out');s.destroy()});s.on('error',e=>console.log(f.address+':'+f.port,e.message))}"`
+		),
+		'== second node mesh: addresses, routes, listeners',
+		run(`${remote} exec ${remoteMesh} sh -c "ip -br addr; ip route; ss -ltn"`),
 		'== second node: agent',
 		agentLog
 	].join('\n');
