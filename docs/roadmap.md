@@ -504,19 +504,26 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
 **6c: adapters and Proxmox**
 
 - `packages/adapter-sdk` (contract, conformance suite, fake adapter), adapter registry, `adapter_account` UI with a form generated from each adapter's zod credentials schema and a "Test connection" button.
+- **GPUs in the contract from the start:** an adapter declares whether it has GPUs, and each offer carries the GPU model, count, VRAM and price. Nodes report their GPUs at hello, so GPU machines join the same placement and price comparison as everything else instead of being a separate kind of adapter.
 - **`manual` adapter** (6a's join tokens, behind the adapter contract). **`proxmox` adapter**: provisions VMs from a cloud-init template via the Proxmox API, and they enroll on their own.
 - Metrics: agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
 - **Exit:** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 
-### Phase 7: Cloud adapters + node pools
+### Phase 7: Cloud adapters, GPU nodes and node pools
 
 - Further adapters on the same contract, in order: **Hetzner**, **AWS EC2**, **GCP Compute**, **Azure VMs**. Each one is a package that passes the conformance suite, with no changes to core.
+- **GPU nodes:**
+  - **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
+  - **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
+  - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
+  - **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
+  - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
 - Node pools per environment (adapter account + region + size, min/max) and auto-provisioning when the scheduler can't fit a workload. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
-- **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM.
+- **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
 
 ### Phase 8: Price engine and placement
 
-- Catalog sync jobs call each adapter's `listOffers`. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
+- Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
 - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
 - UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
 - **Exit:** for a given set of service requirements, Tramline shows a ranked provider/region/instance list with monthly cost and provisions the chosen option in one click.

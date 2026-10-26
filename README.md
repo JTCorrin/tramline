@@ -150,7 +150,7 @@ Tramline is being built in phases. The [full roadmap](docs/roadmap.md) has the d
 - [x] **Data and networking**: volumes, encrypted backups, custom domains, cron, data browser
 - [x] **Agent access**: API tokens, audit log, MCP server, GitHub OIDC, 2FA and passkeys
 - [ ] **Multiple machines**: enroll nodes, schedule and drain across them ✅; next, a WireGuard mesh, an adapter SDK and Proxmox
-- [ ] **Cloud providers**: Hetzner, AWS, GCP and Azure, plus node pools
+- [ ] **Cloud providers and GPUs**: Hetzner, AWS, GCP and Azure, GPU nodes from neoclouds like Lambda, plus node pools
 - [ ] **Price engine**: compare providers and place each workload where it's cheapest
 - [ ] **Production ready**: a `tram` CLI, PR environments, a one-line installer
 
