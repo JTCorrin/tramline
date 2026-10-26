@@ -9,6 +9,7 @@ import { applyTunnel, Forwarder, run, runMeshDaemon } from './mesh-daemon';
 import {
 	MESH_CONFIG_PATH,
 	meshContainerName,
+	meshAlias,
 	meshKeys,
 	meshNetworkName,
 	publicKeyFor,
@@ -122,7 +123,7 @@ describe('Converger mesh', () => {
 		const link = runtime.containers.get('tl-link-env_1-svc_db')!;
 		expect(link.spec).toMatchObject({
 			image: SOCAT_IMAGE,
-			cmd: ['TCP-LISTEN:5432,fork,reuseaddr', `TCP:${MESH}:24000`],
+			cmd: ['TCP-LISTEN:5432,fork,reuseaddr', `TCP:${meshAlias('node_1')}:24000`],
 			network: 'tl-env_1',
 			aliases: ['postgres.production.tramline.internal'],
 			security: { capabilities: [], readOnlyRootFilesystem: true }
@@ -134,7 +135,7 @@ describe('Converger mesh', () => {
 		await converger.run(desired({ ...mesh, links: [{ ...mesh.links[0]!, meshPort: 24001 }] }));
 		expect(runtime.containers.get('tl-link-env_1-svc_db')!.spec.cmd).toEqual([
 			'TCP-LISTEN:5432,fork,reuseaddr',
-			`TCP:${MESH}:24001`
+			`TCP:${meshAlias('node_1')}:24001`
 		]);
 		await converger.run(desired({ ...mesh, links: [] }));
 		expect(runtime.containers.has('tl-link-env_1-svc_db')).toBe(false);

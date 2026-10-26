@@ -10,6 +10,12 @@ export const MESH_CONFIG_PATH = '/etc/tramline/mesh.json';
 
 export const meshContainerName = (nodeId: string) => `tramline-mesh-${nodeId}`;
 export const meshNetworkName = (nodeId: string) => `tl-mesh-${nodeId}`;
+/**
+ * The mesh container's name on the mesh network only: its container name could
+ * resolve to its address on an environment network it shares with the caller,
+ * where it doesn't listen.
+ */
+export const meshAlias = (nodeId: string) => `${nodeId}.mesh.tramline.internal`;
 
 /** What the mesh daemon is told: the desired mesh, plus what only this node knows. */
 export interface MeshConfig extends Omit<DesiredMesh, 'links'> {

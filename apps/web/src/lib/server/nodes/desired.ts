@@ -14,14 +14,7 @@ import type { DbOrTx } from '../db/client';
 import { container, deployment, node, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
-import {
-	meshContainerName,
-	meshExports,
-	meshMembers,
-	meshNetworkName,
-	meshPorts,
-	planMesh
-} from './mesh';
+import { meshAlias, meshExports, meshMembers, meshNetworkName, meshPorts, planMesh } from './mesh';
 import { pendingQueries } from './queries';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
@@ -233,7 +226,7 @@ export function buildDesiredState(
 			for (const { host, custom } of e.hosts) {
 				routes.push({
 					host,
-					upstreams: [`${meshContainerName(nodeId)}:${port}`],
+					upstreams: [`${meshAlias(nodeId)}:${port}`],
 					network: meshNetworkName(nodeId),
 					...(custom ? { custom: true } : {})
 				});
