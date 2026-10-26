@@ -24,7 +24,8 @@ export const POST = agentEndpoint(async (node, event) => {
 		settings.dataDir,
 		lines
 			.filter((l) => owned.has(l.deploymentId) && l.stream !== 'system')
-			// secrets never reach disk or the browser, even if an app prints them
+			// known secret values are masked before they reach disk or the browser; this stops
+			// accidental disclosure, not code that deliberately encodes a secret it was given
 			.map((l) => ({ ...l, line: redactorFor(db, secrets, l.deploymentId)(l.line) }))
 	);
 });

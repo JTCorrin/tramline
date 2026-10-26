@@ -11,7 +11,7 @@ import type {
 	Volume
 } from '@tramline/contracts';
 import { SaveBackupStorage as SaveSchema } from '@tramline/contracts';
-import { and, desc, eq, inArray, isNotNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import { objectUrl, presign, type S3Target } from '../backups/s3';

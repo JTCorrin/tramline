@@ -3,6 +3,7 @@ import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
 import { deployment } from '../db/schema';
 import { sealedKeys } from '../domain/variables';
+import { sealVersion } from './seals';
 
 /** Variable names whose values are treated as secrets even when not sealed. */
 const SENSITIVE_KEY =
@@ -40,30 +41,33 @@ export function createRedactor(variables: Record<string, string>, sealed: Set<st
 
 const CACHE_TTL_MS = 60_000;
 const CACHE_SIZE = 200;
-const cache = new Map<string, { redact: Redactor; at: number }>();
+const cache = new Map<string, { redact: Redactor; at: number; seals: number }>();
 
 /** The redactor for a deployment's resolved variables, cached briefly since logs arrive constantly. */
 export function redactorFor(db: DbOrTx, secrets: Secrets, deploymentId: string): Redactor {
 	const hit = cache.get(deploymentId);
-	if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.redact;
+	if (hit && hit.seals === sealVersion() && Date.now() - hit.at < CACHE_TTL_MS) return hit.redact;
 
 	const row = db
 		.select({
 			variables: deployment.variables,
 			serviceId: deployment.serviceId,
-			environmentId: deployment.environmentId
+			environmentId: deployment.environmentId,
+			sensitiveKeys: deployment.sensitiveKeys
 		})
 		.from(deployment)
 		.where(and(eq(deployment.id, deploymentId)))
 		.get();
+	// what was secret when the snapshot was taken (sealed values reached through references
+	// included) stays secret; anything sealed since is added
 	const redact = row
 		? createRedactor(
 				JSON.parse(secrets.decrypt(row.variables)) as Record<string, string>,
-				sealedKeys(db, row.environmentId, row.serviceId)
+				new Set([...row.sensitiveKeys, ...sealedKeys(db, row.environmentId, row.serviceId)])
 			)
 		: (line: string) => line;
 
 	if (cache.size >= CACHE_SIZE) cache.delete(cache.keys().next().value!);
-	cache.set(deploymentId, { redact, at: Date.now() });
+	cache.set(deploymentId, { redact, at: Date.now(), seals: sealVersion() });
 	return redact;
 }

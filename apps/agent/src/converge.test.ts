@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { INGRESS_CONFIG_PATH, ingressName } from './caddy';
-import { Converger } from './converge';
+import { Converger, RETRY_FIRST_MS, RETRY_MAX_MS } from './converge';
 import { LABELS } from './runtime';
 import { desiredContainer, desiredState, FakeRuntime } from './testing';
 
@@ -315,5 +315,53 @@ describe('Converger', () => {
 		};
 		await converger.run(desiredState(undefined, [route]));
 		expect(logs).toContain('updating the ingress failed: no such container');
+	});
+});
+
+describe('Converger retries', () => {
+	it('tries a failed start again after a backoff, and at once for a new spec', async () => {
+		const runtime = new FakeRuntime();
+		const clock = { now: 1_000_000 };
+		const converger = new Converger(runtime, { nodeId: 'node_1', now: () => clock.now });
+		runtime.failPull.set('traefik/whoami', 'registry unavailable');
+
+		await converger.run(desiredState());
+		expect(converger.errors.get('tl-dep_1-0')).toBe('registry unavailable');
+		const pulls = () => runtime.calls.filter((c) => c === 'pull traefik/whoami').length;
+		expect(pulls()).toBe(1);
+
+		// too soon: left alone
+		clock.now += RETRY_FIRST_MS - 1;
+		await converger.run({ ...desiredState(), revision: 'again' });
+		expect(pulls()).toBe(1);
+
+		// the registry is back and the backoff is over
+		runtime.failPull.delete('traefik/whoami');
+		clock.now += 1;
+		await converger.run({ ...desiredState(), revision: 'later' });
+		expect(runtime.containers.has('tl-dep_1-0')).toBe(true);
+		expect(converger.errors.has('tl-dep_1-0')).toBe(false);
+	});
+
+	it('backs off further after each failure, up to a limit', async () => {
+		const runtime = new FakeRuntime();
+		const clock = { now: 0 };
+		const converger = new Converger(runtime, { nodeId: 'node_1', now: () => clock.now });
+		runtime.failPull.set('traefik/whoami', 'nope');
+		const pulls = () => runtime.calls.filter((c) => c === 'pull traefik/whoami').length;
+		await converger.run(desiredState());
+		clock.now += RETRY_FIRST_MS;
+		await converger.run({ ...desiredState(), revision: '2' });
+		expect(pulls()).toBe(2);
+		clock.now += RETRY_FIRST_MS;
+		await converger.run({ ...desiredState(), revision: '3' });
+		expect(pulls()).toBe(2);
+		clock.now += RETRY_MAX_MS;
+		await converger.run({ ...desiredState(), revision: '4' });
+		expect(pulls()).toBe(3);
+
+		// a different spec is a fresh start
+		await converger.run(desiredState([desiredContainer({ image: 'traefik/whoami:v2' })]));
+		expect(runtime.calls).toContain('pull traefik/whoami:v2');
 	});
 });

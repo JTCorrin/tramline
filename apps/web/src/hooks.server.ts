@@ -16,6 +16,7 @@ import { runBackupSchedules } from '#lib/server/domain/backups.js';
 import { recheckDomains } from '#lib/server/domain/domains.js';
 import { pruneAuditLog } from '#lib/server/domain/tokens.js';
 import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
+import { pruneLogs } from '#lib/server/nodes/logs.js';
 import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
 import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
 import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
@@ -70,6 +71,7 @@ export const init: ServerInit = () => {
 			.then(() => recheckDomains(db))
 			.then(() => pruneAuditLog(db))
 			.then(() => pruneExpiredTokens(db))
+			.then(() => pruneLogs(settings.dataDir))
 			.catch((error) => console.error('[backups]', error))
 			.finally(() => (scheduling = false));
 	}, BACKUP_SCHEDULE_INTERVAL_MS);

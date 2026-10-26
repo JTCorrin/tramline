@@ -23,7 +23,10 @@ export const MAGIC = Buffer.from('TLB1');
  */
 export const guarded = (producer: string, consumer: string) =>
 	`S=/tmp/tramline-pipe.$$; rm -f "$S"; { (${producer}) || echo $? > "$S"; } | ${consumer}; C=$?; ` +
-	`if [ -s "$S" ]; then echo "the dump or decompression failed (exit $(cat "$S"))" >&2; rm -f "$S"; exit 1; fi; exit $C`;
+	// a consumer that stops early (psql at an error) leaves the producer a broken pipe: its own
+	// failure is the one to report
+	`if [ $C -ne 0 ]; then rm -f "$S"; exit $C; fi; ` +
+	`if [ -s "$S" ]; then echo "the dump or decompression failed (exit $(cat "$S"))" >&2; rm -f "$S"; exit 1; fi; exit 0`;
 
 /**
  * Native dumps run inside the database's own container, with the credentials

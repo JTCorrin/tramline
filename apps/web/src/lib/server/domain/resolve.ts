@@ -12,6 +12,8 @@ export interface ResolveService {
 export interface ResolveInput {
 	shared: Record<string, string>;
 	services: ResolveService[];
+	/** Sealed variables, as `shared.KEY` or `ServiceName.KEY`. */
+	sealed?: Set<string>;
 }
 
 export interface ResolveResult {
@@ -19,6 +21,11 @@ export interface ResolveResult {
 	variables: Map<string, Record<string, string>>;
 	/** References that point at nothing; they resolve to an empty string. */
 	missing: { serviceId: string; key: string; reference: string }[];
+	/**
+	 * Per service id, the variable names whose values are, or contain, a sealed
+	 * value: directly, or through any chain of references.
+	 */
+	sensitive: Map<string, Set<string>>;
 }
 
 const label = (ref: VariableReference) => (ref.namespace ? `${ref.namespace}.${ref.key}` : ref.key);
@@ -30,6 +37,9 @@ const label = (ref: VariableReference) => (ref.namespace ? `${ref.namespace}.${r
 export function resolveVariables(input: ResolveInput): ResolveResult {
 	const byName = new Map(input.services.map((service) => [service.name, service]));
 	const cache = new Map<string, string>();
+	const sealed = input.sealed ?? new Set<string>();
+	/** Resolved ids whose value carries a sealed value. */
+	const tainted = new Set<string>();
 	const visiting: string[] = [];
 	const missing: ResolveResult['missing'] = [];
 
@@ -53,12 +63,15 @@ export function resolveVariables(input: ResolveInput): ResolveResult {
 		if (value === undefined) return undefined;
 
 		visiting.push(id);
+		if (sealed.has(id)) tainted.add(id);
 		const resolved = replaceReferences(value, (ref) => {
 			const target = ref.namespace ?? scope;
 			const result = resolve(target, ref.key, origin);
 			if (result === undefined) {
 				missing.push({ serviceId: origin.id, key, reference: label(ref) });
 			}
+			// a sealed value stays secret under whatever name it is copied into
+			if (tainted.has(`${target}.${ref.key}`)) tainted.add(id);
 			return result;
 		});
 		visiting.pop();
@@ -67,14 +80,18 @@ export function resolveVariables(input: ResolveInput): ResolveResult {
 	}
 
 	const variables = new Map<string, Record<string, string>>();
+	const sensitive = new Map<string, Set<string>>();
 	for (const service of input.services) {
 		const env: Record<string, string> = { ...service.builtins };
+		const secret = new Set<string>();
 		for (const key of Object.keys(service.variables)) {
 			env[key] = resolve(service.name, key, service) ?? '';
+			if (tainted.has(`${service.name}.${key}`)) secret.add(key);
 		}
 		variables.set(service.id, env);
+		sensitive.set(service.id, secret);
 	}
-	return { variables, missing };
+	return { variables, missing, sensitive };
 }
 
 /** Service names a service's variables point at (excluding itself and `shared`). */

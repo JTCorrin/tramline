@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import type { ScanResult, ServiceConfig, ServiceConfigPatch } from '@tramline/contracts';
 import {
 	index,
@@ -146,6 +147,14 @@ export const deployment = sqliteTable(
 		config: text('config', { mode: 'json' }).$type<ServiceConfig>().notNull(),
 		/** Encrypted JSON of the fully resolved variables. */
 		variables: text('variables').notNull(),
+		/**
+		 * Variables whose values came from a sealed variable, directly or through a
+		 * reference, when this snapshot was taken; their values are kept out of logs.
+		 */
+		sensitiveKeys: text('sensitive_keys', { mode: 'json' })
+			.$type<string[]>()
+			.notNull()
+			.default(sql`'[]'`),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
 		/** Why it is in its current status, shown in the UI. */
