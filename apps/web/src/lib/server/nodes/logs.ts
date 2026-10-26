@@ -1,15 +1,15 @@
 import type { LogLine } from '@tramline/contracts';
 import { EventEmitter } from 'node:events';
 import {
-	appendFileSync,
 	closeSync,
+	fstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readSync,
 	renameSync,
 	rmSync,
-	statSync
+	writeSync
 } from 'node:fs';
 import path from 'node:path';
 
@@ -45,12 +45,17 @@ export function appendLogs(dataDir: string, lines: LogLine[], maxFileBytes = MAX
 	mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
 	for (const [deploymentId, group] of byDeployment) {
 		const target = file(dataDir, deploymentId);
+		// append, then rotate once the file is over the limit: the size checked is the size of
+		// the file just written, through the same handle
+		const fd = openSync(target, 'a');
+		let size: number;
 		try {
-			if (statSync(target).size >= maxFileBytes) renameSync(target, `${target}.1`);
-		} catch {
-			// no file yet
+			writeSync(fd, group.map((l) => JSON.stringify(l) + '\n').join(''));
+			size = fstatSync(fd).size;
+		} finally {
+			closeSync(fd);
 		}
-		appendFileSync(target, group.map((l) => JSON.stringify(l) + '\n').join(''));
+		if (size >= maxFileBytes) renameSync(target, `${target}.1`);
 		for (const line of group) live.emit(deploymentId, line);
 	}
 }
@@ -72,7 +77,7 @@ export function readLogs(dataDir: string, deploymentId: string, limit = 1000): L
 		return [];
 	}
 	try {
-		const { size } = statSync(file(dataDir, deploymentId));
+		const { size } = fstatSync(fd);
 		const length = Math.min(size, MAX_TAIL_BYTES, Math.max(64 * 1024, limit * 2048));
 		const buffer = Buffer.alloc(length);
 		readSync(fd, buffer, 0, length, size - length);
@@ -107,7 +112,14 @@ export function pruneLogs(dataDir: string, now = Date.now(), maxAgeMs = MAX_AGE_
 	for (const name of names) {
 		const full = path.join(dir, name);
 		try {
-			if (now - statSync(full).mtimeMs > maxAgeMs) {
+			const fd = openSync(full, 'r');
+			let mtimeMs: number;
+			try {
+				mtimeMs = fstatSync(fd).mtimeMs;
+			} finally {
+				closeSync(fd);
+			}
+			if (now - mtimeMs > maxAgeMs) {
 				rmSync(full, { force: true });
 				removed++;
 			}

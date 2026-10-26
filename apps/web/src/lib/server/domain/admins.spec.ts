@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -16,10 +16,15 @@ describe('install admins', () => {
 	it('starts with a setup token only the operator can read, and no admin', () => {
 		const { ctx, file, token } = install();
 		expect(token).toMatch(/^tlsetup_/);
-		expect(statSync(file).mode & 0o777).toBe(0o600);
 		// restarting keeps the same token until it's used
 		expect(admins.ensureSetupToken(ctx.db, ctx.settings.dataDir)).toBe(file);
-		expect(readFileSync(file, 'utf8').trim()).toBe(token);
+		const fd = openSync(file, 'r');
+		try {
+			expect(fstatSync(fd).mode & 0o777).toBe(0o600);
+			expect(readFileSync(fd, 'utf8').trim()).toBe(token);
+		} finally {
+			closeSync(fd);
+		}
 		expect(admins.awaitingSetup(ctx)).toBe(true);
 		expect(admins.isInstallAdmin(ctx)).toBe(false);
 	});
