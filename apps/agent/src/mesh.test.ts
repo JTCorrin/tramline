@@ -197,7 +197,7 @@ describe('mesh daemon', () => {
 		expect(calls).toEqual([
 			'ip link show',
 			'ip link add wg0 type wireguard',
-			'wg set wg0 listen-port 51820 private-key /dev/stdin',
+			'sh -c cat | wg set wg0 listen-port 51820 private-key /dev/stdin',
 			'ip address replace 10.231.0.1/16 dev wg0',
 			'ip link set wg0 up',
 			'wg show wg0 peers',
