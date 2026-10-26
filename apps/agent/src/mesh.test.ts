@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Converger } from './converge';
-import { applyTunnel, Forwarder, runMeshDaemon } from './mesh-daemon';
+import { applyTunnel, Forwarder, run, runMeshDaemon } from './mesh-daemon';
 import {
 	MESH_CONFIG_PATH,
 	meshContainerName,
@@ -184,18 +184,20 @@ describe('mesh daemon', () => {
 
 	it('sets up WireGuard and its peers, removing ones that left', async () => {
 		const calls: string[] = [];
-		const exec = async (cmd: string, args: string[]) => {
+		const inputs: string[] = [];
+		const exec = async (cmd: string, args: string[], input?: string) => {
 			calls.push([cmd, ...args].join(' '));
+			if (input) inputs.push(input);
 			if (args.join(' ') === `show wg0 peers`) return 'OLDKEY=\n' + mesh.peers[0]!.publicKey + '\n';
 			return '';
 		};
-		const keyFile = path.join(mkdtempSync(path.join(tmpdir(), 'tl-wg-')), 'wg.key');
-		await applyTunnel(config, exec, keyFile);
-		expect(statSync(keyFile).mode & 0o777).toBe(0o600);
+		await applyTunnel(config, exec);
+		// the key reaches wg on stdin, never on disk or in its arguments
+		expect(inputs).toEqual(['PRIVATE\n']);
 		expect(calls).toEqual([
 			'ip link show',
 			'ip link add wg0 type wireguard',
-			`wg set wg0 listen-port 51820 private-key ${keyFile}`,
+			'wg set wg0 listen-port 51820 private-key /dev/stdin',
 			'ip address replace 10.231.0.1/16 dev wg0',
 			'ip link set wg0 up',
 			'wg show wg0 peers',
@@ -242,7 +244,6 @@ describe('mesh daemon', () => {
 		const done = runMeshDaemon(file, {
 			intervalMs: 5,
 			exec: async () => '',
-			keyFile: path.join(dir, 'wg.key'),
 			log: (line) => logs.push(line),
 			signal: controller.signal
 		});
@@ -290,5 +291,12 @@ describe('mesh daemon', () => {
 		expect(ended).toBe(true);
 		forwarder.close();
 		taken.close();
+	});
+
+	it('runs commands with input on stdin, and reports their errors', async () => {
+		expect(await run('cat', [], 'secret\n')).toBe('secret\n');
+		await expect(run('sh', ['-c', 'echo oops >&2; exit 3'])).rejects.toThrow('sh -c failed: oops');
+		await expect(run('sh', ['-c', 'exit 4'])).rejects.toThrow('sh -c failed: exit 4');
+		await expect(run('/no/such/command', [])).rejects.toThrow('ENOENT');
 	});
 });
