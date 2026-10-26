@@ -16,8 +16,44 @@ const inNode = (...args: string[]) =>
 		stdio: ['ignore', 'pipe', 'ignore']
 	}).trim();
 
+// it creates a fixed admin account and a second Docker daemon, so a retry can't start over
+test.describe.configure({ retries: 0 });
+
 let agent: ChildProcess | undefined;
 let agentLog = '';
+
+/** What each node's mesh saw, attached when the test fails. */
+test.afterEach(async ({}, testInfo) => {
+	if (testInfo.status === testInfo.expectedStatus) return;
+	const run = (cmd: string) => {
+		try {
+			return execFileSync('sh', ['-c', `${cmd} 2>&1`], { encoding: 'utf8' });
+		} catch (error) {
+			return String((error as { stdout?: string }).stdout ?? error);
+		}
+	};
+	const local = '$(docker ps -q --filter name=tramline-mesh- | head -1)';
+	const remote = `docker -H ${dockerHost}`;
+	const remoteMesh = `$(${remote} ps -q --filter name=tramline-mesh- | head -1)`;
+	const report = [
+		'== local mesh logs',
+		run(`docker logs ${local}`),
+		'== local wg show',
+		run(`docker exec ${local} wg show`),
+		'== local mesh config (without its key)',
+		run(`docker exec ${local} grep -v privateKey /etc/tramline/mesh.json`),
+		'== second node: containers',
+		run(`${remote} ps -a --format '{{.Names}} {{.Status}}'`),
+		'== second node: mesh logs',
+		run(`${remote} logs ${remoteMesh}`),
+		'== second node: wg show',
+		run(`${remote} exec ${remoteMesh} wg show`),
+		'== second node: agent',
+		agentLog
+	].join('\n');
+	await testInfo.attach('mesh-diagnostics', { body: report, contentType: 'text/plain' });
+	console.log(report);
+});
 
 test.afterAll(() => {
 	if (agent?.pid) {
