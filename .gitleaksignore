@@ -1,0 +1,5 @@
+# Test fixtures, not secrets: a forged unsigned JWT the OIDC exchange must refuse,
+# and a fake npm token used to check build secrets stay out of commands and logs.
+343818dce192fbed6868e4062147815b72109af4:apps/web/e2e/security.e2e.ts:jwt:137
+1aed65bb6ef33996be0c96ac27d9525d89c038eb:apps/web/src/lib/server/nodes/nodes.spec.ts:generic-api-key:355
+1aed65bb6ef33996be0c96ac27d9525d89c038eb:apps/web/src/lib/server/nodes/nodes.spec.ts:generic-api-key:377

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
@@ -55,23 +55,32 @@ export async function releaseBinary(
 	const expected = tool.sha256[arch];
 	if (!url || !expected) throw new Error(`${tool.name} has no build for ${arch}`);
 
-	const file = path.join(stateDir, tool.name, tool.version, arch, tool.name);
-	if (existsSync(file)) return readFileSync(file);
+	// the verified release is kept and checked against its pin on every use, so a
+	// cached copy that was tampered with is never run
+	const file = path.join(stateDir, tool.name, tool.version, arch, path.posix.basename(url));
+	const verify = (tarball: Buffer) => {
+		const actual = createHash('sha256').update(tarball).digest('hex');
+		if (actual !== expected) {
+			throw new Error(
+				`Checksum mismatch for ${path.posix.basename(url)}: expected ${expected}, got ${actual}`
+			);
+		}
+		return tarball;
+	};
 
-	const name = path.posix.basename(url);
-	const response = await fetcher(url);
-	if (!response.ok) throw new Error(`Downloading ${name} failed: HTTP ${response.status}`);
-	const tarball = Buffer.from(await response.arrayBuffer());
-
-	const actual = createHash('sha256').update(tarball).digest('hex');
-	if (actual !== expected) {
-		throw new Error(`Checksum mismatch for ${name}: expected ${expected}, got ${actual}`);
+	let tarball: Buffer;
+	try {
+		tarball = verify(readFileSync(file));
+	} catch {
+		const response = await fetcher(url);
+		if (!response.ok) {
+			throw new Error(`Downloading ${path.posix.basename(url)} failed: HTTP ${response.status}`);
+		}
+		tarball = verify(Buffer.from(await response.arrayBuffer()));
+		mkdirSync(path.dirname(file), { recursive: true });
+		writeFileSync(file, tarball, { mode: 0o644 });
 	}
-
-	const binary = await extractFile(tarball, tool.name);
-	mkdirSync(path.dirname(file), { recursive: true });
-	writeFileSync(file, binary, { mode: 0o755 });
-	return binary;
+	return extractFile(tarball, tool.name);
 }
 
 export const railpackBinary = (stateDir: string, arch: string, fetcher?: typeof fetch) =>

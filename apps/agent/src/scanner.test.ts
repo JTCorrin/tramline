@@ -3,7 +3,7 @@ import { describe as group, expect, it } from 'vitest';
 import { Builder } from './builder';
 import { TRIVY } from './pins';
 import { describe, scanError, summarise, type TrivyReport } from './scanner';
-import { FakeRuntime, stateDirWithTools } from './testing';
+import { FakeRuntime, fakeTools, stateDirWithTools } from './testing';
 
 const NOW = new Date('2026-10-23T12:00:00Z');
 
@@ -147,6 +147,7 @@ function setup(options: { report?: TrivyReport | string; trivyExit?: number } = 
 	const lines: string[] = [];
 	const builder = new Builder(runtime, {
 		stateDir: stateDirWithTools(),
+		tools: fakeTools,
 		nodeId: () => 'node_1',
 		onLine: (_, line) => lines.push(line)
 	});
@@ -246,6 +247,7 @@ group('Builder scanning', () => {
 		const logged: string[] = [];
 		const quiet = new Builder(offline.runtime, {
 			stateDir: stateDirWithTools(),
+			tools: fakeTools,
 			nodeId: () => 'node_1',
 			onLine: () => {},
 			log: (message) => logged.push(message)

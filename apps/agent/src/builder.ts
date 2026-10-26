@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { BUILDKIT_IMAGE, RAILPACK, TRIVY } from './pins';
-import { railpackBinary, releaseBinary, TRIVY_TOOL } from './railpack';
+import { RAILPACK_TOOL, releaseBinary, TRIVY_TOOL, type ReleaseTool } from './railpack';
 import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
 import {
 	blockedMessage,
@@ -44,6 +44,8 @@ export interface BuilderOptions {
 	onLine: (deploymentId: string, line: string) => void;
 	fetcher?: typeof fetch;
 	log?: (message: string) => void;
+	/** Fetches a verified tool binary; tests pass a fake. */
+	tools?: (tool: ReleaseTool, arch: string) => Promise<Buffer>;
 }
 
 /**
@@ -380,11 +382,7 @@ export class Builder {
 			await this.runtime.run(spec);
 		}
 
-		const binary = await railpackBinary(
-			this.options.stateDir,
-			await this.runtime.arch(),
-			this.options.fetcher
-		);
+		const binary = await this.#tool(RAILPACK_TOOL, await this.runtime.arch());
 		await this.runtime.execStream(this.name, ['mkdir', '-p', path.posix.dirname(RAILPACK_PATH)], {
 			onLine: () => {}
 		});
@@ -402,6 +400,12 @@ export class Builder {
 		throw new Error('The builder did not start');
 	}
 
+	#tool(tool: ReleaseTool, arch: string) {
+		return this.options.tools
+			? this.options.tools(tool, arch)
+			: releaseBinary(tool, this.options.stateDir, arch, this.options.fetcher);
+	}
+
 	/** Copies Trivy into the builder unless this version is already there (it's large). */
 	async #installTrivy() {
 		let installed = '';
@@ -409,12 +413,7 @@ export class Builder {
 			onLine: (_, line) => (installed += `${line}\n`)
 		});
 		if (installed.includes(`Version: ${TRIVY.version}`)) return;
-		const binary = await releaseBinary(
-			TRIVY_TOOL,
-			this.options.stateDir,
-			await this.runtime.arch(),
-			this.options.fetcher
-		);
+		const binary = await this.#tool(TRIVY_TOOL, await this.runtime.arch());
 		await this.runtime.putFile(this.name, TRIVY_PATH, binary, 0o755);
 	}
 

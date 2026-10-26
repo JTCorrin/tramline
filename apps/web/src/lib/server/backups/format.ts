@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { createReadStream, createWriteStream, rmSync, statSync } from 'node:fs';
+import { createWriteStream, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -33,10 +33,11 @@ export function encrypt(key: Buffer) {
 
 /** Decrypts a file, failing (and leaving no output) if it was altered or the key is wrong. */
 export async function decryptFile(input: string, output: string, key: Buffer) {
-	const size = statSync(input).size;
-	if (size < MAGIC.length + 12 + 16) throw new Error('The backup is truncated');
+	// one open file throughout, so what is checked is what is decrypted
 	const handle = await open(input, 'r');
 	try {
+		const { size } = await handle.stat();
+		if (size < MAGIC.length + 12 + 16) throw new Error('The backup is truncated');
 		const head = Buffer.alloc(MAGIC.length + 12);
 		await handle.read(head, 0, head.length, 0);
 		if (!head.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('Not a Tramline backup');
@@ -46,7 +47,7 @@ export async function decryptFile(input: string, output: string, key: Buffer) {
 		decipher.setAuthTag(tag);
 		await pipeline(
 			size > head.length + 16
-				? createReadStream(input, { start: head.length, end: size - 17 })
+				? handle.createReadStream({ start: head.length, end: size - 17, autoClose: false })
 				: Readable.from([]),
 			decipher,
 			createWriteStream(output, { mode: 0o600 })

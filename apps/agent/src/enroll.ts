@@ -1,5 +1,5 @@
 import { AgentJoined, type AgentHello } from '@tramline/contracts';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ControlPlaneError } from './client';
@@ -26,7 +26,11 @@ export const nodeTokenFile = (stateDir: string) => path.join(stateDir, 'node.tok
  */
 export async function enroll(options: EnrollOptions): Promise<string> {
 	const file = nodeTokenFile(options.stateDir);
-	if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+	try {
+		return readFileSync(file, 'utf8').trim();
+	} catch {
+		// not enrolled yet
+	}
 
 	const fetcher = options.fetcher ?? globalThis.fetch;
 	const log = options.log ?? console.log;
@@ -48,7 +52,7 @@ export async function enroll(options: EnrollOptions): Promise<string> {
 			}
 			const joined = AgentJoined.parse(body);
 			mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
-			writeFileSync(file, joined.token + '\n', { mode: 0o600 });
+			writeFileSync(file, joined.token + '\n', { mode: 0o600, flag: 'wx' });
 			log(`[agent] joined as node ${joined.name}`);
 			return joined.token;
 		} catch (error) {

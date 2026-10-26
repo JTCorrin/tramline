@@ -10,7 +10,7 @@ import { Agent } from './agent';
 import { encrypt } from './backups';
 import { ControlPlane, ControlPlaneError } from './client';
 import { RAILPACK } from './pins';
-import { desiredState, FakeRuntime, stateDirWithTools } from './testing';
+import { desiredState, FakeRuntime, fakeTools, stateDirWithTools } from './testing';
 
 function fakeClient(desired: (DesiredState | null)[] = []) {
 	const calls = {
@@ -167,7 +167,14 @@ describe('Agent builds', () => {
 			return 0;
 		};
 		const { client, calls } = fakeClient(desired);
-		const agent = new Agent({ runtime, client, stateDir, version: 'test', log: () => {} });
+		const agent = new Agent({
+			runtime,
+			client,
+			stateDir,
+			version: 'test',
+			tools: fakeTools,
+			log: () => {}
+		});
 		return { agent, runtime, calls };
 	}
 
@@ -262,6 +269,7 @@ describe('Agent builds', () => {
 			stateDir: stateDirWithTools(),
 			version: 'test',
 			fetcher,
+			tools: fakeTools,
 			log: () => {}
 		});
 		await agent.hello();
