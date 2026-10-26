@@ -31,6 +31,12 @@ import { isOnline, MESH_CIDR, type NodeRow } from './registry';
 
 export const MESH_LISTEN_PORT = 51820;
 export const meshContainerName = (nodeId: string) => `tramline-mesh-${nodeId}`;
+/**
+ * The mesh container's name on the mesh network only. Its container name
+ * would resolve to its address on any network it shares with the caller, but
+ * it listens for forwards on the mesh network alone.
+ */
+export const meshAlias = (nodeId: string) => `${nodeId}.mesh.tramline.internal`;
 /** The network between a node's mesh container, its links and its ingress. */
 export const meshNetworkName = (nodeId: string) => `tl-mesh-${nodeId}`;
 export const linkName = (environmentId: string, serviceId: string) =>
@@ -287,7 +293,7 @@ export function planTcpProxies(
 		return [
 			{
 				...base,
-				target: `${meshContainerName(self.id)}:${meshPort}`,
+				target: `${meshAlias(self.id)}:${meshPort}`,
 				network: meshNetworkName(self.id)
 			}
 		];

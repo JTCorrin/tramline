@@ -1,6 +1,12 @@
 import type { DesiredContainer, DesiredState } from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
-import { MESH_CONFIG_PATH, meshContainerName, meshNetworkName, type MeshConfig } from './mesh';
+import {
+	MESH_CONFIG_PATH,
+	meshAlias,
+	meshContainerName,
+	meshNetworkName,
+	type MeshConfig
+} from './mesh';
 import { SOCAT_IMAGE } from './pins';
 import { LABELS, type ContainerRuntime, type ManagedContainer, type RunSpec } from './runtime';
 import type { Certificate } from './tls';
@@ -407,7 +413,10 @@ export class Converger {
 				const spec: RunSpec = {
 					name: link.name,
 					image: SOCAT_IMAGE,
-					cmd: [`TCP-LISTEN:${link.port},fork,reuseaddr`, `TCP:${name}:${link.meshPort}`],
+					cmd: [
+						`TCP-LISTEN:${link.port},fork,reuseaddr`,
+						`TCP:${meshAlias(nodeId)}:${link.meshPort}`
+					],
 					env: {},
 					network: link.network,
 					aliases: [link.alias],
@@ -452,7 +461,7 @@ export class Converger {
 			cmd: ['mesh'],
 			env: {},
 			network,
-			aliases: [],
+			aliases: [meshAlias(nodeId)],
 			restart: { name: 'always', maxRetries: 0 },
 			ports: [{ container: mesh.listenPort, host: hostPort, protocol: 'udp' }],
 			// relaying passes packets between peers, inside this container's namespace only
@@ -467,7 +476,7 @@ export class Converger {
 				[LABELS.managed]: 'true',
 				[LABELS.node]: nodeId,
 				[LABELS.role]: 'mesh',
-				[LABELS.spec]: hash({ image, port: mesh.listenPort, hostPort })
+				[LABELS.spec]: hash({ image, port: mesh.listenPort, hostPort, alias: meshAlias(nodeId) })
 			}
 		};
 		let running = current;
