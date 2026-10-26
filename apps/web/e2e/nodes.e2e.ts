@@ -2,7 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { E2E_NODE, INGRESS_PORT, NODES_ADMIN } from '../playwright.config';
+import { E2E_AGENT_IMAGE, E2E_NODE, INGRESS_PORT, NODES_ADMIN } from '../playwright.config';
 import { createProject, expect, signUp, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
@@ -30,7 +30,7 @@ test.afterAll(() => {
 	execFileSync('docker', ['rm', '-f', '-v', E2E_NODE.container], { stdio: 'ignore' });
 });
 
-test('enroll a second node, pin a service to it, then move it off and remove the node', async ({
+test('enroll a second node, reach it over the mesh, then move off it and remove it', async ({
 	page,
 	request
 }) => {
@@ -63,6 +63,11 @@ test('enroll a second node, pin a service to it, then move it off and remove the
 		)
 		.not.toBe('');
 
+	// it runs its mesh container from this checkout's agent image
+	execFileSync('sh', ['-c', `docker save ${E2E_AGENT_IMAGE} | docker -H ${dockerHost} load -q`], {
+		stdio: 'ignore'
+	});
+
 	// an install admin creates a join command, starting the node cordoned
 	await signUp(page, 'Nodes Org', NODES_ADMIN);
 	await page.goto('/nodes');
@@ -84,7 +89,8 @@ test('enroll a second node, pin a service to it, then move it off and remove the
 			TRAMLINE_JOIN_TOKEN: token,
 			DOCKER_HOST: dockerHost,
 			TRAMLINE_AGENT_STATE_DIR: mkdtempSync(path.join(tmpdir(), 'tramline-e2e-node2-')),
-			TRAMLINE_AGENT_HEALTH_PORT: String(E2E_NODE.healthPort)
+			TRAMLINE_AGENT_HEALTH_PORT: String(E2E_NODE.healthPort),
+			TRAMLINE_MESH_IMAGE: E2E_AGENT_IMAGE
 		}
 	});
 	agent.stdout?.on('data', (chunk) => (agentLog += chunk));
@@ -126,6 +132,76 @@ test('enroll a second node, pin a service to it, then move it off and remove the
 		inNode('ps', '--filter', 'label=tramline.role=workload', '--format', '{{.Image}}')
 	).toContain('whoami');
 
+	// neither node has a public address yet, so the mesh can't connect them
+	await page.goto('/nodes');
+	await expect(row.getByTestId('node-mesh')).toContainText('behind NAT');
+	await expect(row).toContainText("Can't reach local");
+
+	// give the second node an address the first can reach: here, on the first node's mesh network
+	const nodes = (await (await page.request.get('/api/v1/nodes')).json()) as {
+		id: string;
+		name: string;
+	}[];
+	const local = nodes.find((n) => n.name === 'local')!;
+	await expect
+		.poll(
+			() => {
+				try {
+					execFileSync('docker', ['network', 'inspect', `tl-mesh-${local.id}`], {
+						stdio: 'ignore'
+					});
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			{ timeout: 60_000 }
+		)
+		.toBe(true);
+	execFileSync('docker', ['network', 'connect', `tl-mesh-${local.id}`, E2E_NODE.container]);
+	const ip = execFileSync(
+		'docker',
+		[
+			'inspect',
+			'-f',
+			`{{(index .NetworkSettings.Networks "tl-mesh-${local.id}").IPAddress}}`,
+			E2E_NODE.container
+		],
+		{ encoding: 'utf8' }
+	).trim();
+	await row.getByLabel('Mesh endpoint').fill(`${ip}:51820`);
+	await row.getByRole('button', { name: 'Save' }).click();
+	await expect(row.getByTestId('node-mesh')).toContainText(`reachable at ${ip}:51820`);
+	await expect(row).not.toContainText("Can't reach");
+
+	// the local node is an edge, so it serves the service's domain too, over the mesh
+	const onLocal = () => viaIngress(request, INGRESS_PORT, url.hostname);
+	await expect.poll(async () => (await onLocal()).status, { timeout: 120_000 }).toBe(200);
+	expect((await onLocal()).text).toContain('Hostname:');
+
+	// and a service on the local node reaches it by its private name
+	await page.goBack();
+	await page.keyboard.press('ControlOrMeta+k');
+	await page.getByRole('option', { name: 'Docker Image' }).click();
+	await dialog.getByLabel('Image').fill('busybox:1.37');
+	await dialog.getByRole('button', { name: 'Add service' }).click();
+	await panel.getByRole('tab', { name: 'Settings' }).click();
+	await page.getByLabel('Vulnerability scan').click();
+	await page.getByRole('option', { name: 'Off' }).click();
+	await page
+		.getByLabel('Start command')
+		.fill(
+			'until wget -qO- http://whoami.production.tramline.internal/; do sleep 2; done; sleep 3600'
+		);
+	await page.getByLabel('Start command').press('Enter');
+	await page.getByLabel('Run on').click();
+	await page.getByRole('option', { name: 'local', exact: true }).click();
+	await page.getByTestId('changes-bar').getByRole('button', { name: 'Deploy' }).click();
+	await panel.getByRole('tab', { name: 'Deployments' }).click();
+	await expect(page.getByTestId('deployment-logs')).toContainText('Hostname:', {
+		timeout: 180_000
+	});
+
 	// draining keeps a pinned service where it is
 	await page.goto('/nodes');
 	await expect(row).toContainText('1 deployment');
@@ -140,9 +216,9 @@ test('enroll a second node, pin a service to it, then move it off and remove the
 	await page.getByLabel('Run on').click();
 	await page.getByRole('option', { name: 'Any node' }).click();
 	await page.getByTestId('changes-bar').getByRole('button', { name: 'Deploy' }).click();
-	const onLocal = () => viaIngress(request, INGRESS_PORT, url.hostname);
-	await expect.poll(async () => (await onLocal()).status, { timeout: 300_000 }).toBe(200);
-	await expect.poll(async () => (await onNode2()).status, { timeout: 60_000 }).toBe(404);
+	// served from the local node's own container now, and no longer by the second node
+	await expect.poll(async () => (await onNode2()).status, { timeout: 300_000 }).toBe(404);
+	await expect.poll(async () => (await onLocal()).status, { timeout: 30_000 }).toBe(200);
 
 	// an empty node can be removed, and its agent is shut out
 	await page.goto('/nodes');
@@ -151,4 +227,12 @@ test('enroll a second node, pin a service to it, then move it off and remove the
 	await row.getByRole('button', { name: 'Remove' }).click();
 	await expect(row).toHaveCount(0);
 	await expect.poll(() => agentLog, { timeout: 30_000 }).toContain('no longer knows this node');
+	// alone again, the local node leaves the mesh
+	await expect
+		.poll(() =>
+			execFileSync('docker', ['ps', '-q', '--filter', `name=tramline-mesh-${local.id}`], {
+				encoding: 'utf8'
+			}).trim()
+		)
+		.toBe('');
 });

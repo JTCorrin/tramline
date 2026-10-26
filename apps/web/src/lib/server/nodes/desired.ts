@@ -11,9 +11,17 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { container, deployment, serviceInstance } from '../db/schema';
+import { container, deployment, node, serviceInstance } from '../db/schema';
 import { usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
+import {
+	meshContainerName,
+	meshExports,
+	meshMembers,
+	meshNetworkName,
+	meshPorts,
+	planMesh
+} from './mesh';
 import { pendingQueries } from './queries';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
@@ -205,6 +213,34 @@ export function buildDesiredState(
 		}
 	}
 
+	// other nodes' services, over the mesh
+	const self = db.select().from(node).where(eq(node.id, nodeId)).get();
+	const members = meshMembers(db);
+	const exports = members.length >= 2 ? meshExports(db, secrets) : [];
+	const mesh = planMesh(members, exports, {
+		id: nodeId,
+		edge: self?.edge ?? false,
+		networks: [...networks]
+	});
+	if (mesh) {
+		// links, the ingress and the mesh container meet on this network
+		networks.add(meshNetworkName(nodeId));
+		const ports = meshPorts(exports);
+		const forwarded = new Set(mesh.forwards.filter((f) => f.to === 'remote').map((f) => f.port));
+		for (const e of exports) {
+			const port = ports.get(`${e.environmentId}:${e.serviceId}`)!;
+			if (!self?.edge || e.nodeId === nodeId || !forwarded.has(port)) continue;
+			for (const { host, custom } of e.hosts) {
+				routes.push({
+					host,
+					upstreams: [`${meshContainerName(nodeId)}:${port}`],
+					network: meshNetworkName(nodeId),
+					...(custom ? { custom: true } : {})
+				});
+			}
+		}
+	}
+
 	const document = {
 		networks: [...networks].sort(),
 		containers,
@@ -213,6 +249,7 @@ export function buildDesiredState(
 		deletedVolumes: deletedVolumes(db, nodeId),
 		...backupJobs(db, nodeId),
 		queries: pendingQueries(nodeId),
+		mesh,
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

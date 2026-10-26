@@ -22,6 +22,8 @@ export interface ContainerRuntime {
 	/** Removes a volume; false when a container still uses it. Missing volumes count as removed. */
 	removeVolume(name: string): Promise<boolean>;
 	connect(container: string, network: string): Promise<void>;
+	/** A container's IPv4 address on each network it is attached to. */
+	addresses(container: string): Promise<Record<string, string>>;
 	exec(container: string, cmd: string[]): Promise<{ exitCode: number; output: string }>;
 	/**
 	 * Runs a command and streams its output. `env` is given to that process only
@@ -78,7 +80,9 @@ export interface RunSpec {
 	network: string;
 	aliases: string[];
 	restart: { name: 'no' | 'always' | 'on-failure'; maxRetries: number };
-	ports?: { container: number; host: number }[];
+	ports?: { container: number; host: number; protocol?: 'tcp' | 'udp' }[];
+	/** Namespaced kernel settings, e.g. IP forwarding inside the mesh container. */
+	sysctls?: Record<string, string>;
 	binds?: string[];
 	/** Named Docker volumes. */
 	volumes?: { name: string; target: string; readOnly?: boolean }[];

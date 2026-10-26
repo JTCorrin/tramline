@@ -492,14 +492,21 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
   - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room.
   - **Preferences:** the node that built the image (anywhere else rebuilds the same commit), then the node already running the environment (its services share one Docker network until the mesh lands), then the least loaded node.
 - **Nodes page:** status, CPUs, memory reserved by limits, deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
-- **Still to come in 6b and 6c:**
-  - **Cross-node networking:** services on different nodes can't reach each other until the WireGuard mesh, which is why the scheduler keeps environments together.
-  - **Ingress:** each node serves its own deployments' routes, so public domains need the edge role to work across nodes.
-  - **Spreading replicas across nodes,** CPU requests, metrics and node hardening checks.
+- **Still to come:** CPU requests, metrics and node hardening checks. (Cross-node networking and edge nodes arrived in 6b; the scheduler still prefers to keep an environment together, which saves a hop.)
 
-**6b: mesh**
+**6b: mesh ✅** (verified on Docker with a Docker-in-Docker node; e2e in CI)
 
-- WireGuard mesh managed by agents and coordinated by the control plane; per-node DNS for `*.tramline.internal` across nodes; edge/ingress node role; replicas spread across nodes; the TCP proxy for databases.
+- **WireGuard between nodes:**
+  - **Keys:** each agent creates its own key pair. The private key stays on the node, and the control plane only sees public keys and hands out addresses in `10.231.0.0/16`.
+  - **The mesh container:** it holds the tunnel in its own network namespace, with `NET_ADMIN` and no other capability. Nothing on the host changes: no routes, no firewall rules, no IP forwarding.
+  - **Reaching a node:** a node with an endpoint (`--endpoint host:port` in the install command, or set on the Nodes page) is reached directly. Nodes behind NAT connect out to it, and two NATed nodes reach each other through it as a relay. The Nodes page says when a pair has no way through.
+- **Private names across nodes, one TCP port at a time:**
+  - **Links:** a tiny socat container on the consumer's node answers to the remote service's private name (e.g. `postgres.production.tramline.internal`) on that environment's network only. It forwards to the mesh container, which carries the connection to the service's node.
+  - **Isolation:** environments stay isolated as they are on one node, and only a service's declared port crosses nodes.
+  - **Ports:** each service gets the same mesh port everywhere, from a hash, so adding one never moves another.
+- **Edge nodes:** an edge serves every public domain, forwarding over the mesh to the node a service runs on. The local node is an edge by default. Other nodes serve their own services' domains as before.
+- **Isolation of failures:** if the mesh can't start, a node still runs its services and serves its routes.
+- **Moved to 6b.2:** spreading a service's replicas across nodes, and the TCP proxy for databases. Edge traffic to another node follows the service's private name, so during a deploy it can briefly reach the new deployment before its healthcheck passes; 6b.2 routes it to the live deployment only.
 
 **6c: adapters and Proxmox**
 

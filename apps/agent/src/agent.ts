@@ -12,6 +12,7 @@ import { runQuery } from './query';
 import { Builder, type BuilderOptions } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
+import { meshKeys } from './mesh';
 import { HealthChecker } from './health';
 import { LogShipper } from './logs';
 import type { ContainerRuntime, ManagedContainer } from './runtime';
@@ -35,6 +36,12 @@ export interface AgentOptions {
 	/** Fetches a verified build tool binary; tests pass a fake. */
 	tools?: BuilderOptions['tools'];
 	log?: (message: string) => void;
+	/**
+	 * Join the WireGuard mesh: the image the mesh container runs and where
+	 * other nodes reach this one (`host:port`, UDP; null behind NAT). The key
+	 * pair is created in the state directory.
+	 */
+	mesh?: { image: string; endpoint: string | null };
 }
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -73,10 +80,16 @@ export class Agent {
 	#abort = new AbortController();
 	#lastHeal = 0;
 	#log: (message: string) => void;
+	#meshPublicKey: string | null;
 
 	constructor(private options: AgentOptions) {
 		this.#log = options.log ?? ((message) => console.log(`[agent] ${message}`));
-		this.converger = new Converger(options.runtime, { log: this.#log });
+		const keys = options.mesh ? meshKeys(options.stateDir) : null;
+		this.#meshPublicKey = keys?.publicKey ?? null;
+		this.converger = new Converger(options.runtime, {
+			log: this.#log,
+			mesh: options.mesh && keys ? { ...options.mesh, privateKey: keys.privateKey } : undefined
+		});
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
 		this.builder = new Builder(options.runtime, {
@@ -186,7 +199,10 @@ export class Agent {
 			cpus: os.cpus().length,
 			memoryMb: Math.round(os.totalmem() / 1024 / 1024),
 			docker,
-			dockerError: this.dockerError
+			dockerError: this.dockerError,
+			mesh: this.#meshPublicKey
+				? { publicKey: this.#meshPublicKey, endpoint: this.options.mesh?.endpoint ?? null }
+				: null
 		};
 	}
 

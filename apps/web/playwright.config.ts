@@ -7,6 +7,9 @@ export const INGRESS_PORT = 8088;
 /** Manages nodes in the e2e install (TRAMLINE_ADMIN_EMAILS). */
 export const NODES_ADMIN = 'e2e-nodes-admin@tramline.test';
 
+/** Built from this checkout before the run; mesh containers run it. */
+export const E2E_AGENT_IMAGE = 'tramline-agent:e2e';
+
 /** A second node: a Docker-in-Docker daemon, its API and ingress published on loopback only. */
 export const E2E_NODE = {
 	container: 'tramline-e2e-node2',
@@ -40,6 +43,7 @@ export function controlPlaneBackupEnv() {
 export default defineConfig({
 	testDir: 'e2e',
 	testMatch: '**/*.e2e.{ts,js}',
+	globalSetup: './e2e/setup.ts',
 	globalTeardown: './e2e/teardown.ts',
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
@@ -79,7 +83,8 @@ export default defineConfig({
 							TRAMLINE_AGENT_TOKEN_FILE: `${import.meta.dirname}/data/e2e/local-agent.token`,
 							// outside data/e2e so the checksum-verified Railpack and Trivy downloads are reused
 							TRAMLINE_AGENT_STATE_DIR: `${import.meta.dirname}/data/e2e-agent`,
-							TRAMLINE_AGENT_HEALTH_PORT: '7172'
+							TRAMLINE_AGENT_HEALTH_PORT: '7172',
+							TRAMLINE_MESH_IMAGE: E2E_AGENT_IMAGE
 						}
 					},
 					{

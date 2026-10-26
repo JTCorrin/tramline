@@ -13,10 +13,13 @@ const AGENT_IMAGE = 'ghcr.io/jtcorrin/tramline-agent:latest';
 const script = `#!/bin/sh
 # Tramline node installer. Usage:
 #   curl -fsSL <tramline>/install.sh | sudo sh -s -- --url <tramline> --token <join token>
+# Add --endpoint <public ip or name>:51820 when other nodes can reach this one over UDP;
+# without it the node connects out to those that can.
 set -eu
 
 URL=""
 TOKEN=""
+ENDPOINT=""
 IMAGE="\${TRAMLINE_AGENT_IMAGE:-${AGENT_IMAGE}}"
 NAME="tramline-agent"
 
@@ -25,6 +28,7 @@ while [ $# -gt 0 ]; do
 		--url) URL="$2"; shift 2 ;;
 		--token) TOKEN="$2"; shift 2 ;;
 		--image) IMAGE="$2"; shift 2 ;;
+		--endpoint) ENDPOINT="$2"; shift 2 ;;
 		*) echo "Unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -60,6 +64,8 @@ docker run -d \\
 	-v "$NAME":/var/lib/tramline \\
 	-e TRAMLINE_URL="$URL" \\
 	-e TRAMLINE_JOIN_TOKEN="$TOKEN" \\
+	-e TRAMLINE_MESH_IMAGE="$IMAGE" \\
+	-e TRAMLINE_MESH_ENDPOINT="$ENDPOINT" \\
 	"$IMAGE" >/dev/null
 
 # the join token works once; wait to hear whether it did

@@ -141,6 +141,13 @@
       "when": 1792933093467,
       "tag": "0019_node_enrollment",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1793007601110,
+      "tag": "0020_node_mesh",
+      "breakpoints": true
     }
   ]
 }

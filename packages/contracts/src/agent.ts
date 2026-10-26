@@ -22,7 +22,19 @@ export const AgentHello = z.object({
 	memoryMb: z.number().int().nonnegative(),
 	/** null when the Docker daemon is unreachable. */
 	docker: z.object({ version: z.string() }).nullable(),
-	dockerError: z.string().nullable().optional()
+	dockerError: z.string().nullable().optional(),
+	/**
+	 * This node's WireGuard identity. The private key never leaves the node.
+	 * `endpoint` is where other nodes can reach it (`host:port`, UDP), or null
+	 * behind NAT.
+	 */
+	mesh: z
+		.object({
+			publicKey: z.string().regex(/^[A-Za-z0-9+/]{43}=$/),
+			endpoint: z.string().nullable()
+		})
+		.nullable()
+		.optional()
 });
 
 export type AgentHello = z.infer<typeof AgentHello>;
@@ -175,6 +187,71 @@ export const IngressRoute = z.object({
 
 export type IngressRoute = z.infer<typeof IngressRoute>;
 
+export const MeshPeer = z.object({
+	nodeId: z.string(),
+	publicKey: z.string(),
+	/** `host:port`; null when the peer is behind NAT and connects to us. */
+	endpoint: z.string().nullable(),
+	/** Mesh addresses routed to this peer: its own, plus nodes it relays for us. */
+	allowedIps: z.array(z.string()),
+	/** Keep the tunnel open through our NAT. */
+	keepalive: z.boolean()
+});
+
+export type MeshPeer = z.infer<typeof MeshPeer>;
+
+/**
+ * A TCP port the mesh container forwards. Connections from this node's links
+ * (and edge routes) go to the node running the service; connections arriving
+ * over the tunnel go to the service itself.
+ */
+export const MeshForward = z.discriminatedUnion('to', [
+	z.object({
+		to: z.literal('remote'),
+		port: z.number().int(),
+		/** The mesh address of the node running the service. */
+		address: z.string()
+	}),
+	z.object({
+		to: z.literal('local'),
+		port: z.number().int(),
+		/** `alias:port` on `network`. */
+		target: z.string(),
+		network: z.string()
+	})
+]);
+
+export type MeshForward = z.infer<typeof MeshForward>;
+
+/** Makes a service on another node answer to its private name on this node's environment network. */
+export const MeshLink = z.object({
+	/** Container name, e.g. `tl-link-env_1-svc_1`. */
+	name: z.string(),
+	network: z.string(),
+	alias: z.string(),
+	/** The service's own port, which the link listens on. */
+	port: z.number().int(),
+	/** The mesh container's port for this service. */
+	meshPort: z.number().int()
+});
+
+export type MeshLink = z.infer<typeof MeshLink>;
+
+export const DesiredMesh = z.object({
+	/** This node's mesh address. */
+	address: z.string(),
+	/** The whole mesh range, routed into the tunnel. */
+	cidr: z.string(),
+	listenPort: z.number().int(),
+	/** Pass traffic between peers that can't reach each other. */
+	relay: z.boolean(),
+	peers: z.array(MeshPeer),
+	forwards: z.array(MeshForward),
+	links: z.array(MeshLink)
+});
+
+export type DesiredMesh = z.infer<typeof DesiredMesh>;
+
 export const DesiredState = z.object({
 	/** Hash of the document; the agent echoes it to long-poll for changes. */
 	revision: z.string(),
@@ -188,6 +265,8 @@ export const DesiredState = z.object({
 	restores: z.array(DesiredRestore).default([]),
 	drills: z.array(DesiredDrill).default([]),
 	queries: z.array(DesiredQuery).default([]),
+	/** null on a single-node install, or before the node has a mesh key. */
+	mesh: DesiredMesh.nullable().default(null),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -302,6 +381,19 @@ export const NodeSummary = z.object({
 	cordoned: z.boolean(),
 	/** Its stateless deployments are moving elsewhere. */
 	draining: z.boolean(),
+	/** Serves every public domain, forwarding to other nodes over the mesh. */
+	edge: z.boolean(),
+	mesh: z
+		.object({
+			address: z.string(),
+			/** `host:port`, or null behind NAT. */
+			endpoint: z.string().nullable(),
+			/** Nodes this one can't reach directly, and none relays for. */
+			unreachable: z.array(z.string()),
+			/** Peers reached through another node: their name, and the relay's. */
+			relayed: z.array(z.object({ node: z.string(), via: z.string() }))
+		})
+		.nullable(),
 	createdAt: z.iso.datetime()
 });
 
@@ -333,7 +425,20 @@ export const CreatedJoinToken = z.object({
 });
 export type CreatedJoinToken = z.infer<typeof CreatedJoinToken>;
 
-export const UpdateNode = z.object({ cordoned: z.boolean() });
+export const UpdateNode = z
+	.object({
+		cordoned: z.boolean(),
+		edge: z.boolean(),
+		/** Where other nodes reach this one's mesh, `host:port` (UDP); null behind NAT. */
+		meshEndpoint: z
+			.string()
+			.trim()
+			.regex(/^[A-Za-z0-9.-]+:\d{1,5}$|^\[[0-9a-fA-F:]+\]:\d{1,5}$/, {
+				message: 'Use host:port, e.g. 203.0.113.7:51820'
+			})
+			.nullable()
+	})
+	.partial();
 export type UpdateNode = z.infer<typeof UpdateNode>;
 
 /** What draining did: deployments moved, and those that stay with their volume. */
