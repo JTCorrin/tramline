@@ -1,7 +1,6 @@
-import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
-import { promisify } from 'node:util';
 import type { MeshConfig } from './mesh';
 
 /**
@@ -18,18 +17,37 @@ import type { MeshConfig } from './mesh';
 
 export type Run = (cmd: string, args: string[], input?: string) => Promise<string>;
 
-const execFileAsync = promisify(execFile);
-const run: Run = async (cmd, args) => (await execFileAsync(cmd, args)).stdout;
+/** Runs a command, writing `input` to its standard input; rejects with its stderr on failure. */
+export const run: Run = (cmd, args, input) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+		let stdout = '';
+		let stderr = '';
+		child.stdout.on('data', (chunk) => (stdout += chunk));
+		child.stderr.on('data', (chunk) => (stderr += chunk));
+		child.on('error', reject);
+		child.on('close', (code) =>
+			code === 0
+				? resolve(stdout)
+				: reject(new Error(`${cmd} ${args[0]} failed: ${stderr.trim() || `exit ${code}`}`))
+		);
+		child.stdin.end(input ?? '');
+	});
 
 export const WG = 'wg0';
-const KEY_FILE = '/tmp/wg.key';
 
-/** Brings the WireGuard interface in line with `config`. Idempotent. */
-export async function applyTunnel(config: MeshConfig, exec: Run = run, keyFile = KEY_FILE) {
-	writeFileSync(keyFile, config.privateKey + '\n', { mode: 0o600 });
+/**
+ * Brings the WireGuard interface in line with `config`. Idempotent. The
+ * private key goes to `wg` on standard input, so it is never written to disk.
+ */
+export async function applyTunnel(config: MeshConfig, exec: Run = run) {
 	const links = await exec('ip', ['link', 'show']);
 	if (!links.includes(`${WG}:`)) await exec('ip', ['link', 'add', WG, 'type', 'wireguard']);
-	await exec('wg', ['set', WG, 'listen-port', String(config.listenPort), 'private-key', keyFile]);
+	await exec(
+		'wg',
+		['set', WG, 'listen-port', String(config.listenPort), 'private-key', '/dev/stdin'],
+		config.privateKey + '\n'
+	);
 	const prefix = config.cidr.split('/')[1];
 	await exec('ip', ['address', 'replace', `${config.address}/${prefix}`, 'dev', WG]);
 	await exec('ip', ['link', 'set', WG, 'up']);
@@ -121,7 +139,6 @@ export class Forwarder {
 export interface DaemonOptions {
 	intervalMs?: number;
 	exec?: Run;
-	keyFile?: string;
 	log?: (message: string) => void;
 	signal?: AbortSignal;
 }
@@ -139,7 +156,7 @@ export async function runMeshDaemon(path: string, options: DaemonOptions = {}) {
 				// remembered even if it fails, so a broken config is reported once
 				applied = text;
 				const config = JSON.parse(text) as MeshConfig;
-				await applyTunnel(config, options.exec, options.keyFile);
+				await applyTunnel(config, options.exec);
 				await forwarder.apply(config);
 				log(
 					`[mesh] ${config.address}: ${config.peers.length} peers, forwarding ${forwarder.ports.length} ports`
