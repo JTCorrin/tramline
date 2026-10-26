@@ -5,6 +5,7 @@ import { deployments } from './resources/deployments';
 import { domains } from './resources/domains';
 import { environments } from './resources/environments';
 import { github } from './resources/github';
+import { install } from './resources/install';
 import { nodes } from './resources/nodes';
 import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
@@ -14,6 +15,7 @@ import { variables } from './resources/variables';
 
 export { ApiError, createHttp, type ClientOptions, type Http, type Query } from './http';
 export { defineResource, type Resource } from './resource';
+export type { InstallAdmin } from './resources/install';
 
 export function createClient(options: ClientOptions) {
 	const http = createHttp(options);
@@ -29,7 +31,8 @@ export function createClient(options: ClientOptions) {
 		domains: domains(http),
 		data: data(http),
 		tokens: tokens(http),
-		oidc: oidc(http)
+		oidc: oidc(http),
+		install: install(http)
 	};
 }
 

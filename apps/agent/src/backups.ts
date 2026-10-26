@@ -16,24 +16,50 @@ import { WORKLOAD_CAPABILITIES } from './spec';
 export const MAGIC = Buffer.from('TLB1');
 
 /**
+ * `producer | consumer` in POSIX sh, failing when either fails. These images'
+ * `sh` has no `pipefail`, so a failed dump piped into gzip would otherwise
+ * exit 0 with a valid, empty archive. The producer's failure is noted in a
+ * file named after this shell's PID, which only the shell and its pipeline see.
+ */
+export const guarded = (producer: string, consumer: string) =>
+	`S=/tmp/tramline-pipe.$$; rm -f "$S"; { (${producer}) || echo $? > "$S"; } | ${consumer}; C=$?; ` +
+	`if [ -s "$S" ]; then echo "the dump or decompression failed (exit $(cat "$S"))" >&2; rm -f "$S"; exit 1; fi; exit $C`;
+
+/**
  * Native dumps run inside the database's own container, with the credentials
  * already in its environment, so no password ever appears on a command line
- * outside it. Each writes a gzip stream to stdout.
+ * outside it. Each writes a gzip stream to stdout, and fails if the dump does.
  */
 export const DUMP: Record<'postgres' | 'mysql' | 'mongo', string> = {
-	postgres: 'pg_dumpall --clean --if-exists -U "$POSTGRES_USER" | gzip',
-	mysql:
-		'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --all-databases --single-transaction --routines --events --triggers | gzip',
+	postgres: guarded('pg_dumpall --clean --if-exists -U "$POSTGRES_USER"', 'gzip'),
+	mysql: guarded(
+		'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --all-databases --single-transaction --routines --events --triggers',
+		'gzip'
+	),
 	mongo:
 		'mongodump --archive --gzip --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin'
 };
 
-/** Loads a dump copied to `$FILE` inside the database's container. */
+/**
+ * Turns `pg_dumpall --clean` output into something that loads cleanly into a
+ * live server: dropping a database other sessions use needs FORCE, and the
+ * superuser the server runs as can be neither dropped nor created again.
+ */
+const POSTGRES_PREPARE =
+	`sed -E -e 's/^DROP DATABASE IF EXISTS (.*);$/DROP DATABASE IF EXISTS \\1 WITH (FORCE);/' ` +
+	`-e '/^(DROP ROLE IF EXISTS|CREATE ROLE) "?'"$POSTGRES_USER"'"?;$/d'`;
+
+/**
+ * Loads a dump copied to `$FILE` inside the database's container. Every load
+ * stops at the first error, so a partial restore is reported as failed.
+ */
 export const LOAD: Record<'postgres' | 'mysql' | 'mongo', string> = {
-	// connected apps would block DROP DATABASE (and the dump would load on top of the old data)
-	postgres:
-		'gunzip -c "$FILE" | sed -E \'s/^DROP DATABASE IF EXISTS (.*);$/DROP DATABASE IF EXISTS \\1 WITH (FORCE);/\' | psql -q -U "$POSTGRES_USER" -d postgres',
-	mysql: 'gunzip -c "$FILE" | MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot',
+	postgres: guarded(
+		'gunzip -c "$FILE"',
+		`${POSTGRES_PREPARE} | psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres`
+	),
+	// mysql stops at the first error in batch mode
+	mysql: guarded('gunzip -c "$FILE"', 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot'),
 	mongo:
 		'mongorestore --archive="$FILE" --gzip --drop --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin'
 };
@@ -307,12 +333,23 @@ export class Backups {
 		}
 		const file = `/tmp/tramline-drill-${job.id}.gz`;
 		await this.runtime.putArchive(name, '/tmp', tarOf(path.basename(file), dump));
-		const load = await run(`gunzip -c ${file} | psql -q -h 127.0.0.1 -U postgres -d postgres`);
+		const load = await run(
+			guarded(
+				`gunzip -c ${file}`,
+				'psql -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres'
+			)
+		);
 		if (load.code !== 0) throw new Error(lastLines(load.errors) || 'psql failed');
 		const counted = await run(
 			`for db in $(psql -h 127.0.0.1 -U postgres -tAc "select datname from pg_database where not datistemplate and datname <> 'postgres'"); do psql -h 127.0.0.1 -U postgres -d "$db" -tAc "select count(*) from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema')"; done`
 		);
+		if (counted.code !== 0) {
+			throw new Error(lastLines(counted.errors) || 'Counting the restored tables failed');
+		}
 		const counts = counted.out.split('\n').filter(Boolean).map(Number);
+		if (!counts.length || counts.some(Number.isNaN)) {
+			throw new Error('The restored dump has no databases to check');
+		}
 		const tables = counts.reduce((a, b) => a + b, 0);
 		return `Loaded ${counts.length} ${counts.length === 1 ? 'database' : 'databases'} with ${tables} ${tables === 1 ? 'table' : 'tables'} into a scratch Postgres`;
 	}

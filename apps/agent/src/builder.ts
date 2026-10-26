@@ -475,7 +475,9 @@ export const CLONE_SCRIPT = [
 export function gitAuth(repo: string, token: string | null): Record<string, string> {
 	const env: Record<string, string> = { GIT_TERMINAL_PROMPT: '0' };
 	if (!token) return env;
+	// an installation token is GitHub's; it is never sent anywhere else
 	const origin = new URL(repo).origin;
+	if (origin !== 'https://github.com') return env;
 	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
 	return {
 		...env,

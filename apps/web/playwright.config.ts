@@ -4,9 +4,6 @@ import { defineConfig } from '@playwright/test';
 const docker = process.env.TRAMLINE_E2E_DOCKER === '1';
 export const INGRESS_PORT = 8088;
 
-/** Manages nodes in the e2e install (TRAMLINE_ADMIN_EMAILS). */
-export const NODES_ADMIN = 'e2e-nodes-admin@tramline.test';
-
 /** Built from this checkout before the run; mesh containers run it. */
 export const E2E_AGENT_IMAGE = 'tramline-agent:e2e';
 
@@ -65,7 +62,6 @@ export default defineConfig({
 				TRAMLINE_URL: 'http://localhost:4173',
 				TRAMLINE_INGRESS_PORT: String(INGRESS_PORT),
 				TRAMLINE_AUTH_RATE_LIMIT: 'false',
-				TRAMLINE_ADMIN_EMAILS: NODES_ADMIN,
 				// builds into its own output directory, so a running `pnpm dev` is never disturbed
 				TRAMLINE_E2E: '1',
 				// with Docker, the install's own database is snapshotted to the test bucket

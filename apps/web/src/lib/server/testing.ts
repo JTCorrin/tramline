@@ -1,6 +1,6 @@
 import { createSecrets } from './crypto';
 import { createDb, type Db } from './db/client';
-import { member, organization, user } from './db/schema';
+import { installAdmin, member, organization, user } from './db/schema';
 import type { Ctx } from './domain';
 import type { PlatformSettings } from './settings';
 
@@ -36,4 +36,10 @@ export function seedCtx(db: Db = createTestDb()): Ctx {
 		.run();
 
 	return { db, secrets: testSecrets, settings: testSettings, userId, organizationId };
+}
+
+/** Makes the context's user an install admin, as claiming the install would. */
+export function grantInstallAdmin(ctx: Ctx) {
+	ctx.db.insert(installAdmin).values({ userId: ctx.userId }).onConflictDoNothing().run();
+	return ctx;
 }

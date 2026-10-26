@@ -6,6 +6,7 @@ import { db } from '#lib/server/db/index.js';
 import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
+import { ensureSetupToken } from '#lib/server/domain/admins.js';
 import { securityHeaders } from '#lib/server/security.js';
 import { settings } from '#lib/server/settings.server.js';
 import { reachableFromInternet } from '#lib/server/settings.js';
@@ -27,6 +28,12 @@ const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 export const init: ServerInit = () => {
 	if (building) return;
 	ensureLocalNode(db, settings.dataDir);
+	const setup = ensureSetupToken(db, settings.dataDir);
+	if (setup) {
+		console.log(
+			`[tramline] no install admin yet: sign in, open Nodes, and claim the install with the token in ${setup}`
+		);
+	}
 
 	// survive dev-server HMR re-running this hook
 	const g = globalThis as { __tramlineReconciler?: () => void };

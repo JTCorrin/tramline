@@ -2,8 +2,10 @@ import { z } from 'zod';
 
 /**
  * What an API token may do. `read` covers every GET; `write` stages changes
- * (and implies read); `deploy` applies them: deploys, redeploys, restores and
- * runs (and implies read). A token without `deploy` can only stage.
+ * (and implies read); `deploy` applies them and deletes things that run:
+ * deploys, redeploys, restores, runs, and deleting services, environments,
+ * projects, domains and backups (and implies read). A token without `deploy`
+ * can stage and discard staged changes, but changes nothing that is running.
  */
 export const TOKEN_SCOPES = ['read', 'write', 'deploy'] as const;
 export const TokenScope = z.enum(TOKEN_SCOPES);

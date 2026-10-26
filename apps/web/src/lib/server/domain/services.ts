@@ -16,6 +16,7 @@ import { requireInstance, requireProject, requireService } from './access';
 import type { Ctx } from './context';
 import { appliedConfig, diffConfig, effectiveConfig, getStaged, saveStaged } from './staging';
 import { DATABASE_TEMPLATES } from './templates';
+import { ownsInstallation } from '../github/app';
 
 type ServiceRow = typeof service.$inferSelect;
 
@@ -47,6 +48,7 @@ export function get(ctx: Ctx, id: string): Service {
 
 export function create(ctx: Ctx, input: CreateService): Service {
 	requireProject(ctx, input.projectId);
+	requireUsableSource(ctx, input.source);
 
 	let config: ServiceConfig = { ...DEFAULT_SERVICE_CONFIG, source: input.source ?? null };
 	let variables: () => Record<string, string> = () => ({});
@@ -150,6 +152,7 @@ export function stageConfig(
 	patch: ServiceConfigPatch
 ): ServiceConfigView {
 	const { service: svc } = requireInstance(ctx, serviceId, environmentId);
+	requireUsableSource(ctx, patch.source);
 	const applied = appliedConfig(ctx.db, serviceId, environmentId);
 	const staged = getStaged(ctx.db, environmentId, serviceId);
 	const next = effectiveConfig(applied, { config: { ...staged.config } });
@@ -163,6 +166,17 @@ export function stageConfig(
 	publish({ type: 'config', projectId: svc.projectId, environmentId, serviceId });
 	publish({ type: 'changes', projectId: svc.projectId, environmentId });
 	return configView(ctx, serviceId, environmentId);
+}
+
+/** A repository source may only name a GitHub installation this organization connected. */
+function requireUsableSource(ctx: Ctx, source: ServiceConfigPatch['source']) {
+	if (source?.type !== 'repo' || !source.installationId) return;
+	if (!ownsInstallation(ctx.db, ctx.organizationId, source.installationId)) {
+		throw new AppError(
+			'forbidden',
+			'That GitHub installation is not connected to this organization'
+		);
+	}
 }
 
 function configView(ctx: Ctx, serviceId: string, environmentId: string): ServiceConfigView {

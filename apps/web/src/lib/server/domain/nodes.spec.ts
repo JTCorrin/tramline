@@ -4,10 +4,10 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { deployment, node, user } from '../db/schema';
+import { deployment, node } from '../db/schema';
 import { reconcile } from '../nodes/reconciler';
-import { authenticate, ensureLocalNode, join, recordHello } from '../nodes/registry';
-import { seedCtx } from '../testing';
+import { authenticate, ensureLocalNode, join, recordHello, recordReport } from '../nodes/registry';
+import { grantInstallAdmin, seedCtx } from '../testing';
 import * as changes from './changes';
 import type { Ctx } from './context';
 import * as environments from './environments';
@@ -28,7 +28,7 @@ const hello = (memoryMb = 8192): AgentHello => ({
 
 /** An install with its local node online, and a project; the seeded user signed up first. */
 function setup() {
-	const ctx = seedCtx();
+	const ctx = grantInstallAdmin(seedCtx());
 	ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-nodes-')) };
 	const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
 	recordHello(ctx.db, local.id, hello());
@@ -73,28 +73,19 @@ function deployAll(ctx: Ctx, envId: string) {
 }
 
 describe('install admins', () => {
-	it('is whoever signed up first, unless TRAMLINE_ADMIN_EMAILS names others', () => {
-		const { ctx } = setup();
-		expect(nodes.isInstallAdmin(ctx)).toBe(true);
-
-		const later = seedCtx(ctx.db);
-		expect(nodes.isInstallAdmin(later)).toBe(false);
-		expect(() => nodes.createJoinToken(later, { name: 'box' }, 'http://x')).toThrow(
-			"Only this install's admins can add nodes"
-		);
-
-		const email = ctx.db.select().from(user).where(eq(user.id, later.userId)).get()!.email;
-		later.settings = { ...later.settings, adminEmails: [email.toUpperCase().toLowerCase()] };
-		expect(nodes.isInstallAdmin(later)).toBe(true);
-		ctx.settings = { ...ctx.settings, adminEmails: [email] };
-		expect(nodes.isInstallAdmin(ctx)).toBe(false);
-	});
-
-	it('API tokens never manage nodes', () => {
+	it('API tokens never manage nodes, even an admin’s', () => {
 		const { ctx } = setup();
 		const viaToken = { ...ctx, token: { id: 'tok_1', name: 'ci', scopes: ['deploy' as const] } };
 		expect(() => nodes.createJoinToken(viaToken, { name: 'box' }, 'http://x')).toThrow(
 			"Only this install's admins"
+		);
+	});
+
+	it('signing up first, or later, grants nothing', () => {
+		const { ctx } = setup();
+		const later = seedCtx(ctx.db);
+		expect(() => nodes.createJoinToken(later, { name: 'box' }, 'http://x')).toThrow(
+			"Only this install's admins can add nodes"
 		);
 	});
 });
@@ -339,5 +330,62 @@ describe('draining and removing', () => {
 			.where(eq(deployment.serviceId, a.id))
 			.run();
 		expect(() => nodes.remove(ctx, box.id)).toThrow(`holds the data of ${a.name}`);
+	});
+});
+
+describe('reports', () => {
+	it('count only for deployments placed on the reporting node', () => {
+		const { ctx, project, env, local } = setup();
+		const other = enroll(ctx, 'other');
+		const svc = services.create(ctx, {
+			projectId: project.id,
+			kind: 'repo',
+			source: {
+				type: 'repo',
+				repo: 'https://github.com/acme/app',
+				branch: 'main',
+				rootDirectory: '/'
+			}
+		});
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const row = () => ctx.db.select().from(deployment).where(eq(deployment.id, dep!.id)).get()!;
+		expect(row()).toMatchObject({ status: 'building' });
+		const honest = row().nodeId!;
+		const thief = honest === local.id ? other.id : local.id;
+
+		// another node claims the build succeeded with an image of its choosing
+		recordReport(ctx.db, thief, {
+			revision: null,
+			containers: [],
+			builds: [
+				{
+					deploymentId: dep!.id,
+					state: 'succeeded',
+					image: 'attacker/image',
+					commit: 'c'.repeat(40),
+					error: null
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(row()).toMatchObject({ status: 'building', image: null });
+
+		recordReport(ctx.db, honest, {
+			revision: null,
+			containers: [],
+			builds: [
+				{
+					deploymentId: dep!.id,
+					state: 'succeeded',
+					image: 'sha256:real',
+					commit: 'c'.repeat(40),
+					error: null
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		expect(row()).toMatchObject({ status: 'deploying', image: 'sha256:real' });
+		expect(svc.id).toBe(row().serviceId);
 	});
 });

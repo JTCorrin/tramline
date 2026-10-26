@@ -1,10 +1,8 @@
 import { db } from '#lib/server/db/index.js';
-import { user as userTable } from '#lib/server/db/schema/index.js';
-import { eq } from 'drizzle-orm';
 import { readLogs } from '#lib/server/nodes/logs.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { settings } from '#lib/server/settings.server.js';
-import { seedCtx } from '#lib/server/testing.js';
+import { grantInstallAdmin, seedCtx } from '#lib/server/testing.js';
 import type { RequestEvent } from '@sveltejs/kit';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -333,12 +331,9 @@ describe('agent API', () => {
 	});
 
 	it('enrolls a machine with a one-time join token from an admin', async () => {
-		const admin = seedCtx(db);
+		const admin = grantInstallAdmin(seedCtx(db));
 		const other = seedCtx(db);
-		const email = db.select().from(userTable).where(eq(userTable.id, admin.userId)).get()!.email;
-		const before = settings.adminEmails;
-		settings.adminEmails = [email];
-		try {
+		{
 			const refused = await call(nodesRoute.POST as Handler, {
 				path: '/api/v1/nodes',
 				method: 'POST',
@@ -378,8 +373,6 @@ describe('agent API', () => {
 				token: joined.body.token
 			});
 			expect(greeted.body).toMatchObject({ name: 'box-2' });
-		} finally {
-			settings.adminEmails = before;
 		}
 	});
 

@@ -220,24 +220,31 @@ const tokens = new Map<string, { token: string; expiresAt: number }>();
 /** Refresh tokens this long before GitHub expires them, so a build never starts with a dying one. */
 const TOKEN_MARGIN_MS = 10 * 60_000;
 
-/** A one-hour installation token, cached until shortly before it expires. Never stored. */
+/**
+ * A one-hour installation token, cached until shortly before it expires.
+ * Never stored. With `repository` (a name without its owner) it can only
+ * reach that one repository.
+ */
 export async function installationToken(
 	db: DbOrTx,
 	secrets: Secrets,
 	installationId: string,
 	fetcher?: typeof fetch,
-	now = Date.now()
+	now = Date.now(),
+	repository?: string
 ) {
-	const cached = tokens.get(installationId);
+	const key = `${installationId}:${repository ?? '*'}`;
+	const cached = tokens.get(key);
 	if (cached && cached.expiresAt - TOKEN_MARGIN_MS > now) return cached.token;
 	const app = loadApp(db, secrets);
 	if (!app) throw new AppError('conflict', 'The GitHub App is not set up');
 	const created = await createInstallationToken(
 		appJwt(app.id, app.privateKey, now),
 		installationId,
-		fetcher
+		fetcher,
+		repository ? [repository] : undefined
 	);
-	tokens.set(installationId, { token: created.token, expiresAt: Date.parse(created.expires_at) });
+	tokens.set(key, { token: created.token, expiresAt: Date.parse(created.expires_at) });
 	return created.token;
 }
 
@@ -250,9 +257,42 @@ export async function tokenForSource(
 	fetcher?: typeof fetch
 ) {
 	if (source?.type !== 'repo') return null;
-	const installationId =
-		source.installationId ?? matchInstallation(db, organizationId, source.repo);
-	return installationId ? installationToken(db, secrets, installationId, fetcher) : null;
+	// only GitHub repositories over HTTPS ever get a token
+	const fullName = githubFullName(source.repo);
+	if (!fullName) return null;
+	const installationId = source.installationId
+		? requireOwnInstallation(db, organizationId, source.installationId)
+		: matchInstallation(db, organizationId, source.repo);
+	return installationId
+		? installationToken(db, secrets, installationId, fetcher, Date.now(), fullName.split('/')[1])
+		: null;
+}
+
+/**
+ * An installation ID only counts when this organization connected that
+ * installation; IDs are not credentials.
+ */
+export function ownsInstallation(db: DbOrTx, organizationId: string, installationId: string) {
+	return !!db
+		.select({ id: githubInstallation.id })
+		.from(githubInstallation)
+		.where(
+			and(
+				eq(githubInstallation.id, installationId),
+				eq(githubInstallation.organizationId, organizationId)
+			)
+		)
+		.get();
+}
+
+function requireOwnInstallation(db: DbOrTx, organizationId: string, installationId: string) {
+	if (!ownsInstallation(db, organizationId, installationId)) {
+		throw new AppError(
+			'forbidden',
+			'That GitHub installation is not connected to this organization'
+		);
+	}
+	return installationId;
 }
 
 /**
@@ -307,8 +347,11 @@ export async function attachBuildTokens(
 	const builds = await Promise.all(
 		desired.builds.map(async (build) => {
 			const row = byId.get(build.deploymentId);
+			// a source this organization may not use clones without credentials, and fails if private
 			const token = row
-				? await tokenForSource(db, secrets, row.config.source, row.organizationId, fetcher)
+				? await tokenForSource(db, secrets, row.config.source, row.organizationId, fetcher).catch(
+						() => null
+					)
 				: null;
 			return { ...build, token };
 		})

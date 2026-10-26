@@ -10,6 +10,8 @@ import * as auditRoute from './audit-log/+server';
 import * as deployRoute from './environments/[id]/deploy/+server';
 import * as environmentsRoute from './environments/+server';
 import * as projectsRoute from './projects/+server';
+import * as projectRoute from './projects/[id]/+server';
+import * as changesRoute from './environments/[id]/changes/+server';
 import * as tokenRoute from './tokens/[id]/+server';
 import * as tokensRoute from './tokens/+server';
 
@@ -157,6 +159,51 @@ describe('API tokens', () => {
 		expect(
 			(await call(projectsRoute.GET, { path: '/projects', bearer: deploy.token })).status
 		).toBe(200);
+	});
+
+	it('need the deploy scope to delete anything, but not to discard staged changes', async () => {
+		const { session } = setup();
+		const project = (
+			await call(projectsRoute.POST, {
+				path: '/projects',
+				method: 'POST',
+				session,
+				body: { name: 'Keep me' }
+			})
+		).body;
+		const [env] = (
+			await call(environmentsRoute.GET, { path: `/environments?projectId=${project.id}`, session })
+		).body;
+		const write = await createToken(session, ['write']);
+		const deploy = await createToken(session, ['deploy']);
+
+		const remove = (bearer: string) =>
+			call(projectRoute.DELETE, {
+				path: `/projects/${project.id}`,
+				method: 'DELETE',
+				params: { id: project.id },
+				bearer
+			});
+		expect(await remove(write.token)).toMatchObject({
+			status: 403,
+			body: { error: { message: 'This token needs the deploy scope' } }
+		});
+		// nothing happened
+		expect(
+			(await call(projectsRoute.GET, { path: '/projects', session })).body.map(
+				(p: { id: string }) => p.id
+			)
+		).toContain(project.id);
+
+		const discard = await call(changesRoute.DELETE, {
+			path: `/environments/${env.id}/changes`,
+			method: 'DELETE',
+			params: { id: env.id },
+			bearer: write.token
+		});
+		expect(discard.status).not.toBe(403);
+
+		expect((await remove(deploy.token)).status).toBe(204);
 	});
 
 	it('cannot manage tokens or organization settings', async () => {

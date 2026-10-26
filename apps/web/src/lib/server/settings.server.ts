@@ -1,5 +1,4 @@
 import {
-	TRAMLINE_ADMIN_EMAILS,
 	TRAMLINE_BASE_DOMAIN,
 	TRAMLINE_DATA_DIR,
 	TRAMLINE_INGRESS_PORT,
@@ -11,6 +10,5 @@ export const settings: PlatformSettings = {
 	baseDomain: TRAMLINE_BASE_DOMAIN,
 	ingressPort: TRAMLINE_INGRESS_PORT,
 	dataDir: TRAMLINE_DATA_DIR,
-	publicUrl: TRAMLINE_URL ?? null,
-	adminEmails: TRAMLINE_ADMIN_EMAILS
+	publicUrl: TRAMLINE_URL ?? null
 };

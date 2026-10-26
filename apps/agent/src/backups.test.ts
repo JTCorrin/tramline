@@ -1,4 +1,5 @@
 import type { DesiredBackup, DesiredRestore } from '@tramline/contracts';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { extract } from 'tar-stream';
 import { describe, expect, it, vi } from 'vitest';
-import { Backups, decryptFile, DUMP, encrypt, LOAD, MAGIC } from './backups';
+import { Backups, decryptFile, DUMP, encrypt, guarded, LOAD, MAGIC } from './backups';
 import type { DesiredDrill } from '@tramline/contracts';
 import { pack } from 'tar-stream';
 import { HELPER_IMAGE } from './pins';
@@ -343,7 +344,9 @@ describe('Backups.drill', () => {
 		return gzipSync(Buffer.concat(chunks));
 	}
 
-	function drillSetup(options: Partial<{ readyAfter: number; loadExit: number }> = {}) {
+	function drillSetup(
+		options: Partial<{ readyAfter: number; loadExit: number; countExit: number }> = {}
+	) {
 		const s = setup();
 		const backups = new Backups(s.runtime, {
 			stateDir: mkdtempSync(path.join(tmpdir(), 'tramline-agent-')),
@@ -358,8 +361,12 @@ describe('Backups.drill', () => {
 		s.runtime.onExec = (cmd, { onLine }) => {
 			const script = cmd.at(-1)!;
 			if (script.startsWith('pg_isready')) return ++checks > (options.readyAfter ?? 1) ? 0 : 2;
-			if (script.startsWith('gunzip')) return options.loadExit ?? 0;
+			if (script.includes('gunzip')) return options.loadExit ?? 0;
 			if (script.startsWith('for db')) {
+				if (options.countExit) {
+					onLine('stderr', 'psql: error: connection refused');
+					return options.countExit;
+				}
 				onLine('stdout', '3');
 				onLine('stdout', '2');
 			}
@@ -444,7 +451,65 @@ describe('Backups.drill', () => {
 		expect((await broken.backups.drill(drillJob({ url: null }))).error).toBe(
 			'No download URL for this backup'
 		);
+		// a load that "worked" but can't be checked doesn't pass
+		const unchecked = drillSetup({ countExit: 2 });
+		unchecked.serve(await encrypted(gzipSync('-- dump')));
+		expect(
+			(await unchecked.backups.drill(drillJob({ kind: 'postgres', image: 'postgres:17' }))).error
+		).toBe('psql: error: connection refused');
 		broken.fetcher.mockResolvedValueOnce(new Response('gone', { status: 404 }));
 		expect((await broken.backups.drill(drillJob())).error).toBe('Download failed: HTTP 404 gone');
+	});
+});
+
+describe('dump and load commands', () => {
+	const sh = (script: string, env: Record<string, string> = {}) =>
+		new Promise<{ code: number; out: Buffer; err: string }>((resolve) => {
+			const child = spawn('sh', ['-c', script], { env: { ...process.env, ...env } });
+			const out: Buffer[] = [];
+			let err = '';
+			child.stdout.on('data', (chunk) => out.push(chunk));
+			child.stderr.on('data', (chunk) => (err += chunk));
+			child.on('close', (code) => resolve({ code: code ?? -1, out: Buffer.concat(out), err }));
+		});
+
+	it('fail when the dump fails, even though gzip succeeds', async () => {
+		const failed = await sh(guarded('echo partial; exit 42', 'gzip'));
+		expect(failed.code).toBe(1);
+		expect(failed.err).toContain('exit 42');
+
+		const ok = await sh(guarded('echo all of it', 'gzip'));
+		expect(ok.code).toBe(0);
+		expect(gunzipSync(ok.out).toString()).toBe('all of it\n');
+
+		// and when the consumer fails, its status is the result
+		expect((await sh(guarded('echo x', 'exit 7'))).code).toBe(7);
+	});
+
+	it('stop a Postgres restore at the first error', () => {
+		expect(LOAD.postgres).toContain('psql -q -v ON_ERROR_STOP=1');
+	});
+
+	it('rewrite a dump so it loads into a live server', async () => {
+		const sql = [
+			'DROP DATABASE IF EXISTS app;',
+			'DROP ROLE IF EXISTS postgres;',
+			'CREATE ROLE postgres;',
+			'CREATE ROLE reporting;',
+			'ALTER ROLE postgres WITH SUPERUSER;'
+		].join('\n');
+		// cat stands in for psql, so the rewritten SQL is what comes out
+		const file = path.join(mkdtempSync(path.join(tmpdir(), 'tl-load-')), 'dump.gz');
+		writeFileSync(file, gzipSync(sql));
+		const { out } = await sh(LOAD.postgres.replace(/psql [^;]*-d postgres/, 'cat'), {
+			FILE: file,
+			POSTGRES_USER: 'postgres'
+		});
+		const result = out.toString();
+		expect(result.split('\n').filter(Boolean)).toEqual([
+			'DROP DATABASE IF EXISTS app WITH (FORCE);',
+			'CREATE ROLE reporting;',
+			'ALTER ROLE postgres WITH SUPERUSER;'
+		]);
 	});
 });
