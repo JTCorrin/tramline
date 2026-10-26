@@ -15,7 +15,7 @@ import { seedCtx, testSecrets } from '../testing';
 import { buildDesiredState } from './desired';
 import {
 	linkName,
-	meshContainerName,
+	meshAlias,
 	meshExports,
 	meshMembers,
 	meshNetworkName,
@@ -293,7 +293,7 @@ describe('mesh in the desired state', () => {
 			.get()!.domain!;
 		expect(onLocal.ingress.routes).toContainEqual({
 			host: domain,
-			upstreams: [`${meshContainerName(local)}:${ports.get(`${env.id}:${app.id}`)}`],
+			upstreams: [`${meshAlias(local)}:${ports.get(`${env.id}:${app.id}`)}`],
 			network: meshNetworkName(local)
 		});
 

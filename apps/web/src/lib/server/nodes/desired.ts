@@ -15,7 +15,7 @@ import { container, deployment, node, service, serviceInstance } from '../db/sch
 import { tcpProxyHost, usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
 import {
-	meshContainerName,
+	meshAlias,
 	meshExports,
 	meshMembers,
 	meshNetworkName,
@@ -256,7 +256,7 @@ export function buildDesiredState(
 			for (const { host, custom } of e.hosts) {
 				routes.push({
 					host,
-					upstreams: [`${meshContainerName(nodeId)}:${port}`],
+					upstreams: [`${meshAlias(nodeId)}:${port}`],
 					network: meshNetworkName(nodeId),
 					...(custom ? { custom: true } : {})
 				});
