@@ -23,6 +23,8 @@ let agent: ChildProcess | undefined;
 let agentLog = '';
 
 /** What each node's mesh saw, attached when the test fails. */
+// Playwright requires the fixtures argument to be destructured, even when none are used
+// eslint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => {
 	if (testInfo.status === testInfo.expectedStatus) return;
 	const run = (cmd: string) => {
