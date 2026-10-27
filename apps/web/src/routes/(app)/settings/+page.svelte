@@ -7,6 +7,7 @@
 	import AuditLog from '#lib/components/settings/audit-log.svelte';
 	import BackupStorage from '#lib/components/settings/backup-storage.svelte';
 	import GithubActions from '#lib/components/settings/github-actions.svelte';
+	import Invites from '#lib/components/settings/invites.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -150,6 +151,10 @@
 	</Card.Root>
 
 	<AccountSecurity twoFactorEnabled={data.user.twoFactorEnabled} />
+
+	{#if data.invites}
+		<Invites invites={data.invites} />
+	{/if}
 
 	<ApiTokens tokens={data.tokens} />
 

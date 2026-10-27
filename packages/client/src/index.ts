@@ -6,6 +6,7 @@ import { domains } from './resources/domains';
 import { environments } from './resources/environments';
 import { github } from './resources/github';
 import { install } from './resources/install';
+import { invites } from './resources/invites';
 import { nodes } from './resources/nodes';
 import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
@@ -16,6 +17,7 @@ import { variables } from './resources/variables';
 export { ApiError, createHttp, type ClientOptions, type Http, type Query } from './http';
 export { defineResource, type Resource } from './resource';
 export type { InstallAdmin } from './resources/install';
+export type { Invite } from './resources/invites';
 
 export function createClient(options: ClientOptions) {
 	const http = createHttp(options);
@@ -32,7 +34,8 @@ export function createClient(options: ClientOptions) {
 		data: data(http),
 		tokens: tokens(http),
 		oidc: oidc(http),
-		install: install(http)
+		install: install(http),
+		invites: invites(http)
 	};
 }
 

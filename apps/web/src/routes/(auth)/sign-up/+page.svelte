@@ -29,7 +29,8 @@
 			error = result.error.message ?? 'Could not create your account';
 			return;
 		}
-		await goto(resolve('/onboarding'), { invalidateAll: true });
+		// the dashboard sends anyone without an organization to onboarding; an invitee has one
+		await goto(resolve('/(app)'), { invalidateAll: true });
 	}
 </script>
 

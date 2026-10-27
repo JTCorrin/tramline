@@ -62,6 +62,8 @@ export default defineConfig({
 				TRAMLINE_URL: 'http://localhost:4173',
 				TRAMLINE_INGRESS_PORT: String(INGRESS_PORT),
 				TRAMLINE_AUTH_RATE_LIMIT: 'false',
+				// the nodes test claims the install mid-run; other tests still sign up freely
+				TRAMLINE_SIGNUP: 'open',
 				// builds into its own output directory, so a running `pnpm dev` is never disturbed
 				TRAMLINE_E2E: '1',
 				// with Docker, the install's own database is snapshotted to the test bucket

@@ -50,6 +50,17 @@ export const variables = defineEnvVars({
 		description: 'Public URL of this Tramline install, e.g. https://tramline.example.com.',
 		schema: optional
 	},
+	TRAMLINE_SIGNUP: {
+		description:
+			'Who can create an account: `invite` (default; an invite link from an organization, or anyone while the install has no admin yet) or `open` (anyone who can reach the sign-up page).',
+		schema: (value) => {
+			const policy = value || 'invite';
+			if (policy !== 'open' && policy !== 'invite') {
+				throw new Error('TRAMLINE_SIGNUP must be open or invite');
+			}
+			return policy as 'open' | 'invite';
+		}
+	},
 	TRAMLINE_AUTH_RATE_LIMIT: {
 		description:
 			'Rate limit sign-in and sign-up attempts in production (default true). Only disable for automated tests.',

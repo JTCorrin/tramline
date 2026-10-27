@@ -8,6 +8,8 @@ export interface PlatformSettings {
 	dataDir: string;
 	/** Public URL of this install (TRAMLINE_URL), for GitHub callbacks and webhooks. */
 	publicUrl: string | null;
+	/** Who may create an account (TRAMLINE_SIGNUP): anyone, or only people with an invite. */
+	signup?: 'open' | 'invite';
 }
 
 /** GitHub can only deliver webhooks to an address it can reach. */
