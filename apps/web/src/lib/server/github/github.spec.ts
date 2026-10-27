@@ -623,6 +623,7 @@ describe('build tokens', () => {
 				{
 					deploymentId: row.id,
 					serviceId: row.serviceId,
+					organizationId: ctx.organizationId,
 					repo: 'x',
 					ref: 'main',
 					commit: null,
@@ -762,6 +763,7 @@ describe('installation tokens never cross organizations or leave GitHub', () => 
 					{
 						deploymentId: dep!.id,
 						serviceId: svc.id,
+						organizationId: other.organizationId,
 						repo: 'https://github.com/acme/api',
 						ref: 'main',
 						commit: null,

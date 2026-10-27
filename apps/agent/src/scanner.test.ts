@@ -1,6 +1,6 @@
 import type { DesiredBuild, DesiredScan, ScanMode } from '@tramline/contracts';
 import { describe as group, expect, it } from 'vitest';
-import { Builder } from './builder';
+import { Builder, cacheVolume, jobContainerName } from './builder';
 import { TRIVY } from './pins';
 import { describe, scanError, summarise, type TrivyReport } from './scanner';
 import { FakeRuntime, fakeTools, stateDirWithTools } from './testing';
@@ -93,6 +93,7 @@ function job(scan: ScanMode): DesiredBuild {
 	return {
 		deploymentId: 'dep_1',
 		serviceId: 'svc_1',
+		organizationId: 'org_1',
 		repo: 'https://github.com/acme/api',
 		ref: 'main',
 		commit: null,
@@ -107,6 +108,9 @@ function job(scan: ScanMode): DesiredBuild {
 		scan
 	};
 }
+
+/** Trivy's versioned binary on the cache volume. */
+const isTrivy = (path: string) => (path.split('/').at(-1) ?? '').startsWith('trivy-');
 
 /** A builder whose fake Trivy reports `report`, or exits with `trivyExit`. */
 function setup(options: { report?: TrivyReport | string; trivyExit?: number } = {}) {
@@ -125,11 +129,11 @@ function setup(options: { report?: TrivyReport | string; trivyExit?: number } = 
 			onLine('stdout', COMMIT);
 			return 0;
 		}
-		if (program.endsWith('trivy') && cmd[1] === '--version') {
+		if (isTrivy(program) && cmd[1] === '--version') {
 			onLine('stdout', `Version: ${TRIVY.version}`);
 			return 0;
 		}
-		if (program.endsWith('trivy')) {
+		if (isTrivy(program)) {
 			onLine('stderr', 'Downloading vulnerability DB');
 			return options.trivyExit ?? 0;
 		}
@@ -149,15 +153,15 @@ function setup(options: { report?: TrivyReport | string; trivyExit?: number } = 
 		stateDir: stateDirWithTools(),
 		tools: fakeTools,
 		nodeId: () => 'node_1',
-		onLine: (_, line) => lines.push(line)
+		onLine: (_, line) => lines.push(line),
+		readyPollMs: 1
 	});
 	return { runtime, builder, lines, wasLoaded: () => loaded };
 }
 
 const trivyRun = (runtime: FakeRuntime) =>
 	runtime.execs.find(
-		(e) =>
-			e.cmd[0]!.endsWith('trivy') && e.cmd[1] === 'image' && !e.cmd.includes('--download-db-only')
+		(e) => isTrivy(e.cmd[0]!) && e.cmd[1] === 'image' && !e.cmd.includes('--download-db-only')
 	);
 
 group('Builder scanning', () => {
@@ -170,7 +174,7 @@ group('Builder scanning', () => {
 
 		const buildctl = runtime.execs.find((e) => e.cmd[0] === 'buildctl' && e.cmd[1] === 'build')!;
 		expect(buildctl.cmd).toContain(
-			'type=docker,name=tramline/svc_1:dep_1,dest=/home/user/work/dep_1/image.tar'
+			'type=docker,name=tramline/svc_1:dep_1,dest=/home/user/work/image.tar'
 		);
 		const trivy = trivyRun(runtime)!;
 		expect(trivy.cmd).toEqual(
@@ -179,7 +183,7 @@ group('Builder scanning', () => {
 				'vuln',
 				'--skip-version-check',
 				'--input',
-				'/home/user/work/dep_1/image.tar'
+				'/home/user/work/image.tar'
 			])
 		);
 		expect(trivy.cmd.join(' ')).toContain(
@@ -236,9 +240,9 @@ group('Builder scanning', () => {
 		expect(wasLoaded()).toBe(true);
 	});
 
-	it('downloads the vulnerability database when the builder starts, logging failures', async () => {
+	it('keeps the vulnerability database on the cache volume, and logs a failed update', async () => {
 		const { runtime, builder } = setup();
-		await builder.ensure();
+		await builder.build(job('warn'));
 		expect(
 			runtime.execs.find((e) => e.cmd.includes('--download-db-only'))?.cmd.join(' ')
 		).toContain('--cache-dir /home/user/.local/share/buildkit/trivy-cache');
@@ -250,7 +254,8 @@ group('Builder scanning', () => {
 			tools: fakeTools,
 			nodeId: () => 'node_1',
 			onLine: () => {},
-			log: (message) => logged.push(message)
+			log: (message) => logged.push(message),
+			readyPollMs: 1
 		});
 		const scan = offline.runtime.onExec;
 		offline.runtime.onExec = (cmd, options) => {
@@ -260,23 +265,38 @@ group('Builder scanning', () => {
 			}
 			return scan(cmd, options);
 		};
-		await quiet.ensure();
+		await quiet.build(job('warn'));
 		expect(logged).toEqual([
 			"Could not download Trivy's vulnerability database: connection refused"
 		]);
 	});
 
-	it('installs Trivy only when the builder lacks this version', async () => {
+	it('installs Trivy on the cache volume only when this version is missing', async () => {
 		const { runtime, builder } = setup();
-		await builder.ensure();
-		expect(runtime.files.has('tramline-builder-node_1:/home/user/bin/trivy')).toBe(false);
+		const trivy = `${jobContainerName('dep_1')}:/home/user/.local/share/buildkit/tools/trivy-${TRIVY.version}`;
+		// the fake reports every `test -x` as present
+		await builder.build(job('warn'));
+		expect(runtime.files.has(trivy)).toBe(false);
 
 		const fresh = setup();
-		fresh.runtime.onExec = () => 0;
-		await fresh.builder.ensure();
-		expect(
-			fresh.runtime.files.get('tramline-builder-node_1:/home/user/bin/trivy')?.toString()
-		).toBe('binary');
+		const base = fresh.runtime.onExec;
+		fresh.runtime.onExec = (cmd, options) =>
+			cmd[0] === 'test' && cmd[1] === '-x' ? 1 : base(cmd, options);
+		await fresh.builder.build(job('warn'));
+		expect(fresh.runtime.files.get(trivy)?.toString()).toBe('binary');
+	});
+
+	it('runs registry scans on a shared scan cache, never an organization’s', async () => {
+		const { runtime, builder } = setup({ report: {} });
+		runtime.digests.set('traefik/whoami', 'traefik/whoami@sha256:abc');
+		const started: { volumes?: { name: string }[] }[] = [];
+		const run = runtime.run.bind(runtime);
+		runtime.run = async (spec) => {
+			started.push(spec);
+			await run(spec);
+		};
+		await builder.scanImage(scanJob());
+		expect(started[0]!.volumes![0]!.name).toBe(cacheVolume('node_1', 'scans'));
 	});
 });
 

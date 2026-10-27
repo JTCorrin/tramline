@@ -115,6 +115,11 @@ export interface SecurityOptions {
 	init?: boolean;
 	/** Defaults to false. Only the rootless builder needs Docker's seccomp and AppArmor profiles relaxed. */
 	unconfined?: boolean;
+	/**
+	 * Defaults to false. Leaves /proc unmasked (Docker's `systempaths=unconfined`),
+	 * which rootless BuildKit's process sandbox needs to mount a fresh /proc for each step.
+	 */
+	unmaskSystemPaths?: boolean;
 }
 
 export const LABELS = {

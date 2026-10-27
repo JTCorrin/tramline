@@ -11,7 +11,7 @@ import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { container, deployment, node, service, serviceInstance } from '../db/schema';
+import { container, deployment, node, project, service, serviceInstance } from '../db/schema';
 import { tcpProxyHost, usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
 import {
@@ -54,7 +54,13 @@ export function buildDesiredState(
 	nodeId: string
 ): DesiredState {
 	const rows = db
-		.select({ deployment, domain: serviceInstance.domain, icon: service.icon, kind: service.kind })
+		.select({
+			deployment,
+			domain: serviceInstance.domain,
+			icon: service.icon,
+			kind: service.kind,
+			organizationId: project.organizationId
+		})
 		.from(deployment)
 		.innerJoin(
 			serviceInstance,
@@ -64,6 +70,7 @@ export function buildDesiredState(
 			)
 		)
 		.innerJoin(service, eq(service.id, deployment.serviceId))
+		.innerJoin(project, eq(project.id, service.projectId))
 		.where(
 			and(
 				eq(deployment.nodeId, nodeId),
@@ -100,7 +107,7 @@ export function buildDesiredState(
 	const routes: IngressRoute[] = [];
 	const networks = new Set<string>();
 
-	for (const { deployment: dep, domain, icon, kind } of rows) {
+	for (const { deployment: dep, domain, icon, kind, organizationId } of rows) {
 		// snapshots taken before a field existed pick up its default
 		const config = mergeConfig(DEFAULT_SERVICE_CONFIG, dep.config);
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
@@ -116,6 +123,7 @@ export function buildDesiredState(
 			builds.push({
 				deploymentId: dep.id,
 				serviceId: dep.serviceId,
+				organizationId,
 				repo: config.source.repo,
 				ref: config.source.branch,
 				commit: dep.commit,

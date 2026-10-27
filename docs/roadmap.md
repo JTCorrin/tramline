@@ -545,15 +545,23 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
   - The service panel and the variables editor ignore responses for a service or environment no longer shown.
   - Comments and `SECURITY.md` now match tested behaviour and state their trust assumptions: masking stops accidental disclosure only, builds share a builder, and there must be one control-plane process.
 
-**Hardening 2 (next, before 6c)**
+**Hardening 2 ✅** (unit-tested; e2e in CI)
 
-- **R4 + R10, build isolation and job lifecycle:**
-  - **Builders:** a fresh builder container per build, with BuildKit's process sandbox and a cache per organization.
-  - **Limits:** CPU, memory, disk and time.
-  - **Jobs:** explicit queued, running, cancelled and finished states, with real cancellation (a timed-out or removed build stops, and the next one starts) and deadlines on the data queue too.
-  - **Tests:** hostile build steps, and leftover processes between jobs.
-- **R1, second part:** prove the person connecting a GitHub installation controls it, using GitHub's user authorization during install.
-- **Sign-up policy:** closed sign-up after setup, with invitations, configurable per install.
+- **R4, build isolation:**
+  - **A builder per job:** every build and registry-image scan runs in a fresh rootless BuildKit container of its own, removed afterwards. BuildKit's process sandbox is on (with `/proc` unmasked, BuildKit's documented way to run rootless with it), so build steps run in containers of their own and can't see the builder, its tools or another job.
+  - **Caches:** BuildKit's cache is a volume per organization; registry scans, which run no user code, share one.
+  - **Tools:** Railpack, Trivy and Trivy's database sit on that volume, installed once per version and out of reach of build steps.
+  - **Limits:** memory (`TRAMLINE_BUILD_MEMORY_MB`, 4 GB by default) and processes.
+  - **Clean-up:** builders left behind by a previous run, and the old shared builder, are removed when the agent starts.
+- **R10, job lifecycle:**
+  - **Queues:** builds, scans and data jobs (backups, restores, drills) run through a job queue with explicit states and deadlines: 30 minutes for builds, 20 for scans, 2 hours for data jobs.
+  - **Cancellation:** a build or scan the control plane stops asking for (timed out or removed) is cancelled. Its builder is removed, so the work really stops, and the next job starts.
+  - **Data jobs:** after their deadline the queue moves on and the job is reported failed. A command still running inside a database container isn't killed yet.
+- **R1, second part:** connecting a GitHub installation goes through GitHub's user authorization. The one-time code is traded for a user token, used once and never stored, and the installation must be among those that person can access. New apps ask during install; older ones are sent to authorize after setup and need their callback URL set.
+- **Sign-up policy:**
+  - **`TRAMLINE_SIGNUP=invite` (the default):** once the install has an admin, a new account needs an invite link from an organization's owner or admin. Links work once, expire after a week, and carry a role. Set it to `open` for anyone.
+  - **Accepting:** a signed-in person who opens a link joins that organization.
+- **Still to do:** disk limits for builds (a per-job quota needs a volume driver that supports one), and killing a timed-out command inside a database container.
 
 **Later**
 

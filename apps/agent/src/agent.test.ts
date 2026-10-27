@@ -140,6 +140,7 @@ describe('Agent builds', () => {
 	const build = (deploymentId: string) => ({
 		deploymentId,
 		serviceId: 'svc_1',
+		organizationId: 'org_1',
 		repo: 'https://github.com/acme/api',
 		ref: 'main',
 		commit: null,
@@ -304,6 +305,33 @@ describe('Agent builds', () => {
 		await vi.waitFor(() => expect(agent.builds.get('dep_1')?.state).toBe('succeeded'));
 		await vi.waitFor(() => expect(agent.builds.has('dep_2')).toBe(false));
 		expect(runtime.images.has('tramline/svc_1:dep_2')).toBe(false);
+	});
+
+	it('stops a running build the control plane no longer wants', async () => {
+		const running = { ...desiredState([]), revision: 'b1', builds: [build('dep_9')] };
+		const dropped = { ...desiredState([]), revision: 'b2' };
+		const { agent, runtime } = setup([running, dropped]);
+		let release!: () => void;
+		const base = runtime.onExec!;
+		runtime.onExec = (cmd, options) => {
+			// a long build: it only finishes when the builder is removed
+			if (cmd[0] === 'buildctl' && cmd[1] === 'build') {
+				return new Promise<number>((resolve) => (release = () => resolve(137)));
+			}
+			return base(cmd, options);
+		};
+		const remove = runtime.remove.bind(runtime);
+		runtime.remove = async (name) => {
+			if (name === 'tl-build-dep_9') release?.();
+			await remove(name);
+		};
+		await agent.hello();
+		await agent.sync();
+		await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+		await agent.sync(); // the control plane timed it out
+		await vi.waitFor(() => expect(agent.builds.has('dep_9')).toBe(false));
+		expect(runtime.containers.has('tl-build-dep_9')).toBe(false);
+		expect(agent.queues.build.active).toEqual([]);
 	});
 });
 

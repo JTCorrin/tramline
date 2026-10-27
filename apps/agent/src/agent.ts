@@ -12,6 +12,7 @@ import { runQuery } from './query';
 import { Builder, type BuilderOptions } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
+import { JobCancelled, JobQueue } from './jobs';
 import { meshKeys } from './mesh';
 import { serviceCertificate } from './tls';
 import { HealthChecker } from './health';
@@ -36,6 +37,8 @@ export interface AgentOptions {
 	fetcher?: typeof fetch;
 	/** Fetches a verified build tool binary; tests pass a fake. */
 	tools?: BuilderOptions['tools'];
+	/** Memory each build may use. */
+	buildMemoryMb?: number;
 	log?: (message: string) => void;
 	/**
 	 * Join the WireGuard mesh: the agent's own image (which the mesh container
@@ -45,6 +48,12 @@ export interface AgentOptions {
 	 */
 	mesh?: { image: string; endpoint: string | null };
 }
+
+/** How long a build may run (the control plane gives up after 30 minutes too). */
+export const BUILD_DEADLINE_MS = 30 * 60_000;
+export const SCAN_DEADLINE_MS = 20 * 60_000;
+/** Backups, restores and drills. */
+export const DATA_DEADLINE_MS = 2 * 3600_000;
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -73,9 +82,15 @@ export class Agent {
 	};
 	/**
 	 * Builds run one at a time, and so do image scans, but a scan never waits
-	 * for a long build. Backups and restores share a queue of their own.
+	 * for a long build. Backups and restores share a queue of their own. Every
+	 * job has a deadline, and a build or scan the control plane stops asking
+	 * for is cancelled: its builder is removed and the queue moves on.
 	 */
-	#queues = { build: Promise.resolve(), scan: Promise.resolve(), data: Promise.resolve() };
+	readonly queues = {
+		build: new JobQueue(),
+		scan: new JobQueue(),
+		data: new JobQueue()
+	};
 
 	/** Data browser queries already answered (or being answered), until the control plane drops them. */
 	#queries = new Set<string>();
@@ -106,6 +121,7 @@ export class Agent {
 				this.logs.push({ deploymentId, ts: new Date().toISOString(), stream: 'build', line }),
 			fetcher: options.fetcher,
 			tools: options.tools,
+			memoryMb: options.buildMemoryMb,
 			log: this.#log
 		});
 		this.backups = new Backups(options.runtime, {
@@ -130,6 +146,10 @@ export class Agent {
 
 	async start() {
 		await this.hello();
+		// builders a previous run left behind, e.g. a build cut short by a restart
+		await this.builder
+			.reap()
+			.catch((error) => this.#log(`reaping builders: ${errorMessage(error)}`));
 		// long-polls normally wait server-side; the floor stops a misbehaving server from causing a busy loop
 		void this.#loop('sync', () => this.sync(), 100);
 		void this.#loop('report', () => this.tick(), this.options.reportIntervalMs ?? 2_000);
@@ -226,23 +246,34 @@ export class Agent {
 		}
 	}
 
-	/** Queues the builds and image scans the control plane wants, and forgets ones it has moved past. */
+	/** Queues the builds and image scans the control plane wants, and cancels ones it has moved past. */
 	#startBuilds(desired: DesiredState) {
 		const jobs = [
 			...desired.builds.map((job) => ({
 				id: job.deploymentId,
 				queue: 'build' as const,
-				run: () => this.builder.build(job)
+				deadlineMs: BUILD_DEADLINE_MS,
+				run: (signal: AbortSignal) => this.builder.build(job, signal)
 			})),
 			...desired.scans.map((job) => ({
 				id: job.deploymentId,
 				queue: 'scan' as const,
-				run: () => this.builder.scanImage(job)
+				deadlineMs: SCAN_DEADLINE_MS,
+				run: (signal: AbortSignal) => this.builder.scanImage(job, signal)
 			}))
 		];
 		const wanted = new Set(jobs.map((job) => job.id));
 		for (const [id, build] of this.builds) {
-			if (!wanted.has(id) && build.state !== 'running') this.builds.delete(id);
+			if (wanted.has(id)) continue;
+			// timed out or removed on the control plane: stop the work itself
+			if (build.state === 'running') {
+				this.queues.build.cancel(id, 'No longer wanted');
+				this.queues.scan.cancel(id, 'No longer wanted');
+				// one that never started is simply gone; a running one reports when it has stopped
+				if (this.queues.build.state(id) !== 'running' && this.queues.scan.state(id) !== 'running') {
+					this.builds.delete(id);
+				}
+			} else this.builds.delete(id);
 		}
 		for (const job of jobs) {
 			if (this.builds.has(job.id)) continue;
@@ -253,28 +284,51 @@ export class Agent {
 				commit: null,
 				error: null
 			});
-			this.#queues[job.queue] = this.#queues[job.queue].then(async () => {
-				// it may have been cancelled (e.g. removed) while waiting its turn
-				const current = this.desired;
-				if (
-					!current?.builds.some((b) => b.deploymentId === job.id) &&
-					!current?.scans.some((b) => b.deploymentId === job.id)
-				) {
-					this.builds.delete(job.id);
-					return;
+			const queue = this.queues[job.queue];
+			queue.forget(job.id);
+			queue.add(
+				job.id,
+				(signal) => {
+					this.#log(`${job.queue} ${job.id}`);
+					return job.run(signal);
+				},
+				{
+					deadlineMs: job.deadlineMs,
+					done: (result) => {
+						const report: BuildReport =
+							result instanceof Error
+								? {
+										deploymentId: job.id,
+										state: 'failed',
+										image: null,
+										commit: null,
+										error: result.message
+									}
+								: result;
+						this.#log(
+							`${job.queue} ${job.id} ${report.state}${report.error ? `: ${report.error}` : ''}`
+						);
+						if (result instanceof JobCancelled && !this.#wantsBuild(job.id)) {
+							this.builds.delete(job.id);
+						} else this.builds.set(job.id, report);
+					}
 				}
-				this.#log(`${job.queue} ${job.id}`);
-				const result = await job.run();
-				this.#log(`${job.queue} ${job.id} ${result.state}`);
-				this.builds.set(job.id, result);
-			});
+			);
 		}
+	}
+
+	#wantsBuild(id: string) {
+		return (
+			!!this.desired?.builds.some((b) => b.deploymentId === id) ||
+			!!this.desired?.scans.some((b) => b.deploymentId === id)
+		);
 	}
 
 	/**
 	 * Queues backups or restores the control plane wants, one at a time, and
 	 * forgets finished ones it has moved past. Jobs whose presigned URL hasn't
-	 * arrived yet wait for the next state.
+	 * arrived yet wait for the next state. Each has a deadline, after which the
+	 * queue moves on and the job is reported failed.
 	 */
 	#startJobs<T extends { id: string; url: string | null }>(
 		kind: 'backup' | 'restore' | 'drill',
@@ -289,20 +343,42 @@ export class Agent {
 		for (const job of wanted) {
 			if (reports.has(job.id)) continue;
 			reports.set(job.id, { id: job.id, state: 'running', size: null, error: null, detail: null });
-			this.#queues.data = this.#queues.data.then(async () => {
-				const current = this.desired?.[
-					kind === 'backup' ? 'backups' : kind === 'restore' ? 'restores' : 'drills'
-				] as T[] | undefined;
-				const latest = current?.find((j) => j.id === job.id);
-				if (!latest) {
-					reports.delete(job.id);
-					return;
+			this.queues.data.forget(job.id);
+			this.queues.data.add(
+				job.id,
+				async (signal) => {
+					const current = this.desired?.[
+						kind === 'backup' ? 'backups' : kind === 'restore' ? 'restores' : 'drills'
+					] as T[] | undefined;
+					const latest = current?.find((j) => j.id === job.id);
+					// it may have been dropped while waiting its turn
+					if (!latest) return null;
+					this.#log(`${kind} ${job.id}`);
+					return Promise.race([
+						run(latest),
+						new Promise<never>((_, reject) =>
+							signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+						)
+					]);
+				},
+				{
+					deadlineMs: DATA_DEADLINE_MS,
+					done: (result) => {
+						if (result === null) {
+							reports.delete(job.id);
+							return;
+						}
+						const report: JobReport =
+							result instanceof Error
+								? { id: job.id, state: 'failed', size: null, error: result.message, detail: null }
+								: result;
+						this.#log(
+							`${kind} ${job.id} ${report.state}${report.error ? `: ${report.error}` : ''}`
+						);
+						reports.set(job.id, report);
+					}
 				}
-				this.#log(`${kind} ${job.id}`);
-				const result = await run(latest);
-				this.#log(`${kind} ${job.id} ${result.state}${result.error ? `: ${result.error}` : ''}`);
-				reports.set(job.id, result);
-			});
+			);
 		}
 	}
 

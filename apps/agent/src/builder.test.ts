@@ -8,8 +8,9 @@ import { pack } from 'tar-stream';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	Builder,
-	builderName,
+	cacheVolume,
 	CLONE_SCRIPT,
+	jobContainerName,
 	gitAuth,
 	safeSubdirectory,
 	secretsHash
@@ -26,10 +27,15 @@ import { FakeRuntime, fakeTools, stateDirWithTools } from './testing';
 
 const COMMIT = 'a'.repeat(40);
 
+/** `buildctl`, or a versioned tool on the cache volume like `…/railpack-v0.43.0`. */
+const isTool = (path: string, name: string) =>
+	path === name || (path.split('/').at(-1) ?? '').startsWith(`${name}-`);
+
 function job(overrides: Partial<DesiredBuild> = {}): DesiredBuild {
 	return {
 		deploymentId: 'dep_1',
 		serviceId: 'svc_1',
+		organizationId: 'org_1',
 		repo: 'https://github.com/acme/api',
 		ref: 'main',
 		commit: null,
@@ -59,8 +65,10 @@ function setup(options: { dockerfile?: boolean; fail?: string; prepareExit?: num
 			onLine('stdout', COMMIT);
 			return 0;
 		}
+		// tools aren't on the cache volume yet
+		if (program === 'test' && cmd[1] === '-x') return 1;
 		if (program === 'test') return options.dockerfile ? 0 : 1;
-		if (program.endsWith('railpack')) {
+		if (isTool(program, 'railpack')) {
 			onLine('stdout', '↳ Detected Node');
 			return prepareExits.shift() ?? 0;
 		}
@@ -76,13 +84,14 @@ function setup(options: { dockerfile?: boolean; fail?: string; prepareExit?: num
 		stateDir,
 		tools: fakeTools,
 		nodeId: () => 'node_1',
-		onLine: (_, line) => lines.push(line)
+		onLine: (_, line) => lines.push(line),
+		readyPollMs: 1
 	});
 	return { runtime, builder, lines, stateDir };
 }
 
 const execOf = (runtime: FakeRuntime, program: string, sub?: string) =>
-	runtime.execs.find((e) => e.cmd[0]!.endsWith(program) && (!sub || e.cmd[1] === sub));
+	runtime.execs.find((e) => isTool(e.cmd[0]!, program) && (!sub || e.cmd[1] === sub));
 
 describe('Builder', () => {
 	it('clones, plans with Railpack and builds with secrets kept out of the command line', async () => {
@@ -110,7 +119,7 @@ describe('Builder', () => {
 		expect(prepare.cmd).toEqual(
 			expect.arrayContaining([
 				'prepare',
-				'/home/user/work/dep_1/src',
+				'/home/user/work/src',
 				'--env',
 				'NPM_TOKEN=npm_secret_value'
 			])
@@ -140,8 +149,9 @@ describe('Builder', () => {
 			])
 		);
 		expect(lines.join('\n')).not.toContain('npm_secret_value');
-		// the work directory is cleaned up
-		expect(runtime.execs.at(-1)!.cmd).toEqual(['rm', '-rf', '/home/user/work/dep_1']);
+		// the job's builder is thrown away, with everything in it
+		expect(runtime.containers.has(jobContainerName('dep_1'))).toBe(false);
+		expect(runtime.calls.at(-1)).toBe(`remove ${jobContainerName('dep_1')}`);
 	});
 
 	it('uses a Dockerfile when the repository has one, or when asked to', async () => {
@@ -151,8 +161,8 @@ describe('Builder', () => {
 		expect(execOf(runtime, 'buildctl', 'build')!.cmd).toEqual(
 			expect.arrayContaining([
 				'--frontend=dockerfile.v0',
-				'context=/home/user/work/dep_1/src/services/api',
-				'dockerfile=/home/user/work/dep_1/src/services/api',
+				'context=/home/user/work/src/services/api',
+				'dockerfile=/home/user/work/src/services/api',
 				'filename=Dockerfile'
 			])
 		);
@@ -162,10 +172,7 @@ describe('Builder', () => {
 			job({ builder: 'dockerfile', dockerfilePath: 'docker/prod.Dockerfile' })
 		);
 		expect(execOf(explicit.runtime, 'buildctl', 'build')!.cmd).toEqual(
-			expect.arrayContaining([
-				'dockerfile=/home/user/work/dep_1/src/docker',
-				'filename=prod.Dockerfile'
-			])
+			expect.arrayContaining(['dockerfile=/home/user/work/src/docker', 'filename=prod.Dockerfile'])
 		);
 	});
 
@@ -201,7 +208,7 @@ describe('Builder', () => {
 	it('retries a transient Railpack failure once', async () => {
 		const { runtime, builder } = setup({ prepareExit: [75, 0] });
 		expect((await builder.build(job())).state).toBe('succeeded');
-		expect(runtime.execs.filter((e) => e.cmd[0]!.endsWith('railpack'))).toHaveLength(2);
+		expect(runtime.execs.filter((e) => isTool(e.cmd[0]!, 'railpack'))).toHaveLength(2);
 	});
 
 	it('keeps only the newest built images of a service', async () => {
@@ -215,46 +222,126 @@ describe('Builder', () => {
 		]);
 	});
 
-	it('runs rootless BuildKit unprivileged, with Railpack installed', async () => {
+	it('runs each build in a sandboxed builder of its own, on its organization’s cache', async () => {
 		const { runtime, builder } = setup();
-		await builder.ensure();
-		const container = runtime.containers.get(builderName('node_1'))!;
-		expect(container.spec).toMatchObject({
-			image: BUILDKIT_IMAGE,
-			cmd: ['--oci-worker-no-process-sandbox'],
-			volumes: [{ name: 'tramline-buildkit-node_1', target: '/home/user/.local/share/buildkit' }],
-			security: { noNewPrivileges: false, unconfined: true, capabilities: 'docker-default' },
-			labels: { 'tramline.role': 'builder', 'tramline.node': 'node_1' }
+		const started: unknown[] = [];
+		const run = runtime.run.bind(runtime);
+		runtime.run = async (spec) => {
+			started.push(spec);
+			await run(spec);
+		};
+		await builder.build(job());
+		await builder.build(job({ deploymentId: 'dep_2', organizationId: 'org_2' }));
+		expect(started).toEqual([
+			expect.objectContaining({
+				name: jobContainerName('dep_1'),
+				image: BUILDKIT_IMAGE,
+				// no --oci-worker-no-process-sandbox: build steps run in sandboxes of their own
+				volumes: [
+					{ name: cacheVolume('node_1', 'org_1'), target: '/home/user/.local/share/buildkit' }
+				],
+				security: expect.objectContaining({
+					noNewPrivileges: false,
+					unconfined: true,
+					unmaskSystemPaths: true,
+					memoryMb: 4096,
+					pidsLimit: 4096
+				}),
+				labels: expect.objectContaining({ 'tramline.role': 'build-job', 'tramline.node': 'node_1' })
+			}),
+			expect.objectContaining({
+				name: jobContainerName('dep_2'),
+				volumes: [
+					{ name: cacheVolume('node_1', 'org_2'), target: '/home/user/.local/share/buildkit' }
+				]
+			})
+		]);
+		expect((started[0] as { cmd?: string[] }).cmd).toBeUndefined();
+		expect((started[0] as { binds?: string[] }).binds).toBeUndefined();
+		// Railpack goes on the cache volume, under its version
+		expect(
+			runtime.files
+				.get(
+					`${jobContainerName('dep_1')}:/home/user/.local/share/buildkit/tools/railpack-${RAILPACK.version}`
+				)
+				?.toString()
+		).toBe('binary');
+	});
+
+	it('stops a build when it is cancelled: its builder goes, and so does everything in it', async () => {
+		const { runtime, builder } = setup();
+		const controller = new AbortController();
+		const base = runtime.onExec;
+		runtime.onExec = (cmd, options) => {
+			if (cmd[0] === 'buildctl' && cmd[1] === 'build') {
+				controller.abort(new Error('Timed out after 30 minutes'));
+				return 137;
+			}
+			return base(cmd, options);
+		};
+		expect(await builder.build(job(), controller.signal)).toMatchObject({
+			state: 'failed',
+			error: 'Timed out after 30 minutes'
 		});
-		expect(container.spec.binds).toBeUndefined();
-		expect(runtime.files.get(`${builderName('node_1')}:/home/user/bin/railpack`)?.toString()).toBe(
-			'binary'
-		);
-		// a second call reuses it
+		expect(runtime.containers.has(jobContainerName('dep_1'))).toBe(false);
+
+		// cancelled before it starts: nothing runs
 		runtime.calls = [];
-		await builder.ensure();
-		expect(runtime.calls).toEqual([]);
+		const early = new AbortController();
+		early.abort(new Error('No longer wanted'));
+		expect(await builder.build(job(), early.signal)).toMatchObject({
+			state: 'failed',
+			error: 'No longer wanted'
+		});
+		expect(runtime.calls.some((c) => c.startsWith('run '))).toBe(false);
+	});
+
+	it('clears out builders a previous run left behind', async () => {
+		const { runtime, builder } = setup();
+		for (const [name, role, nodeId] of [
+			['tl-build-dep_old', 'build-job', 'node_1'],
+			['tramline-builder-node_1', 'builder', 'node_1'],
+			['tl-build-other', 'build-job', 'node_2'],
+			['tl-dep_1-0', 'workload', 'node_1']
+		] as const) {
+			await runtime.run({
+				name,
+				image: 'x',
+				env: {},
+				network: 'bridge',
+				aliases: [],
+				restart: { name: 'no', maxRetries: 0 },
+				security: { capabilities: [], pidsLimit: 1, memoryMb: null, readOnlyRootFilesystem: false },
+				labels: { 'tramline.managed': 'true', 'tramline.role': role, 'tramline.node': nodeId }
+			});
+		}
+		await builder.reap();
+		expect([...runtime.containers.keys()].sort()).toEqual(['tl-build-other', 'tl-dep_1-0']);
 	});
 });
 
 describe('Builder recovery', () => {
-	it('waits for BuildKit to accept connections', async () => {
+	it('waits for BuildKit to accept connections, and gives up eventually', async () => {
 		const { runtime, builder } = setup();
 		let checks = 0;
 		const base = runtime.onExec;
 		runtime.onExec = (cmd, options) =>
 			cmd[0] === 'buildctl' && cmd[1] === 'debug' ? (++checks < 3 ? 1 : 0) : base(cmd, options);
-		await builder.ensure();
+		expect((await builder.build(job())).state).toBe('succeeded');
 		expect(checks).toBe(3);
+
+		runtime.onExec = (cmd, options) =>
+			cmd[0] === 'buildctl' && cmd[1] === 'debug' ? 1 : base(cmd, options);
+		expect(await builder.build(job())).toMatchObject({
+			state: 'failed',
+			error: 'The builder did not start'
+		});
 	});
 
-	it('retries starting the builder after a failure', async () => {
+	it('reports Docker being unavailable', async () => {
 		const { runtime, builder } = setup();
 		runtime.down = true;
-		await expect(builder.ensure()).rejects.toThrow('ENOENT');
-		runtime.down = false;
-		await builder.ensure();
-		expect(runtime.containers.has(builderName('node_1'))).toBe(true);
+		expect((await builder.build(job())).error).toMatch('ENOENT');
 	});
 
 	it('fails the build when the image cannot be loaded', async () => {
