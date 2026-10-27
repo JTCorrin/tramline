@@ -590,6 +590,27 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
 - **Exit:** for a given set of service requirements, Tramline shows a ranked provider/region/instance list with monthly cost and provisions the chosen option in one click.
 
+### Phase 8.5: Tramline Templates
+
+A gallery of ready-to-go infrastructure: pick a template, and a whole stack lands on the canvas with its services, volumes, references and generated secrets wired up. Review it, then deploy it in one click.
+
+- **The format:** a template is a versioned `tramline.json` (Phase 9's config-as-code format, pulled forward):
+  - **Contents:** services, images pinned by digest, volumes, ports, public domains, healthchecks and start order.
+  - **Variables:** `${{Service.KEY}}` references, plus generated values: random secrets, and secrets derived from others, like JWTs signed with a generated key.
+  - **Questions:** a few to ask on install, e.g. a site URL or an SMTP host.
+- **Supabase first:**
+  - **The stack:** Postgres, Auth (GoTrue), the REST API (PostgREST), Realtime, Storage, the meta API and Studio, behind its Kong gateway.
+  - **Generated values:** the JWT secret, and anon and service-role keys signed with it.
+  - **Reaching it:** one public domain on the gateway, and Postgres through the TLS-only TCP proxy for outside tools.
+  - **Security:** Studio has no login of its own, so it is never given a public domain. It stays private, reachable through Tramline itself (a sign-in-gated route, or a port-forward from the CLI).
+  - **Backups:** the Postgres volume is backed up like any database.
+- **Then:** more stacks on the same format (e.g. Plausible, n8n, Metabase, Grafana with Prometheus), plus organization-private templates, and exporting an environment as a template.
+- **Security for all templates:**
+  - Images are pinned by digest and scanned like any other.
+  - Generated secrets are sealed by default.
+  - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
+- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy.
+
 ### Phase 9: Production readiness and ecosystem
 
 - PR preview environments, `tram` CLI (`login`, `link`, `up`, `logs`, `vars`, `run`) on the Phase 5 tokens, RBAC roles, notifications.
