@@ -185,3 +185,51 @@ export function githubFullName(repo: string) {
 		return null;
 	}
 }
+
+/**
+ * Trades the one-time code from GitHub's user authorization for a user token.
+ * It's used once, to see which installations that person can access, and
+ * never stored.
+ */
+export async function exchangeUserCode(
+	clientId: string,
+	clientSecret: string,
+	code: string,
+	fetcher: typeof fetch = globalThis.fetch
+) {
+	const response = await fetcher('https://github.com/login/oauth/access_token', {
+		method: 'POST',
+		headers: {
+			accept: 'application/json',
+			'content-type': 'application/json',
+			'user-agent': 'tramline'
+		},
+		body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code })
+	});
+	const body = (await response.json().catch(() => null)) as {
+		access_token?: string;
+		error_description?: string;
+	} | null;
+	if (!response.ok || !body?.access_token) {
+		throw new GitHubError(
+			response.status,
+			body?.error_description ?? 'GitHub did not confirm who you are'
+		);
+	}
+	return body.access_token;
+}
+
+/** IDs of the app's installations the person behind a user token can access. */
+export async function userInstallationIds(token: string, fetcher?: typeof fetch) {
+	const ids = new Set<string>();
+	for (let page = 1; page <= 10; page++) {
+		const { data } = await request(`/user/installations?per_page=100&page=${page}`, {
+			token,
+			fetcher
+		});
+		const list = (data as { installations: { id: number }[] }).installations;
+		for (const installation of list) ids.add(String(installation.id));
+		if (list.length < 100) break;
+	}
+	return ids;
+}

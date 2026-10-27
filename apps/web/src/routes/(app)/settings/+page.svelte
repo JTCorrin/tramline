@@ -144,6 +144,14 @@
 						>
 							Install on GitHub
 						</a>
+						<p class="text-xs text-muted-foreground">
+							Before connecting, GitHub asks you to authorize Tramline so it can check you can
+							access the installation. An app created before this check needs its <em
+								>Callback URL</em
+							>
+							set to <code>{data.oidcAudience ?? 'your Tramline URL'}/api/github/callback</code> in its
+							settings on GitHub.
+						</p>
 					{/if}
 				</div>
 			{/if}

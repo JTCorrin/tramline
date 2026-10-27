@@ -176,6 +176,8 @@ describe('GitHub App', () => {
 		expect(manifest).toMatchObject({
 			redirect_url: 'http://localhost:5173/api/github/manifest',
 			setup_url: 'http://localhost:5173/api/github/setup',
+			callback_urls: ['http://localhost:5173/api/github/callback'],
+			request_oauth_on_install: true,
 			public: false,
 			default_permissions: { contents: 'read', metadata: 'read' },
 			default_events: []
@@ -240,10 +242,9 @@ describe('GitHub App', () => {
 		});
 	});
 
-	it('connects installations to one organization only', async () => {
-		const ctx = seedApp();
-		const other = seedCtx(ctx.db);
-		const fetcher = github({
+	/** GitHub, as seen by a person who can access `accessible` installations. */
+	const installerGitHub = (accessible: number[]) =>
+		github({
 			'GET /app/installations/99': (init) => {
 				expect((init?.headers as Record<string, string>).authorization).toMatch(/^Bearer ey/);
 				return Response.json({
@@ -251,9 +252,22 @@ describe('GitHub App', () => {
 					account: { login: 'acme', type: 'Organization' },
 					html_url: 'https://github.com/settings/installations/99'
 				});
+			},
+			'POST /login/oauth/access_token': (init) => {
+				expect(JSON.parse(String(init?.body))).toMatchObject({ code: 'code-1' });
+				return Response.json({ access_token: 'ghu_person' });
+			},
+			'GET /user/installations': (init) => {
+				expect((init?.headers as Record<string, string>).authorization).toBe('Bearer ghu_person');
+				return Response.json({ installations: accessible.map((id) => ({ id })) });
 			}
 		});
-		await connectInstallation(ctx, '99', fetcher);
+
+	it('connects installations to one organization only', async () => {
+		const ctx = seedApp();
+		const other = seedCtx(ctx.db);
+		const fetcher = installerGitHub([99]);
+		await connectInstallation(ctx, '99', 'code-1', fetcher);
 		expect(status(ctx, testSettings).installations).toEqual([
 			{
 				id: '99',
@@ -262,10 +276,29 @@ describe('GitHub App', () => {
 				htmlUrl: 'https://github.com/settings/installations/99'
 			}
 		]);
-		await expect(connectInstallation(other, '99', fetcher)).rejects.toThrow('another organization');
+		await expect(connectInstallation(other, '99', 'code-1', fetcher)).rejects.toThrow(
+			'another organization'
+		);
 		expect(() => disconnectInstallation(other, '99')).toThrow('Installation not found');
 		disconnectInstallation(ctx, '99');
 		expect(status(ctx, testSettings).installations).toEqual([]);
+	});
+
+	it('only connects an installation the person connecting it can access on GitHub', async () => {
+		const ctx = seedApp();
+		// a valid installation of Tramline's app, on an account this person can't reach
+		await expect(connectInstallation(ctx, '99', 'code-1', installerGitHub([7]))).rejects.toThrow(
+			'cannot access that installation'
+		);
+		expect(status(ctx, testSettings).installations).toEqual([]);
+
+		const refused = github({
+			'POST /login/oauth/access_token': () =>
+				Response.json({ error_description: 'The code passed is incorrect or expired.' })
+		});
+		await expect(connectInstallation(ctx, '99', 'stale', refused)).rejects.toThrow(
+			'incorrect or expired'
+		);
 	});
 
 	it('mints installation tokens and reuses them until shortly before expiry', async () => {

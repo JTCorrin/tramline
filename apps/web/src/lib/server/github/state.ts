@@ -30,3 +30,22 @@ export function checkState(cookies: Cookies, state: string | null) {
 	if (!valid)
 		throw new AppError('forbidden', 'This GitHub link has expired; start again from Settings');
 }
+
+/** The installation waiting for its installer's authorization, between two redirects. */
+const PENDING = 'tramline_github_installation';
+
+export function rememberInstallation(cookies: Cookies, installationId: string, secure: boolean) {
+	cookies.set(PENDING, installationId, {
+		path: '/api/github',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure,
+		maxAge: 900
+	});
+}
+
+export function pendingInstallation(cookies: Cookies) {
+	const id = cookies.get(PENDING) ?? null;
+	cookies.delete(PENDING, { path: '/api/github' });
+	return id;
+}
