@@ -23,7 +23,8 @@ describe('manual adapter', () => {
 				region: 'anywhere',
 				offer: 'any',
 				install: { url: 'https://t.test', token: 'tljoin_x', command: 'curl … --token tljoin_x' },
-				userData: ''
+				userData: '',
+				seedUrl: ''
 			}
 		);
 		expect(node).toMatchObject({ id: 'box', instructions: 'curl … --token tljoin_x' });

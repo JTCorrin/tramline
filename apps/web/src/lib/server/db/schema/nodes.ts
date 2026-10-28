@@ -67,6 +67,12 @@ export const joinToken = sqliteTable('join_token', {
 	providerNodeId: text('provider_node_id'),
 	region: text('region'),
 	offer: text('offer'),
+	/**
+	 * sha256 of the ID in the machine's cloud-init seed URL, and the user data
+	 * it serves (encrypted; it holds the join token). Both go once it enrolls.
+	 */
+	seedHash: text('seed_hash').unique(),
+	seed: text('seed'),
 	createdBy: text('created_by'),
 	expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
 	usedAt: integer('used_at', { mode: 'timestamp_ms' }),

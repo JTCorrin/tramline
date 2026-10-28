@@ -14,12 +14,14 @@ import type {
 	UpdateAdapterAccount
 } from '@tramline/contracts';
 import { ProvisionNode as ProvisionSchema } from '@tramline/contracts';
-import { and, asc, count, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, gt, isNotNull, isNull } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import { getAdapter } from '../adapters/registry';
 import type { DbOrTx } from '../db/client';
 import { adapterAccount, joinToken, node } from '../db/schema';
 import { newId } from '../ids';
+import { hashToken } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { issueJoinToken } from './nodes';
@@ -226,6 +228,13 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 		offer: parsed.offer
 	});
 	const { id: tokenId, url } = joining;
+	const userData = cloudInit({ url, token: joining.token });
+	const seedId = randomBytes(24).toString('base64url');
+	ctx.db
+		.update(joinToken)
+		.set({ seedHash: hashToken(seedId), seed: ctx.secrets.encrypt(userData) })
+		.where(eq(joinToken.id, tokenId))
+		.run();
 	try {
 		const machine = await call(row, () =>
 			adapter.createNode(creds, {
@@ -233,19 +242,61 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 				region: parsed.region,
 				offer: parsed.offer,
 				install: { url, token: joining.token, command: joining.command },
-				userData: cloudInit({ url, token: joining.token })
+				userData,
+				seedUrl: `${url}/api/agent/v1/seed/${seedId}/`
 			})
 		);
-		ctx.db
+		const token = ctx.db
 			.update(joinToken)
 			.set({ providerNodeId: machine.id })
 			.where(eq(joinToken.id, tokenId))
-			.run();
+			.returning({ nodeId: joinToken.nodeId })
+			.get();
+		// it may have enrolled before the adapter answered
+		if (token?.nodeId) {
+			ctx.db
+				.update(node)
+				.set({ providerNodeId: machine.id })
+				.where(eq(node.id, token.nodeId))
+				.run();
+		}
 		return { id: tokenId, name: parsed.name, expiresAt: joining.expiresAt, machine };
 	} catch (error) {
 		ctx.db.delete(joinToken).where(eq(joinToken.id, tokenId)).run();
 		throw error;
 	}
+}
+
+/**
+ * A file of a machine's cloud-init NoCloud seed, for adapters that hand it
+ * a URL (Proxmox). Only while its join token can still be used: the user
+ * data holds that token. The seed ID is the only credential.
+ */
+export function seedFile(
+	db: DbOrTx,
+	secrets: Pick<Ctx['secrets'], 'decrypt'>,
+	seedId: string,
+	file: string,
+	now = new Date()
+) {
+	const token = db
+		.select()
+		.from(joinToken)
+		.where(
+			and(
+				eq(joinToken.seedHash, hashToken(seedId)),
+				isNull(joinToken.usedAt),
+				gt(joinToken.expiresAt, now)
+			)
+		)
+		.get();
+	if (!token?.seed) return null;
+	if (file === 'user-data') return secrets.decrypt(token.seed);
+	// instance-id is required; a new one per machine makes cloud-init run its user data
+	if (file === 'meta-data') return `instance-id: ${token.id}\nlocal-hostname: ${token.name}\n`;
+	// cloud-init asks for vendor data too; there is none
+	if (file === 'vendor-data') return '';
+	return null;
 }
 
 /** Machines adapters created that haven't enrolled, including ones whose token expired. */

@@ -70,6 +70,13 @@ export interface NodeSpec {
 	};
 	/** Cloud-init user data that installs Docker and enrolls the machine. */
 	userData: string;
+	/**
+	 * Where cloud-init's NoCloud datasource can fetch the same user data
+	 * (`<seedUrl>user-data`, `meta-data`), for providers that can hand a
+	 * machine a URL but not a file: Proxmox, through its SMBIOS serial
+	 * (`ds=nocloud;s=<seedUrl>`). It works until the machine enrolls.
+	 */
+	seedUrl: string;
 }
 
 export interface AdapterCapabilities {

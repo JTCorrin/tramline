@@ -115,7 +115,8 @@ export function join(db: DbOrTx, token: string, hello: AgentHello, now = new Dat
 			.returning()
 			.get();
 		tx.update(joinToken)
-			.set({ usedAt: now, nodeId: row.id })
+			// its cloud-init seed held the token; nothing needs it now
+			.set({ usedAt: now, nodeId: row.id, seedHash: null, seed: null })
 			.where(eq(joinToken.id, invite.id))
 			.run();
 		recordHello(tx, row.id, hello);

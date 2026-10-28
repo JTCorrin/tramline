@@ -44,7 +44,8 @@ describe('the fake adapter', () => {
 				region: 'fake-1',
 				offer: 'huge',
 				install: { url: 'u', token: 't', command: 'c' },
-				userData: ''
+				userData: '',
+				seedUrl: ''
 			})
 		).rejects.toThrow('No size huge in fake-1');
 		expect(await adapter.listOffers(good, 'elsewhere')).toEqual([]);

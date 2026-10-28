@@ -5,6 +5,8 @@ test('connect a compute account, test it, and create a machine with it', async (
 	await becomeInstallAdmin(page);
 	const accounts = page.getByTestId('compute-accounts');
 	await accounts.getByRole('button', { name: 'Connect an account' }).click();
+	await accounts.getByRole('combobox', { name: 'Provider' }).click();
+	await page.getByRole('option', { name: 'Fake cloud' }).click();
 	await accounts.getByLabel('Account name').fill('Fake lab');
 	// the form is generated from the adapter's credentials schema
 	await accounts.getByLabel('API token').fill('wrong-token');
@@ -47,4 +49,31 @@ test('connect a compute account, test it, and create a machine with it', async (
 	page.once('dialog', (dialog) => dialog.accept());
 	await account.getByRole('button', { name: 'Remove' }).click();
 	await expect(account).toHaveCount(0);
+});
+
+test('the Proxmox form asks for what a cloud-init template clone needs', async ({ page }) => {
+	await becomeInstallAdmin(page);
+	const accounts = page.getByTestId('compute-accounts');
+	await accounts.getByRole('button', { name: 'Connect an account' }).click();
+	await accounts.getByRole('combobox', { name: 'Provider' }).click();
+	await page.getByRole('option', { name: 'Proxmox VE' }).click();
+	for (const label of [
+		'Proxmox URL',
+		'API token ID',
+		'API token secret',
+		'Certificate fingerprint',
+		'Template VM ID'
+	]) {
+		await expect(accounts.getByLabel(label)).toBeVisible();
+	}
+	await expect(accounts.getByLabel('API token secret')).toHaveAttribute('type', 'password');
+	await accounts.getByRole('button', { name: 'Cancel' }).click();
+});
+
+test('a cloud-init seed answers without a session, and only with a valid ID', async ({
+	request
+}) => {
+	const res = await request.get('/api/agent/v1/seed/not-a-real-seed/user-data');
+	expect(res.status()).toBe(404);
+	expect(res.headers()['content-type']).toContain('text/plain');
 });

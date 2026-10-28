@@ -183,6 +183,13 @@
       "when": 1793220188492,
       "tag": "0025_adapter_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1793221917072,
+      "tag": "0026_cloud_init_seeds",
+      "breakpoints": true
     }
   ]
 }

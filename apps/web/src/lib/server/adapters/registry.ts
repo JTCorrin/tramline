@@ -1,12 +1,15 @@
 import { credentialFields, fakeAdapter, type ComputeAdapter } from '@tramline/adapter-sdk';
 import { manual } from '@tramline/adapter-manual';
+import { proxmox } from '@tramline/adapter-proxmox';
 import type { AdapterInfo } from '@tramline/contracts';
 
 /**
  * The compute adapters this install offers. Each is a package implementing
  * the adapter contract; nothing outside it knows about any one provider.
  */
-const adapters = new Map<string, ComputeAdapter>([[manual.meta.id, manual as ComputeAdapter]]);
+const adapters = new Map<string, ComputeAdapter>(
+	[manual, proxmox].map((adapter) => [adapter.meta.id, adapter as ComputeAdapter])
+);
 
 /** Adds an adapter: the fake one for tests (TRAMLINE_FAKE_ADAPTER), say. */
 export function registerAdapter(adapter: ComputeAdapter) {

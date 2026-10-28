@@ -109,7 +109,8 @@ export async function conformance<Creds>(
 			...install,
 			command: `curl -fsSL ${install.url}/install.sh | sudo sh -s -- --url ${install.url} --token ${install.token}`
 		},
-		userData: cloudInit(install)
+		userData: cloudInit(install),
+		seedUrl: `${install.url}/api/agent/v1/seed/conformance-${random()}/`
 	};
 	const created = parse(ProviderNode, await adapter.createNode(creds, spec), 'createNode');
 	try {

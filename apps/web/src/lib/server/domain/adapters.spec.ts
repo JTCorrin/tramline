@@ -3,7 +3,7 @@ import type { AgentHello } from '@tramline/contracts';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { listAdapters, registerAdapter } from '../adapters/registry';
-import { adapterAccount } from '../db/schema';
+import { adapterAccount, node as nodeTable } from '../db/schema';
 import { join } from '../nodes/registry';
 import { grantInstallAdmin, seedCtx } from '../testing';
 import * as adapters from './adapters';
@@ -59,6 +59,11 @@ describe('adapter accounts', () => {
 			['apiToken', true],
 			['project', false]
 		]);
+		expect(
+			listAdapters()
+				.find((a) => a.id === 'proxmox')
+				?.fields.map((f) => f.key)
+		).toContain('fingerprint');
 		expect(listAdapters().find((a) => a.id === 'manual')).toMatchObject({
 			fields: [],
 			capabilities: { autoProvision: false }
@@ -136,6 +141,19 @@ describe('provisioning a node', () => {
 
 		const spec = created[0]!;
 		expect(spec.userData).toContain(`--token '${spec.install.token}'`);
+
+		// a machine that can only be handed a URL fetches the same user data from its seed
+		const seedId = spec.seedUrl.match(/\/seed\/([^/]+)\/$/)![1]!;
+		expect(spec.seedUrl).toBe(`http://localhost:5173/api/agent/v1/seed/${seedId}/`);
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'user-data')).toBe(spec.userData);
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'meta-data')).toBe(
+			`instance-id: ${started.id}\nlocal-hostname: gpu-1\n`
+		);
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'vendor-data')).toBe('');
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'secrets')).toBeNull();
+		expect(adapters.seedFile(ctx.db, ctx.secrets, 'guessed', 'user-data')).toBeNull();
+		const later = new Date(Date.now() + 2 * 3600_000);
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'user-data', later)).toBeNull();
 		expect(spec.install.url).toBe('http://localhost:5173');
 		expect(adapters.provisioning(ctx)).toEqual([
 			expect.objectContaining({
@@ -147,9 +165,10 @@ describe('provisioning a node', () => {
 		]);
 		expect(adapters.listAccounts(ctx)[0]!.nodes).toBe(1);
 
-		// the machine boots and its agent joins
+		// the machine boots and its agent joins; its seed, which held the token, goes
 		join(ctx.db, spec.install.token, hello);
 		expect(adapters.provisioning(ctx)).toEqual([]);
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'user-data')).toBeNull();
 		const node = nodes.list(ctx).find((n) => n.name === 'gpu-1')!;
 		expect(node).toMatchObject({
 			adapter: 'fake',
@@ -198,6 +217,18 @@ describe('provisioning a node', () => {
 		expect(fake.machines.size).toBe(0);
 		expect(adapters.provisioning(ctx)).toEqual([]);
 		await expect(adapters.cancelProvisioning(ctx, started.id)).rejects.toThrow('not found');
+	});
+
+	it('links a machine that enrolled before the adapter answered', async () => {
+		const { ctx, account } = setup();
+		const createNode = fake.adapter.createNode;
+		fake.adapter.createNode = async (creds, spec) => {
+			join(ctx.db, spec.install.token, hello);
+			return createNode(creds, spec);
+		};
+		const started = await provision(ctx, account.id, 'quick');
+		const node = ctx.db.select().from(nodeTable).where(eq(nodeTable.name, 'quick')).get()!;
+		expect(node.providerNodeId).toBe(started.machine.id);
 	});
 
 	it('names nodes uniquely across enrolled nodes and pending machines', async () => {

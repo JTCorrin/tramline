@@ -591,9 +591,15 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **GPUs at hello:** agents report the NVIDIA GPUs their kernel driver describes, and the Nodes page shows them.
 - **Tests:** `TRAMLINE_FAKE_ADAPTER=1` offers the fake adapter, and the e2e suite connects an account, tests it and creates a machine with it.
 
-**6c.2: Proxmox**
+**6c.2: Proxmox ✅** (unit-tested against a fake Proxmox API over real HTTPS; not yet run against a real cluster)
 
-- **The `proxmox` adapter:** provisions VMs from a cloud-init template through the Proxmox API, and they enroll on their own. Its offers are priced from a $/month the user enters for the host (or $0). It passes the conformance suite against a real Proxmox.
+- **The `proxmox` adapter:** clones a cloud-init template (across hosts too), sets CPUs and memory per size, tags the VM `tramline` and starts it. Removing the node stops and deletes the VM with its disks. It only ever destroys VMs with that tag, and removes a clone it couldn't set up.
+- **Enrolling without uploads:** Proxmox's API can't upload user data, so each VM's SMBIOS serial points cloud-init at its seed on Tramline (`ds=nocloud;s=…/api/agent/v1/seed/<id>/`). The seed is random, stored encrypted, and works only until the VM enrolls or its token expires.
+- **Sizes and prices:** Small to X-Large, offered on each host that fits them. They're priced by their share of a host's memory from a $/month entered on the account (or $0).
+- **TLS:** the host's certificate fingerprint is pinned and checked before the API token is sent, so self-signed certificates work without turning verification off.
+- **The guide:** `docs/adapters/proxmox.md` covers the template, a least-privilege API token and connecting the account. The conformance suite runs against a real cluster when `TRAMLINE_PROXMOX_*` is set.
+- **Also:** a machine that enrolls before its adapter has answered is still linked to its machine, so removing it destroys the VM.
+- **Later:** the VM's address from the guest agent, GPU passthrough sizes, and creating the template from a cloud image in Tramline.
 
 **6c.3: metrics**
 

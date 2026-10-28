@@ -136,6 +136,9 @@ importers:
       '@tramline/adapter-manual':
         specifier: workspace:*
         version: link:../../packages/adapters/manual
+      '@tramline/adapter-proxmox':
+        specifier: workspace:*
+        version: link:../../packages/adapters/proxmox
       '@tramline/adapter-sdk':
         specifier: workspace:*
         version: link:../../packages/adapter-sdk
@@ -237,6 +240,25 @@ importers:
         specifier: ^4.1.12
         version: 4.6.7
     devDependencies:
+      '@vitest/coverage-v8':
+        specifier: ^4.1.12
+        version: 4.1.12(@vitest/browser@4.1.12)(vitest@4.1.12)
+      vitest:
+        specifier: ^4.1.12
+        version: 4.1.12(@types/node@22.20.5)(@vitest/browser-playwright@4.1.12)(@vitest/coverage-v8@4.1.12)(vite@8.3.5(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+
+  packages/adapters/proxmox:
+    dependencies:
+      '@tramline/adapter-sdk':
+        specifier: workspace:*
+        version: link:../../adapter-sdk
+      zod:
+        specifier: ^4.1.12
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
       '@vitest/coverage-v8':
         specifier: ^4.1.12
         version: 4.1.12(@vitest/browser@4.1.12)(vitest@4.1.12)
