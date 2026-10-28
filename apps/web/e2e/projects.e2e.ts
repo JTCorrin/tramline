@@ -117,3 +117,24 @@ test('an invite link brings someone new straight into the organization', async (
 	await expect(other.getByText("This invite can't be used")).toBeVisible();
 	await guest.close();
 });
+
+test('someone already signed in joins only after confirming the invite', async ({
+	page,
+	browser
+}) => {
+	await signUp(page, 'Hosting Org');
+	await page.goto('/settings');
+	await page.getByTestId('invites').getByRole('button', { name: 'Create invite link' }).click();
+	const link = await page.getByTestId('invite-link').inputValue();
+
+	const guest = await browser.newContext();
+	const other = await guest.newPage();
+	await signUp(other, 'Own Org');
+	// opening the link changes nothing by itself
+	await other.goto(link);
+	const join = other.getByRole('button', { name: 'Join Hosting Org' });
+	await expect(join).toBeVisible();
+	await join.click();
+	await expect(other.getByRole('button', { name: 'Hosting Org' })).toBeVisible();
+	await guest.close();
+});

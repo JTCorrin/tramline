@@ -204,6 +204,15 @@ describe('manifest flow', () => {
 		expect(res.body.action).toBe(`https://github.com/settings/apps/new?state=${state}`);
 	});
 
+	it('sends authorizations without our state (later edits on GitHub) back to settings', async () => {
+		const user = seedCtx(db);
+		const res = await call(callback.GET as Handler, {
+			path: '/api/github/callback?code=c&installation_id=55&setup_action=update',
+			user
+		});
+		expect(res).toMatchObject({ status: 303, location: '/settings' });
+	});
+
 	it('refuses callbacks whose state does not match the cookie', async () => {
 		db.delete(schema.githubApp).run();
 		const user = seedCtx(db);
