@@ -13,3 +13,4 @@ apps/web/src/lib/components/ui/
 
 # Miscellaneous
 apps/web/static/
+dist

@@ -154,17 +154,11 @@ export class FakeRuntime implements ContainerRuntime {
 
 /** An agent state directory with Railpack and Trivy already downloaded, so tests never fetch them. */
 export function stateDirWithTools() {
-	const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
-	for (const [name, version] of [
-		['railpack', RAILPACK.version],
-		['trivy', TRIVY.version]
-	]) {
-		const dir = path.join(stateDir, name!, version!, 'aarch64');
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(path.join(dir, name!), 'binary');
-	}
-	return stateDir;
+	return mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
 }
+
+/** Stands in for verified Railpack and Trivy downloads. */
+export const fakeTools = async () => Buffer.from('binary');
 
 export function desiredContainer(overrides: Partial<DesiredContainer> = {}): DesiredContainer {
 	return {

@@ -23,10 +23,14 @@ export const test = base.extend<{ cspGuard: void }>({
 });
 
 /** Signs up a fresh user, creates an organization and lands on the dashboard. */
-export async function signUp(page: Page, org = 'E2E Org') {
+export async function signUp(
+	page: Page,
+	org = 'E2E Org',
+	email = `e2e-${crypto.randomUUID()}@tramline.test`
+) {
 	await page.goto('/sign-up');
 	await page.getByLabel('Name').fill('E2E Tester');
-	await page.getByLabel('Email').fill(`e2e-${crypto.randomUUID()}@tramline.test`);
+	await page.getByLabel('Email').fill(email);
 	await page.getByLabel('Password').fill('e2e-password-1234');
 	await page.getByRole('button', { name: 'Create account' }).click();
 	await expect(page).toHaveURL(/\/onboarding$/);

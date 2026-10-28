@@ -4,6 +4,17 @@ import { defineConfig } from '@playwright/test';
 const docker = process.env.TRAMLINE_E2E_DOCKER === '1';
 export const INGRESS_PORT = 8088;
 
+/** Manages nodes in the e2e install (TRAMLINE_ADMIN_EMAILS). */
+export const NODES_ADMIN = 'e2e-nodes-admin@tramline.test';
+
+/** A second node: a Docker-in-Docker daemon, its API and ingress published on loopback only. */
+export const E2E_NODE = {
+	container: 'tramline-e2e-node2',
+	dockerPort: 23750,
+	ingressPort: 18088,
+	healthPort: 7173
+};
+
 /** An S3-compatible bucket for the backup tests (Versity Gateway on a local directory). */
 export const E2E_S3 = {
 	port: 9900,
@@ -50,6 +61,7 @@ export default defineConfig({
 				TRAMLINE_URL: 'http://localhost:4173',
 				TRAMLINE_INGRESS_PORT: String(INGRESS_PORT),
 				TRAMLINE_AUTH_RATE_LIMIT: 'false',
+				TRAMLINE_ADMIN_EMAILS: NODES_ADMIN,
 				// builds into its own output directory, so a running `pnpm dev` is never disturbed
 				TRAMLINE_E2E: '1',
 				// with Docker, the install's own database is snapshotted to the test bucket

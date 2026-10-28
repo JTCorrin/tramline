@@ -119,18 +119,40 @@ export function get(ctx: Ctx, id: string): Deployment {
  */
 export function redeploy(ctx: Ctx, id: string): Deployment {
 	const { deployment: source, projectId } = requireDeployment(ctx, id);
+	const row = copyDeployment(ctx.db, source, {
+		createdBy: ctx.userId,
+		dataDir: ctx.settings.dataDir,
+		log: `Redeploy of ${source.id}`
+	});
+	notifyNodes();
+	publish({ type: 'deployments', projectId, environmentId: source.environmentId });
+	return toDto(row);
+}
+
+/**
+ * Queues a copy of a deployment. `rebuild` drops a built image so the copy
+ * builds the same commit again, for a node that doesn't have the image.
+ */
+export function copyDeployment(
+	db: DbOrTx,
+	source: DeploymentRow,
+	options: { createdBy: string | null; dataDir: string; log: string; rebuild?: boolean }
+) {
 	// snapshots from before volumes existed take the service's volume, so a
 	// database never goes back to keeping its data in the container
 	const config =
 		source.config.volume === undefined
 			? {
 					...source.config,
-					volume: appliedConfig(ctx.db, source.serviceId, source.environmentId)?.volume ?? {
+					volume: appliedConfig(db, source.serviceId, source.environmentId)?.volume ?? {
 						mountPath: null
 					}
 				}
 			: source.config;
-	const row = ctx.db
+	const rebuild = options.rebuild && source.config.source?.type === 'repo';
+	// the exact image again: the built one, or the digest the original pulled
+	const image = rebuild ? null : (source.image ?? source.resolvedImage);
+	const row = db
 		.insert(deployment)
 		.values({
 			id: newId('deployment'),
@@ -139,19 +161,16 @@ export function redeploy(ctx: Ctx, id: string): Deployment {
 			status: 'queued',
 			config,
 			variables: source.variables,
-			// the exact image again: the built one, or the digest the original pulled
-			image: source.image ?? source.resolvedImage,
+			image,
 			commit: source.commit,
 			// the same image needs no new scan
-			scan: (source.image ?? source.resolvedImage) ? source.scan : null,
-			createdBy: ctx.userId
+			scan: image ? source.scan : null,
+			createdBy: options.createdBy
 		})
 		.returning()
 		.get();
-	systemLog(ctx.settings.dataDir, row.id, `Redeploy of ${source.id}`);
-	notifyNodes();
-	publish({ type: 'deployments', projectId, environmentId: source.environmentId });
-	return toDto(row);
+	systemLog(options.dataDir, row.id, options.log);
+	return row;
 }
 
 /** Stops a deployment and removes its containers. */

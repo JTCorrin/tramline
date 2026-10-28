@@ -149,7 +149,7 @@ Tramline is being built in phases. The [full roadmap](docs/roadmap.md) has the d
 - [x] **Builds from source**: rootless BuildKit, Railpack, GitHub App, image scanning
 - [x] **Data and networking**: volumes, encrypted backups, custom domains, cron, data browser
 - [x] **Agent access**: API tokens, audit log, MCP server, GitHub OIDC, 2FA and passkeys
-- [ ] **Multiple machines**: multi-node scheduling, an adapter SDK, Proxmox
+- [ ] **Multiple machines**: enroll nodes, schedule and drain across them ✅; next, a WireGuard mesh, an adapter SDK and Proxmox
 - [ ] **Cloud providers**: Hetzner, AWS, GCP and Azure, plus node pools
 - [ ] **Price engine**: compare providers and place each workload where it's cheapest
 - [ ] **Production ready**: a `tram` CLI, PR environments, a one-line installer

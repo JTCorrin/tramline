@@ -1,4 +1,6 @@
 import { db } from '#lib/server/db/index.js';
+import { user as userTable } from '#lib/server/db/schema/index.js';
+import { eq } from 'drizzle-orm';
 import { readLogs } from '#lib/server/nodes/logs.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { settings } from '#lib/server/settings.server.js';
@@ -18,6 +20,8 @@ import * as configRoute from '../../v1/services/[id]/config/+server';
 import * as servicesRoute from '../../v1/services/+server';
 import * as desiredRoute from './desired/+server';
 import * as helloRoute from './hello/+server';
+import * as joinRoute from './join/+server';
+import * as installRoute from '../../../install.sh/+server';
 import * as logsRoute from './logs/+server';
 import * as reportRoute from './report/+server';
 
@@ -326,5 +330,65 @@ describe('agent API', () => {
 			user
 		});
 		expect(removed.body.status).toBe('removed');
+	});
+
+	it('enrolls a machine with a one-time join token from an admin', async () => {
+		const admin = seedCtx(db);
+		const other = seedCtx(db);
+		const email = db.select().from(userTable).where(eq(userTable.id, admin.userId)).get()!.email;
+		const before = settings.adminEmails;
+		settings.adminEmails = [email];
+		try {
+			const refused = await call(nodesRoute.POST as Handler, {
+				path: '/api/v1/nodes',
+				method: 'POST',
+				body: { name: 'refused' },
+				user: other
+			});
+			expect(refused.status).toBe(403);
+
+			const created = await call(nodesRoute.POST as Handler, {
+				path: '/api/v1/nodes',
+				method: 'POST',
+				body: { name: 'box-2', cordoned: true },
+				user: admin
+			});
+			expect(created.status).toBe(201);
+			expect(created.body.command).toContain('/install.sh');
+
+			const join = (token: string) =>
+				call(joinRoute.POST as Handler, {
+					path: '/api/agent/v1/join',
+					method: 'POST',
+					body: { token, hello }
+				});
+			const joined = await join(created.body.token);
+			expect(joined.status).toBe(201);
+			expect(joined.body).toMatchObject({
+				name: 'box-2',
+				token: expect.stringMatching(/^tlnode_/)
+			});
+			expect((await join(created.body.token)).status).toBe(401);
+
+			// the new node token works for the agent API
+			const greeted = await call(helloRoute.POST as Handler, {
+				path: '/api/agent/v1/hello',
+				method: 'POST',
+				body: hello,
+				token: joined.body.token
+			});
+			expect(greeted.body).toMatchObject({ name: 'box-2' });
+		} finally {
+			settings.adminEmails = before;
+		}
+	});
+
+	it('serves the install script as plain text', async () => {
+		const { response } = await call(installRoute.GET as Handler, { path: '/install.sh' });
+		expect(response.headers.get('content-type')).toContain('text/plain');
+		const script = await response.text();
+		expect(script).toMatch(/^#!\/bin\/sh/);
+		expect(script).toContain('--cap-drop ALL');
+		expect(script).toContain('TRAMLINE_JOIN_TOKEN');
 	});
 });

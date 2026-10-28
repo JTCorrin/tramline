@@ -1,11 +1,11 @@
-import { and, asc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { build, container, deployment, node, service } from '../db/schema';
 import { publish } from '../events';
 import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
-import { isOnline, ONLINE_WINDOW_MS } from './registry';
+import { isOnline, ONLINE_WINDOW_MS, requestedMemory } from './registry';
 import { isCron, runCronSchedules } from './cron';
 import { ensureVolume, recreatePlan, volumeFor } from './volumes';
 
@@ -103,9 +103,11 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	);
 
 	// schedule first, so the recreate plan below sees what was just scheduled
+	const placed = active.filter((d) => d.status !== 'queued' && d.nodeId);
 	for (const dep of active.filter((d) => d.status === 'queued')) {
-		const t = schedule(db, dep, online, nodes, now);
+		const t = schedule(db, dep, { online, all: nodes, placed }, now);
 		apply(dep, t);
+		if (t.nodeId) placed.push({ ...dep, nodeId: t.nodeId });
 		// the volume lives on the node the service first ran on
 		if (t.nodeId && dep.config.volume?.mountPath) {
 			ensureVolume(db, dep.serviceId, dep.environmentId, t.nodeId);
@@ -137,39 +139,122 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	return [...changed.values()];
 }
 
-function schedule(
-	db: Db,
-	dep: DeploymentRow,
-	online: (typeof node.$inferSelect)[],
-	all: (typeof node.$inferSelect)[],
-	now: number
-): Transition {
+type NodeRow = typeof node.$inferSelect;
+
+interface Cluster {
+	online: NodeRow[];
+	all: NodeRow[];
+	/** Deployments already placed (live, or scheduled earlier in this pass). */
+	placed: DeploymentRow[];
+}
+
+/**
+ * Picks a node for a queued deployment.
+ *
+ * Hard rules: a service with a volume runs where its data is, and a service
+ * pinned to a node runs only there, even when that node is cordoned (so a
+ * database can always be redeployed, and you can place work on a node you
+ * are still checking); cordoned nodes take nothing else; and a deployment
+ * with a memory limit needs that much memory free.
+ *
+ * Then preferences: the node that built the image (others don't have it), a
+ * node already running the same environment (its services find each other on
+ * one Docker network until the cross-node mesh arrives), and the least loaded.
+ */
+function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Transition {
+	const { online, all, placed } = cluster;
+	const named = (id: string) => all.find((n) => n.id === id)?.name ?? 'the node';
+
 	// a service with a volume runs where its data is
-	const pinned = dep.config.volume?.mountPath
+	const home = dep.config.volume?.mountPath
 		? volumeFor(db, dep.serviceId, dep.environmentId)?.nodeId
 		: null;
-	if (pinned) {
-		const home = all.find((n) => n.id === pinned);
-		if (!online.some((n) => n.id === pinned)) {
-			return {
-				message: `Waiting for ${home?.name ?? 'the node'}, which holds this service's volume`
-			};
-		}
+	const pin = dep.config.deploy.node ?? null;
+	if (home && pin && home !== pin) {
+		return {
+			message: `This service's volume is on ${named(home)}, but it is pinned to ${named(pin)}`
+		};
 	}
-	// Phase 6 brings real scheduling; until then the first healthy node takes everything
-	const target = pinned ? online.find((n) => n.id === pinned) : online[0];
-	if (!target) {
+	if (pin && !all.some((n) => n.id === pin)) {
+		return { message: 'Pinned to a node that no longer exists. Choose another in Settings.' };
+	}
+
+	let candidates: NodeRow[];
+	if (home) {
+		candidates = online.filter((n) => n.id === home);
+		if (!candidates.length) {
+			return { message: `Waiting for ${named(home)}, which holds this service's volume` };
+		}
+	} else if (pin) {
+		candidates = online.filter((n) => n.id === pin);
+		if (!candidates.length) {
+			return { message: `Waiting for ${named(pin)}, which this service is pinned to` };
+		}
+	} else {
+		candidates = online.filter((n) => !n.cordoned);
+	}
+
+	if (!candidates.length) {
 		// a node whose agent is connected but can't run containers is the most useful thing to point at
 		const broken = all.find(
 			(n) => n.error && n.lastSeenAt && now - n.lastSeenAt.getTime() < ONLINE_WINDOW_MS
 		);
+		if (broken) return { message: `Waiting for a node: ${broken.name} reports "${broken.error}"` };
 		return {
-			message: broken
-				? `Waiting for a node: ${broken.name} reports "${broken.error}"`
+			message: online.length
+				? 'Waiting for a node: every online node is cordoned'
 				: 'Waiting for a node to come online'
 		};
 	}
-	if (dep.config.source?.type === 'image' && !dep.image && scanMode(dep) !== 'off') {
+
+	const others = placed.filter((d) => d.id !== dep.id);
+	const allocated = (n: NodeRow) =>
+		others.filter((d) => d.nodeId === n.id).reduce((sum, d) => sum + requestedMemory(d.config), 0);
+	const wanted = requestedMemory(dep.config);
+	// nodes that haven't reported their memory yet are given the benefit of the doubt
+	const fits = candidates.filter(
+		(n) => !wanted || !n.info?.memoryMb || n.info.memoryMb - allocated(n) >= wanted
+	);
+	if (!fits.length) {
+		return {
+			message: `Waiting for a node with ${wanted} MB of memory free`
+		};
+	}
+
+	// a built image lives on the node that built it; anywhere else builds it again
+	const builtOn =
+		dep.config.source?.type === 'repo' && dep.image ? builder(db, dep.image) : undefined;
+	const sameEnvironment = (n: NodeRow) =>
+		others.filter((d) => d.nodeId === n.id && d.environmentId === dep.environmentId).length;
+	const load = (n: NodeRow) =>
+		n.info?.memoryMb
+			? allocated(n) / n.info.memoryMb
+			: others.filter((d) => d.nodeId === n.id).length;
+	// Until the mesh lands, different services communicate only on one node's
+	// Docker network. A replacement of the same service may move on its own.
+	const peers = others.filter(
+		(d) => d.environmentId === dep.environmentId && d.serviceId !== dep.serviceId
+	);
+	const connected = fits.filter((n) => peers.every((d) => d.nodeId === n.id));
+	if (!connected.length) {
+		return {
+			message: 'Waiting to keep this environment on one node; cross-node networking is unavailable'
+		};
+	}
+	const ranked = connected
+		.map((n, order) => ({ n, order }))
+		.sort(
+			(a, b) =>
+				Number(b.n.id === builtOn) - Number(a.n.id === builtOn) ||
+				sameEnvironment(b.n) - sameEnvironment(a.n) ||
+				load(a.n) - load(b.n) ||
+				a.order - b.order
+		);
+	const target = ranked[0]!.n;
+	const rebuild = Boolean(builtOn !== undefined && target.id !== builtOn);
+	const image = rebuild ? null : dep.image;
+
+	if (dep.config.source?.type === 'image' && !image && scanMode(dep) !== 'off') {
 		return {
 			status: 'building',
 			nodeId: target.id,
@@ -178,13 +263,16 @@ function schedule(
 			log: `Scanning on node ${target.name}`
 		};
 	}
-	if (dep.config.source?.type === 'repo' && !dep.image) {
+	if (dep.config.source?.type === 'repo' && !image) {
 		return {
 			status: 'building',
 			nodeId: target.id,
 			startedAt: new Date(now),
 			message: 'Waiting for the builder',
-			log: `Building on node ${target.name}`
+			log: rebuild
+				? `Building on node ${target.name} (the image is on another node)`
+				: `Building on node ${target.name}`,
+			...(rebuild ? { set: { image: null } } : {})
 		};
 	}
 	return {
@@ -194,6 +282,19 @@ function schedule(
 		message: 'Pulling image',
 		log: `Scheduled on node ${target.name}`
 	};
+}
+
+/** The node that built an image: the first deployment that ran it. */
+function builder(db: Db, image: string) {
+	return (
+		db
+			.select({ nodeId: deployment.nodeId })
+			.from(deployment)
+			.where(and(eq(deployment.image, image), isNotNull(deployment.nodeId)))
+			.orderBy(asc(deployment.createdAt))
+			.limit(1)
+			.get()?.nodeId ?? null
+	);
 }
 
 /** Snapshots taken before scanning existed scan in the default mode. */

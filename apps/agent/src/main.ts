@@ -1,46 +1,73 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from './agent';
 import { ControlPlane } from './client';
 import { DockerRuntime } from './docker';
+import { enroll, nodeTokenFile } from './enroll';
 
 const VERSION = '0.1.0';
 
-const tokenFile =
+const url = process.env.TRAMLINE_URL ?? 'http://localhost:5173';
+const stateDir =
+	process.env.TRAMLINE_AGENT_STATE_DIR ?? path.join(os.homedir(), '.tramline', 'agent');
+const localTokenFile =
 	process.env.TRAMLINE_AGENT_TOKEN_FILE ?? path.resolve('../web/data/local-agent.token');
 
-/** The token comes from the environment, or from a file the control plane writes on first boot. */
-async function token() {
+/**
+ * The token comes from the environment; from enrolling with a join token (or
+ * the node token saved when it did); or, for the agent next to the control
+ * plane, from a file the control plane writes on first boot.
+ */
+async function token(agent: Agent) {
 	if (process.env.TRAMLINE_AGENT_TOKEN) return process.env.TRAMLINE_AGENT_TOKEN.trim();
+	if (process.env.TRAMLINE_JOIN_TOKEN || existsSync(nodeTokenFile(stateDir))) {
+		return enroll({
+			url,
+			joinToken: process.env.TRAMLINE_JOIN_TOKEN ?? '',
+			stateDir,
+			describe: () => agent.describe()
+		});
+	}
 	for (let waited = 0; ; waited++) {
 		try {
-			return readFileSync(tokenFile, 'utf8').trim();
+			return readFileSync(localTokenFile, 'utf8').trim();
 		} catch {
-			if (waited === 0) console.log(`[agent] waiting for a token at ${tokenFile}`);
+			if (waited === 0) console.log(`[agent] waiting for a token at ${localTokenFile}`);
 			await new Promise((resolve) => setTimeout(resolve, 1_000));
 		}
 	}
 }
 
-const client = new ControlPlane(process.env.TRAMLINE_URL ?? 'http://localhost:5173', await token());
+const client = new ControlPlane(url, '');
 
 const agent = new Agent({
 	runtime: new DockerRuntime(),
 	client,
-	// the control plane rewrites the file when it rotates the local node's token
 	onUnauthorized: () => {
 		if (process.env.TRAMLINE_AGENT_TOKEN) return;
+		if (existsSync(nodeTokenFile(stateDir))) {
+			console.log('[agent] Tramline no longer knows this node; was it removed?');
+			return;
+		}
+		// the control plane rewrites the file when it rotates the local node's token
 		try {
-			client.token = readFileSync(tokenFile, 'utf8').trim();
+			client.token = readFileSync(localTokenFile, 'utf8').trim();
 		} catch {
 			// keep the old token; the next attempt will say so again
 		}
 	},
-	stateDir: process.env.TRAMLINE_AGENT_STATE_DIR ?? path.join(os.homedir(), '.tramline', 'agent'),
+	stateDir,
 	version: VERSION
 });
+
+try {
+	client.token = await token(agent);
+} catch (error) {
+	console.error(`[agent] ${error instanceof Error ? error.message : String(error)}`);
+	process.exit(1);
+}
 
 // liveness probe for supervisors and the e2e harness
 const health = createServer((_, res) => {

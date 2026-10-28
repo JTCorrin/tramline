@@ -9,7 +9,7 @@ import os from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Backups } from './backups';
 import { runQuery } from './query';
-import { Builder } from './builder';
+import { Builder, type BuilderOptions } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
 import { HealthChecker } from './health';
@@ -32,6 +32,8 @@ export interface AgentOptions {
 	unauthorizedBackoffMs?: number;
 	/** For downloads (build tools) and backup uploads; tests pass a fake. */
 	fetcher?: typeof fetch;
+	/** Fetches a verified build tool binary; tests pass a fake. */
+	tools?: BuilderOptions['tools'];
 	log?: (message: string) => void;
 }
 
@@ -86,6 +88,7 @@ export class Agent {
 			onLine: (deploymentId, line) =>
 				this.logs.push({ deploymentId, ts: new Date().toISOString(), stream: 'build', line }),
 			fetcher: options.fetcher,
+			tools: options.tools,
 			log: this.#log
 		});
 		this.backups = new Backups(options.runtime, {
@@ -155,7 +158,7 @@ export class Agent {
 	async hello() {
 		for (;;) {
 			try {
-				const { nodeId } = await this.options.client.hello(await this.#describe());
+				const { nodeId } = await this.options.client.hello(await this.describe());
 				this.converger.nodeId = nodeId;
 				return;
 			} catch (error) {
@@ -165,7 +168,8 @@ export class Agent {
 		}
 	}
 
-	async #describe(): Promise<AgentHello> {
+	/** What the agent tells the control plane about this machine. */
+	async describe(): Promise<AgentHello> {
 		let docker: AgentHello['docker'] = null;
 		try {
 			docker = { version: await this.options.runtime.version() };

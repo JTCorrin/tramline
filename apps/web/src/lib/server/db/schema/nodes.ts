@@ -17,6 +17,29 @@ export const node = sqliteTable('node', {
 	lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }),
 	/** Desired-state revision the agent last converged to. */
 	revision: text('revision'),
+	/** Takes no new deployments. */
+	cordoned: integer('cordoned', { mode: 'boolean' }).notNull().default(false),
+	/** Cordoned, with its stateless deployments moving elsewhere. */
+	draining: integer('draining', { mode: 'boolean' }).notNull().default(false),
+	...timestamps
+});
+
+/**
+ * A one-time token a new machine trades for its node token. Only the hash is
+ * kept; it expires after an hour and can be used once.
+ */
+export const joinToken = sqliteTable('join_token', {
+	id: text('id').primaryKey(),
+	tokenHash: text('token_hash').notNull().unique(),
+	/** The name the node gets. */
+	name: text('name').notNull(),
+	/** The node starts cordoned. */
+	cordoned: integer('cordoned', { mode: 'boolean' }).notNull().default(false),
+	createdBy: text('created_by'),
+	expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+	usedAt: integer('used_at', { mode: 'timestamp_ms' }),
+	/** The node it enrolled. */
+	nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
 	...timestamps
 });
 

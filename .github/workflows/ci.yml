@@ -70,6 +70,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @tramline/web exec playwright install --with-deps chromium
+      # Ubuntu 24.04 stops unconfined processes creating user namespaces, which rootless
+      # BuildKit (the builder and scanner) needs; nodes on Ubuntu 23.10+ need the same.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # GitHub's Ubuntu runners ship Docker, so the agent can deploy real containers
       - run: pnpm test:e2e
         env:

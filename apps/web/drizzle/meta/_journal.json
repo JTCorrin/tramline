@@ -134,6 +134,13 @@
       "when": 1792931334905,
       "tag": "0018_database_volumes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1792933093467,
+      "tag": "0019_node_enrollment",
+      "breakpoints": true
     }
   ]
 }

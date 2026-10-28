@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DesiredBuild } from '@tramline/contracts';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,9 +14,15 @@ import {
 	safeSubdirectory,
 	secretsHash
 } from './builder';
-import { BUILDKIT_IMAGE, RAILPACK } from './pins';
-import { extractFile, railpackBinary } from './railpack';
-import { FakeRuntime, stateDirWithTools } from './testing';
+import { BUILDKIT_IMAGE, RAILPACK, TRIVY } from './pins';
+import {
+	extractFile,
+	railpackBinary,
+	releaseBinary,
+	TRIVY_TOOL,
+	type ReleaseTool
+} from './railpack';
+import { FakeRuntime, fakeTools, stateDirWithTools } from './testing';
 
 const COMMIT = 'a'.repeat(40);
 
@@ -67,6 +74,7 @@ function setup(options: { dockerfile?: boolean; fail?: string; prepareExit?: num
 	const lines: string[] = [];
 	const builder = new Builder(runtime, {
 		stateDir,
+		tools: fakeTools,
 		nodeId: () => 'node_1',
 		onLine: (_, line) => lines.push(line)
 	});
@@ -330,5 +338,30 @@ describe('railpackBinary', () => {
 		await expect(
 			railpackBinary(stateDir, 'x86_64', async () => new Response('nope', { status: 404 }))
 		).rejects.toThrow('HTTP 404');
+	});
+	it('downloads Trivy from its official release for each architecture', () => {
+		expect(TRIVY_TOOL.url('aarch64')).toBe(
+			`https://github.com/aquasecurity/trivy/releases/download/v${TRIVY.version}/trivy_${TRIVY.version}_Linux-ARM64.tar.gz`
+		);
+		expect(TRIVY_TOOL.url('riscv64')).toBeNull();
+	});
+
+	it('keeps the verified release, and fetches it again if the cached copy was altered', async () => {
+		const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-rp-'));
+		const body = await tarball({ tool: 'real' });
+		const tool: ReleaseTool = {
+			name: 'tool',
+			version: 'v1',
+			sha256: { x86_64: createHash('sha256').update(body).digest('hex') },
+			url: () => 'https://example.test/tool-v1.tar.gz'
+		};
+		const fetcher = vi.fn<typeof fetch>(async () => new Response(body));
+		expect((await releaseBinary(tool, stateDir, 'x86_64', fetcher)).toString()).toBe('real');
+		expect((await releaseBinary(tool, stateDir, 'x86_64', fetcher)).toString()).toBe('real');
+		expect(fetcher).toHaveBeenCalledTimes(1);
+
+		writeFileSync(path.join(stateDir, 'tool', 'v1', 'x86_64', 'tool-v1.tar.gz'), 'tampered');
+		expect((await releaseBinary(tool, stateDir, 'x86_64', fetcher)).toString()).toBe('real');
+		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 });

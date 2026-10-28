@@ -482,10 +482,29 @@ Database templates with generated credentials and connection variables, `${{Serv
 
 ### Phase 6: Multi-node + adapter SDK + Proxmox adapter
 
+Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapters and Proxmox (6c).
+
+**6a: nodes ✅** (verified on Docker with a second, Docker-in-Docker node; e2e in CI)
+
+- **Enrollment:** an install admin creates a one-time **join token** under Nodes → Add node, optionally starting the node cordoned. The command it shows (`curl … /install.sh | sudo sh -s -- --url … --token …`) checks Docker and runs the agent as a container. The agent trades the join token for its own node token, saved with mode 600. Join tokens are stored as hashes, expire after an hour and work once.
+- **The agent container** has no capabilities, no privilege escalation, a read-only filesystem and a PID limit. It still holds the Docker socket, so it is as powerful as root on the node, which is why nodes are managed only by install admins (`TRAMLINE_ADMIN_EMAILS`, or else the first person to sign up) and never by API tokens. The image is built for amd64 and arm64 and published to GHCR with signed build provenance.
+- **Scheduling:**
+  - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room.
+  - **Preferences:** the node that built the image (anywhere else rebuilds the same commit), then the node already running the environment (its services share one Docker network until the mesh lands), then the least loaded node.
+- **Nodes page:** status, CPUs, memory reserved by limits, deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. Until 6b adds cross-node networking, placements that would separate different services in an environment stay queued, including pins, memory spillover and drains. A drain can therefore wait while another service remains on the original node. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
+- **Still to come in 6b and 6c:**
+  - **Cross-node networking:** services on different nodes can't reach each other until the WireGuard mesh, which is why the scheduler keeps environments together.
+  - **Ingress:** each node serves its own deployments' routes, so public domains need the edge role to work across nodes.
+  - **Spreading replicas across nodes,** CPU requests, metrics and node hardening checks.
+
+**6b: mesh**
+
+- WireGuard mesh managed by agents and coordinated by the control plane; per-node DNS for `*.tramline.internal` across nodes; edge/ingress node role; replicas spread across nodes; the TCP proxy for databases.
+
+**6c: adapters and Proxmox**
+
 - `packages/adapter-sdk` (contract, conformance suite, fake adapter), adapter registry, `adapter_account` UI with a form generated from each adapter's zod credentials schema and a "Test connection" button.
-- **`manual` adapter**: join token + install script for any Linux box. **`proxmox` adapter**: provisions VMs from a cloud-init template via the Proxmox API, and they enroll on their own. Node list/health UI, drain/cordon.
-- WireGuard mesh managed by agents and coordinated by the control plane; per-node DNS for `*.tramline.internal` across nodes; edge/ingress node role.
-- Scheduler: bin-packing by cpu/mem requests, placement pins, volume affinity, replicas spread across nodes.
+- **`manual` adapter** (6a's join tokens, behind the adapter contract). **`proxmox` adapter**: provisions VMs from a cloud-init template via the Proxmox API, and they enroll on their own.
 - Metrics: agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
 - **Exit:** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 

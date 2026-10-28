@@ -78,7 +78,9 @@ export const DeployConfig = z.object({
 	/** Hard memory limit; null for no limit. */
 	memoryMb: z.number().int().min(16).max(262_144).nullable(),
 	/** Mount the container's root filesystem read-only (with a writable /tmp). */
-	readOnlyRootFilesystem: z.boolean()
+	readOnlyRootFilesystem: z.boolean(),
+	/** Run only on this node (its id); null lets the scheduler choose. */
+	node: z.string().nullable()
 });
 
 export const NetworkingConfig = z.object({
@@ -139,7 +141,8 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		restartPolicy: 'on_failure',
 		cronSchedule: null,
 		memoryMb: null,
-		readOnlyRootFilesystem: false
+		readOnlyRootFilesystem: false,
+		node: null
 	},
 	networking: { port: null, publicDomain: false },
 	volume: { mountPath: null }
