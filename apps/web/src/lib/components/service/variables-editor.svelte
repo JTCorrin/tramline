@@ -46,13 +46,17 @@
 
 	$effect(() => {
 		void version;
+		// only the latest request for the service and environment shown counts
+		let current = true;
 		client.variables
 			.getAll({ environmentId, ...(serviceId ? { serviceId } : {}) })
 			.then((list) => {
+				if (!current) return;
 				variables = list;
 				loaded = true;
 			})
 			.catch(reportError);
+		return () => (current = false);
 	});
 
 	type Edits = {

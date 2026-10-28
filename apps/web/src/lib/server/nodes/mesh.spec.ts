@@ -11,7 +11,7 @@ import * as environments from '../domain/environments';
 import * as nodes from '../domain/nodes';
 import * as projects from '../domain/projects';
 import * as services from '../domain/services';
-import { seedCtx, testSecrets } from '../testing';
+import { grantInstallAdmin, seedCtx, testSecrets } from '../testing';
 import { buildDesiredState } from './desired';
 import {
 	linkName,
@@ -196,7 +196,7 @@ describe('planMesh', () => {
 
 /** Two online nodes with mesh keys; the second is enrolled with a join token. */
 function cluster() {
-	const ctx = seedCtx();
+	const ctx = grantInstallAdmin(seedCtx());
 	ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-mesh-')) };
 	const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
 	recordHello(ctx.db, local.id, hello({ publicKey: KEY(1), endpoint: null }));
@@ -347,7 +347,7 @@ describe('mesh in the desired state', () => {
 
 describe('TCP proxy', () => {
 	function proxied(allow: string[] = ['203.0.113.0/24']) {
-		const ctx = seedCtx();
+		const ctx = grantInstallAdmin(seedCtx());
 		ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-tcp-')) };
 		const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
 		recordHello(ctx.db, local.id, hello());

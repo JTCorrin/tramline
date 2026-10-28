@@ -51,8 +51,11 @@ export interface BuilderOptions {
 /**
  * Builds deployments from source inside one rootless BuildKit container per
  * node: clone → Railpack (or a Dockerfile) → image loaded into the local
- * Docker. Variables reach the build only as BuildKit secrets, set on the
- * build process alone, so they never land in the image, the plan or the logs.
+ * Docker. Variables reach the build as BuildKit secrets, so BuildKit itself
+ * never writes them into image layers, the plan or the logs. A build step
+ * that prints or copies a secret still can: that's the application's code.
+ * Builds on a node share this one builder; see the roadmap's build-isolation
+ * work before running builds for mutually untrusted organizations.
  */
 export class Builder {
 	#ready: Promise<void> | null = null;
@@ -475,7 +478,9 @@ export const CLONE_SCRIPT = [
 export function gitAuth(repo: string, token: string | null): Record<string, string> {
 	const env: Record<string, string> = { GIT_TERMINAL_PROMPT: '0' };
 	if (!token) return env;
+	// an installation token is GitHub's; it is never sent anywhere else
 	const origin = new URL(repo).origin;
+	if (origin !== 'https://github.com') return env;
 	const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
 	return {
 		...env,

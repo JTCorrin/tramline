@@ -90,8 +90,21 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 		.where(inArray(deployment.status, ['queued', 'building', 'deploying', 'active', 'crashed']))
 		.orderBy(asc(deployment.createdAt), asc(deployment.id))
 		.all();
+	// only what the assigned node says counts (recordReport already enforces it). Every
+	// deployment, not just live ones: a stopping one's containers hold back its replacement
+	const nodeOf = new Map(
+		db
+			.select({ id: deployment.id, nodeId: deployment.nodeId })
+			.from(deployment)
+			.all()
+			.map((d) => [d.id, d.nodeId])
+	);
 	const containers = Map.groupBy(
-		db.select().from(container).all(),
+		db
+			.select()
+			.from(container)
+			.all()
+			.filter((row: ContainerRow) => nodeOf.get(row.deploymentId) === row.nodeId),
 		(row: ContainerRow) => row.deploymentId
 	);
 	const builds = new Map(
@@ -99,6 +112,7 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 			.select()
 			.from(build)
 			.all()
+			.filter((row) => nodeOf.get(row.deploymentId) === row.nodeId)
 			.map((row) => [row.deploymentId, row])
 	);
 

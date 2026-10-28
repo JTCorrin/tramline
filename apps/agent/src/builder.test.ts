@@ -290,11 +290,19 @@ describe('helpers', () => {
 		expect(safeSubdirectory('a/../../..')).toBe('');
 	});
 
-	it('only adds credentials when there is a token', () => {
+	it('only adds credentials for GitHub over HTTPS, and only with a token', () => {
 		expect(gitAuth('https://github.com/a/b', null)).toEqual({ GIT_TERMINAL_PROMPT: '0' });
-		expect(gitAuth('https://gitlab.example.com/a/b', 't').GIT_CONFIG_KEY_0).toBe(
-			'http.https://gitlab.example.com/.extraheader'
+		expect(gitAuth('https://github.com/a/b', 't').GIT_CONFIG_KEY_0).toBe(
+			'http.https://github.com/.extraheader'
 		);
+		// an installation token is never sent to any other origin
+		for (const repo of [
+			'https://attacker.example/a/b',
+			'http://github.com/a/b',
+			'https://github.com.attacker.example/a/b'
+		]) {
+			expect(gitAuth(repo, 't')).toEqual({ GIT_TERMINAL_PROMPT: '0' });
+		}
 	});
 
 	it('changes the secrets hash when any value changes, regardless of order', () => {

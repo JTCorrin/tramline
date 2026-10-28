@@ -11,7 +11,7 @@ import type {
 	Volume
 } from '@tramline/contracts';
 import { SaveBackupStorage as SaveSchema } from '@tramline/contracts';
-import { and, desc, eq, inArray, isNotNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import { objectUrl, presign, type S3Target } from '../backups/s3';
@@ -796,21 +796,24 @@ export async function runBackupSchedules(
 		drilled++;
 	}
 
-	// retention: the newest N scheduled backups stay
+	// retention: the newest N successful scheduled backups stay. Failures are trimmed on their
+	// own, so a run of failed backups never pushes out the last good recovery points
 	for (const { volume: vol } of scheduled) {
-		const old = db
-			.select()
-			.from(backup)
-			.where(
-				and(
-					eq(backup.volumeId, vol.id),
-					eq(backup.trigger, 'scheduled'),
-					or(eq(backup.status, 'succeeded'), eq(backup.status, 'failed'))
+		const finished = (status: 'succeeded' | 'failed') =>
+			db
+				.select()
+				.from(backup)
+				.where(
+					and(
+						eq(backup.volumeId, vol.id),
+						eq(backup.trigger, 'scheduled'),
+						eq(backup.status, status)
+					)
 				)
-			)
-			.orderBy(desc(backup.createdAt), desc(backup.id))
-			.all()
-			.slice(vol.backupRetention);
+				.orderBy(desc(backup.createdAt), desc(backup.id))
+				.all()
+				.slice(vol.backupRetention);
+		const old = [...finished('succeeded'), ...finished('failed')];
 		for (const row of old) {
 			try {
 				await deleteObject(db, secrets, row, fetcher);

@@ -35,6 +35,10 @@ export interface ConvergeOptions {
 
 export const DEFAULT_DRAIN_MS = 10_000;
 
+/** A container that failed to start is retried after this, doubling up to RETRY_MAX_MS. */
+export const RETRY_FIRST_MS = 10_000;
+export const RETRY_MAX_MS = 5 * 60_000;
+
 const quiet = () => {};
 
 /** How long a workload gets to shut down after SIGTERM; more for ones with data on a volume. */
@@ -68,6 +72,8 @@ export class Converger {
 	#applied: string | null = null;
 	/** Whether the ingress container has been seen or started, so routes can be pushed to it. */
 	#ingressUp = false;
+	/** When a container that failed to start is tried again, and for which spec. */
+	#retries = new Map<string, { at: number; attempts: number; spec: string }>();
 	/** The mesh config last written into the mesh container. */
 	#meshApplied: string | null = null;
 
@@ -153,11 +159,21 @@ export class Converger {
 			}
 		}
 
-		for (const name of this.errors.keys()) if (!wanted.has(name)) this.errors.delete(name);
+		for (const name of this.errors.keys()) {
+			// gone, or changed: a new spec deserves a fresh try
+			const retry = this.#retries.get(name);
+			if (!wanted.has(name) || retry?.spec !== wanted.get(name)!.labels[LABELS.spec]) {
+				this.errors.delete(name);
+				this.#retries.delete(name);
+			}
+		}
 
 		// 1. start what's missing
+		const now = this.#now();
 		for (const [name, spec] of wanted) {
-			if (present.has(name) || this.errors.has(name) || this.held.has(name)) continue;
+			if (present.has(name) || this.held.has(name)) continue;
+			// a failed start is tried again later (a registry or Docker hiccup passes)
+			if (this.errors.has(name) && now < (this.#retries.get(name)?.at ?? 0)) continue;
 			try {
 				if (!(await this.runtime.hasImage(spec.image))) {
 					this.pulling.add(name);
@@ -173,8 +189,16 @@ export class Converger {
 				}
 				log(`starting ${name}`);
 				await this.runtime.run(this.#withTls(spec, tls.get(name)!));
+				this.errors.delete(name);
+				this.#retries.delete(name);
 			} catch (error) {
 				this.errors.set(name, error instanceof Error ? error.message : String(error));
+				const attempts = (this.#retries.get(name)?.attempts ?? 0) + 1;
+				this.#retries.set(name, {
+					attempts,
+					at: now + Math.min(RETRY_FIRST_MS * 2 ** (attempts - 1), RETRY_MAX_MS),
+					spec: spec.labels[LABELS.spec]!
+				});
 				log(`failed to start ${name}: ${this.errors.get(name)}`);
 			} finally {
 				this.pulling.delete(name);
@@ -198,7 +222,6 @@ export class Converger {
 		await this.#publishRoutes(desired);
 
 		// 3. only then drain and remove what is no longer wanted
-		const now = this.#now();
 		const staleNames = new Set(stale.map((c) => c.name));
 		for (const name of this.#leaving.keys()) if (!staleNames.has(name)) this.#leaving.delete(name);
 		for (const container of stale) {

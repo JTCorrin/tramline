@@ -6,6 +6,7 @@ import { AppError } from '../api/errors';
 import { sealedVariable, variable } from '../db/schema';
 import { publish } from '../events';
 import { requireEnvironment, requireInstance } from './access';
+import { sealsChanged } from '../nodes/seals';
 import type { Ctx } from './context';
 import { getStaged, saveStaged, scopeOf } from './staging';
 
@@ -176,6 +177,7 @@ export function stage(
 				.onConflictDoNothing()
 				.run();
 		}
+		sealsChanged();
 	}
 	pruneSeals(ctx.db, ctx.secrets, input.environmentId, serviceId);
 

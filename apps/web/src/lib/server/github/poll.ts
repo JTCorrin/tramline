@@ -8,7 +8,7 @@ import {
 } from '../domain/autodeploy';
 import type { PlatformSettings } from '../settings';
 import { branchHead, changedFiles, GitHubError, githubFullName } from './api';
-import { installationToken, matchInstallation } from './app';
+import { installationToken, matchInstallation, ownsInstallation } from './app';
 
 /** Last ETag and head seen per `repo#branch`, so unchanged branches cost a free 304. */
 const heads = new Map<string, { etag: string | null; sha: string }>();
@@ -50,15 +50,26 @@ export async function pollRepositories(
 		const [repo, branch] = key.split('#') as [string, string];
 		try {
 			// an explicit installation, or the organization's installation on the repository owner
+			const organizationId = targets[0]!.organizationId;
+			const explicit = targets.find((t) => t.config.source.installationId)?.config.source
+				.installationId;
 			const installationId =
-				targets.find((t) => t.config.source.installationId)?.config.source.installationId ??
-				matchInstallation(db, targets[0]!.organizationId, targets[0]!.config.source.repo);
+				explicit && ownsInstallation(db, organizationId, explicit)
+					? explicit
+					: matchInstallation(db, organizationId, targets[0]!.config.source.repo);
 			if (!installationId) {
 				if (now - (checked.get(key) ?? -Infinity) < ANONYMOUS_POLL_MS) continue;
 				checked.set(key, now);
 			}
 			const token = installationId
-				? await installationToken(db, secrets, installationId, fetcher)
+				? await installationToken(
+						db,
+						secrets,
+						installationId,
+						fetcher,
+						Date.now(),
+						githubFullName(repo)?.split('/')[1]
+					)
 				: null;
 			const previous = heads.get(key);
 			const head = await branchHead(repo, branch, { token, etag: previous?.etag, fetcher });

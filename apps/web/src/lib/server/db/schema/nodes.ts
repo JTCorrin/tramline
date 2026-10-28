@@ -1,5 +1,6 @@
 import type { AgentHello, ScanResult } from '@tramline/contracts';
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { user } from './auth';
 import { timestamps } from './projects';
 
 /** A machine running the Tramline agent. Nodes belong to the install, not an organization. */
@@ -88,3 +89,17 @@ export const container = sqliteTable(
 	},
 	(table) => [index('container_deployment_idx').on(table.deploymentId)]
 );
+
+/**
+ * People who manage this install's nodes. Granted explicitly: the first by
+ * the one-time setup token, later ones by an existing admin.
+ */
+export const installAdmin = sqliteTable('install_admin', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	grantedBy: text('granted_by'),
+	grantedAt: integer('granted_at', { mode: 'timestamp_ms' })
+		.notNull()
+		.$defaultFn(() => new Date())
+});

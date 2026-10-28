@@ -395,4 +395,32 @@ describe('backup schedules', () => {
 		});
 		expect(s.ctx.db.select().from(restore).all()).toEqual([]);
 	});
+
+	it('never lets failed backups push out the last good ones', async () => {
+		const s = setup();
+		const now = Date.now();
+		const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+		const run = (at: number) =>
+			backups.runBackupSchedules(s.ctx.db, testSecrets, { now: at, fetcher, log: () => {} });
+		backups.saveStorage(s.ctx, STORAGE);
+		backups.updateVolume(s.ctx, s.vol.id, { backupSchedule: 'daily', backupRetention: 2 });
+		const finish = (state: 'succeeded' | 'failed') => {
+			for (const job of desired(s).backups) {
+				recordReport(s.ctx.db, s.node.id, {
+					revision: null,
+					containers: [],
+					backups: [{ id: job.id, state, size: state === 'succeeded' ? 1 : null, error: null }]
+				});
+			}
+		};
+		// two good days, then a week of failures
+		for (let day = 0; day < 9; day++) {
+			await run(now + day * 24 * 3600_000 + 1000);
+			finish(day < 2 ? 'succeeded' : 'failed');
+		}
+		await run(now + 9 * 24 * 3600_000 + 1000);
+		const left = backups.listBackups(s.ctx, s.vol.id);
+		expect(left.filter((b) => b.status === 'succeeded')).toHaveLength(2);
+		expect(left.filter((b) => b.status === 'failed')).toHaveLength(2);
+	});
 });

@@ -372,6 +372,20 @@ function deployedRepo(
 	} = {}
 ) {
 	const ctx = seedApp();
+	if (options.installationId) {
+		// the organization connected this installation
+		ctx.db
+			.insert(githubInstallation)
+			.values({
+				id: options.installationId,
+				organizationId: ctx.organizationId,
+				account: 'Acme',
+				accountType: 'Organization',
+				htmlUrl: 'https://github.com/organizations/Acme/settings/installations/99'
+			})
+			.onConflictDoNothing()
+			.run();
+	}
 	const project = projects.create(ctx, { name: 'Shop' });
 	const [env] = environments.list(ctx, project.id);
 	const svc = services.create(ctx, {
@@ -606,5 +620,142 @@ describe('build tokens', () => {
 		expect(
 			await attachBuildTokens(ctx.db, testSecrets, { ...desired, builds: [] }, fetcher)
 		).toEqual({ ...desired, builds: [] });
+	});
+});
+
+describe('installation tokens never cross organizations or leave GitHub', () => {
+	function connected() {
+		const ctx = seedApp();
+		ctx.db
+			.insert(githubInstallation)
+			.values({
+				id: '99',
+				organizationId: ctx.organizationId,
+				account: 'Acme',
+				accountType: 'Organization',
+				htmlUrl: 'x'
+			})
+			.run();
+		return ctx;
+	}
+	const source = (repo: string, installationId: string | null = '99') => ({
+		type: 'repo' as const,
+		repo,
+		branch: 'main',
+		rootDirectory: '/',
+		installationId
+	});
+
+	it('refuses an installation another organization connected', async () => {
+		const owner = connected();
+		const other = seedCtx(owner.db);
+		const project = projects.create(other, { name: 'Elsewhere' });
+		expect(() =>
+			services.create(other, {
+				projectId: project.id,
+				kind: 'repo',
+				source: source('https://github.com/acme/api')
+			})
+		).toThrow('not connected to this organization');
+		const fetcher = github({ 'POST /app/installations/99/access_tokens': tokenRoute });
+		await expect(
+			tokenForSource(
+				owner.db,
+				testSecrets,
+				source('https://github.com/acme/api'),
+				other.organizationId,
+				fetcher
+			)
+		).rejects.toThrow('not connected to this organization');
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	it('only issues tokens for GitHub over HTTPS, restricted to the one repository', async () => {
+		const ctx = connected();
+		const fetcher = github({ 'POST /app/installations/99/access_tokens': tokenRoute });
+		for (const repo of [
+			'https://attacker.example/acme/api',
+			'http://github.com/acme/api',
+			'https://github.com:8443/acme/api',
+			'https://user:pass@github.com/acme/api'
+		]) {
+			expect(
+				await tokenForSource(ctx.db, testSecrets, source(repo), ctx.organizationId, fetcher)
+			).toBeNull();
+		}
+		expect(fetcher).not.toHaveBeenCalled();
+
+		expect(
+			await tokenForSource(
+				ctx.db,
+				testSecrets,
+				source('https://github.com/Acme/API.git'),
+				ctx.organizationId,
+				fetcher
+			)
+		).toBe('ghs_install');
+		expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toEqual({
+			repositories: ['api']
+		});
+	});
+
+	it('leaves a build without a token rather than failing the node when the source is not allowed', async () => {
+		const owner = connected();
+		const other = seedCtx(owner.db);
+		const project = projects.create(other, { name: 'Elsewhere' });
+		const [env] = environments.list(other, project.id);
+		const svc = services.create(other, {
+			projectId: project.id,
+			kind: 'repo',
+			source: source('https://github.com/acme/api', null)
+		});
+		// the installation ID arrives some other way, e.g. an old snapshot
+		const [dep] = changes.deploy(other, env!.id);
+		const row = owner.db.select().from(deployment).where(eq(deployment.id, dep!.id)).get()!;
+		owner.db
+			.update(deployment)
+			.set({ config: { ...row.config, source: source('https://github.com/acme/api') } })
+			.where(eq(deployment.id, dep!.id))
+			.run();
+		const fetcher = github({ 'POST /app/installations/99/access_tokens': tokenRoute });
+		const desired = await attachBuildTokens(
+			owner.db,
+			testSecrets,
+			{
+				revision: 'r',
+				networks: [],
+				containers: [],
+				builds: [
+					{
+						deploymentId: dep!.id,
+						serviceId: svc.id,
+						repo: 'https://github.com/acme/api',
+						ref: 'main',
+						commit: null,
+						token: null,
+						rootDirectory: '/',
+						builder: 'railpack',
+						dockerfilePath: null,
+						buildCommand: null,
+						startCommand: null,
+						image: 'tramline/x:y',
+						secrets: {},
+						scan: 'off'
+					}
+				],
+				scans: [],
+				deletedVolumes: [],
+				backups: [],
+				restores: [],
+				drills: [],
+				queries: [],
+				mesh: null,
+				tcpProxies: [],
+				ingress: { httpPort: 80, tls: false, routes: [] }
+			},
+			fetcher
+		);
+		expect(desired.builds[0]!.token).toBeNull();
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 });

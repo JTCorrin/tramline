@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
@@ -77,6 +78,41 @@
 		}
 	}
 
+	// svelte-ignore state_referenced_locally
+	let admins = $state(data.admins);
+	let setupToken = $state('');
+	let adminEmail = $state('');
+
+	async function claim(event: SubmitEvent) {
+		event.preventDefault();
+		try {
+			await api().install.claim(setupToken);
+			toast.success('You are now this install’s admin');
+			await invalidateAll();
+			admins = await api().install.admins();
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	async function grant(event: SubmitEvent) {
+		event.preventDefault();
+		try {
+			admins = await api().install.grant(adminEmail);
+			adminEmail = '';
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	async function revoke(userId: string) {
+		try {
+			admins = await api().install.revoke(userId);
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
 	const STATUS_DOT = { online: 'bg-emerald-400', offline: 'bg-zinc-500', error: 'bg-red-500' };
 	const percent = (n: NodeSummary) =>
 		n.memoryMb ? Math.min(100, Math.round((n.allocatedMemoryMb / n.memoryMb) * 100)) : 0;
@@ -92,6 +128,31 @@
 			The machines your services run on. They're shared by every organization on this install.
 		</p>
 	</div>
+
+	{#if data.awaitingSetup}
+		<Card.Root data-testid="claim-install">
+			<Card.Header>
+				<Card.Title>Claim this install</Card.Title>
+				<Card.Description>
+					Nobody manages this install's nodes yet. The server wrote a one-time setup token to
+					<code>setup-token</code> in its data directory (and said where in its log); paste it here to
+					become the install admin.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<form class="flex gap-2" onsubmit={claim}>
+					<Input
+						bind:value={setupToken}
+						class="font-mono text-xs"
+						placeholder="tlsetup_…"
+						aria-label="Setup token"
+						required
+					/>
+					<Button type="submit">Claim</Button>
+				</form>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 
 	{#if data.canManage}
 		<Card.Root data-testid="add-node">
@@ -144,6 +205,45 @@
 						Start cordoned
 					</label>
 					<Button type="submit">Create join command</Button>
+				</form>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
+	{#if data.canManage}
+		<Card.Root data-testid="install-admins">
+			<Card.Header>
+				<Card.Title>Install admins</Card.Title>
+				<Card.Description>
+					They add, drain and remove nodes for every organization on this install.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-3">
+				<ul class="divide-y rounded-lg border text-sm">
+					{#each admins as admin (admin.userId)}
+						<li class="flex items-center gap-3 px-3 py-2">
+							<span class="font-medium">{admin.name}</span>
+							<span class="text-xs text-muted-foreground">{admin.email}</span>
+							{#if admins.length > 1}
+								<Button
+									class="ml-auto"
+									size="sm"
+									variant="ghost"
+									onclick={() => revoke(admin.userId)}>Remove</Button
+								>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+				<form class="flex gap-2" onsubmit={grant}>
+					<Input
+						type="email"
+						bind:value={adminEmail}
+						placeholder="Email of someone with an account"
+						aria-label="New admin's email"
+						required
+					/>
+					<Button type="submit" variant="outline">Add admin</Button>
 				</form>
 			</Card.Content>
 		</Card.Root>

@@ -9,11 +9,12 @@ import { and, asc, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import type { DbOrTx } from '../db/client';
-import { deployment, joinToken, node, service, user, volume } from '../db/schema';
+import { deployment, joinToken, node, service, volume } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { meshMembers, routes } from '../nodes/mesh';
 import { hashToken, nodeStatus, requestedMemory } from '../nodes/registry';
+import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { copyDeployment } from './deployments';
 
@@ -22,31 +23,6 @@ export const JOIN_TOKEN_TTL_MS = 60 * 60_000;
 
 /** Deployments that hold a place on a node. */
 const LIVE = ['building', 'deploying', 'active', 'crashed'] as const;
-
-/**
- * Nodes belong to the whole install, so they're managed by its admins: the
- * people in TRAMLINE_ADMIN_EMAILS, or else whoever signed up first.
- */
-export function isInstallAdmin(ctx: Ctx) {
-	const me = ctx.db.select({ email: user.email }).from(user).where(eq(user.id, ctx.userId)).get();
-	if (!me) return false;
-	const admins = ctx.settings.adminEmails ?? [];
-	if (admins.length) return admins.includes(me.email.toLowerCase());
-	const first = ctx.db
-		.select({ id: user.id })
-		.from(user)
-		.orderBy(asc(user.createdAt), asc(user.id))
-		.limit(1)
-		.get();
-	return first?.id === ctx.userId;
-}
-
-function requireInstallAdmin(ctx: Ctx, action: string) {
-	// API tokens act inside one organization; nodes are the install's
-	if (ctx.token || !isInstallAdmin(ctx)) {
-		throw new AppError('forbidden', `Only this install's admins can ${action}`);
-	}
-}
 
 /** Nodes are shared by every organization on the install. */
 export function list(ctx: Ctx): NodeSummary[] {

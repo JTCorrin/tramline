@@ -23,7 +23,7 @@
 	const SCOPE_HELP: Record<TokenScope, string> = {
 		read: 'See projects, services, deployments and logs',
 		write: 'Stage changes: services, config and variables',
-		deploy: 'Apply changes: deploy, redeploy, restore and run'
+		deploy: 'Apply changes and delete: deploy, redeploy, restore, run and delete'
 	};
 	const EXPIRY: Record<string, string> = {
 		'30': '30 days',

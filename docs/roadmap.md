@@ -487,7 +487,7 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
 **6a: nodes ✅** (verified on Docker with a second, Docker-in-Docker node; e2e in CI)
 
 - **Enrollment:** an install admin creates a one-time **join token** under Nodes → Add node, optionally starting the node cordoned. The command it shows (`curl … /install.sh | sudo sh -s -- --url … --token …`) checks Docker and runs the agent as a container. The agent trades the join token for its own node token, saved with mode 600. Join tokens are stored as hashes, expire after an hour and work once.
-- **The agent container** has no capabilities, no privilege escalation, a read-only filesystem and a PID limit. It still holds the Docker socket, so it is as powerful as root on the node, which is why nodes are managed only by install admins (`TRAMLINE_ADMIN_EMAILS`, or else the first person to sign up) and never by API tokens. The image is built for amd64 and arm64 and published to GHCR with signed build provenance.
+- **The agent container** has no capabilities, no privilege escalation, a read-only filesystem and a PID limit. It still holds the Docker socket, so it is as powerful as root on the node, which is why nodes are managed only by install admins and never by API tokens. (Admins became an explicit grant in the hardening pass below.) The image is built for amd64 and arm64 and published to GHCR with signed build provenance.
 - **Scheduling:**
   - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room.
   - **Preferences:** the node that built the image (anywhere else rebuilds the same commit), then the node already running the environment (its services share one Docker network until the mesh lands), then the least loaded node.
@@ -517,6 +517,50 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
   - **The certificate:** Postgres gets a TLS certificate the agent creates on its node (ECDSA P-256, ten years, kept across deploys; the key never leaves the node). It comes with the proxy, so it starts on a deploy, never by surprise on an upgrade. Clients use `sslmode=require`.
 - **Later:** MySQL, Redis and MongoDB through the proxy; `verify-full` with a downloadable certificate; TLS for connections inside an environment too.
 - **Moved to Phase 7:** spreading a service's replicas across nodes, which belongs with CPU and memory requests and node pools.
+
+### Hardening: the 2026-10-26 review
+
+An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed before 6c starts.
+
+**Hardening 1 ✅** (unit-tested; e2e in CI)
+
+- **R1 (critical), GitHub installations:**
+  - **Ownership:** an installation ID only counts for the organization that connected it, checked when a source is set and again before any token is issued.
+  - **Tokens:** they're restricted to the one repository a build needs, and go only to `https://github.com`. The agent also refuses to send one anywhere else.
+- **R2, destructive operations:** deleting anything that runs (services, environments, projects, domains, backups) needs the `deploy` scope; `write` only stages and discards changes.
+- **R3, install admins:** an explicit, stored grant. The first is claimed with a one-time setup token the server writes to its data directory; later ones are granted by an admin. Email addresses no longer grant anything, since Tramline doesn't verify them.
+- **R5, node reports:** an agent's container and build reports count only for deployments assigned to its node. (A deployment's node never changes once scheduled, so no assignment generation is needed.)
+- **R6, backups:**
+  - Dumps and loads fail when any part of the pipeline fails (these images' `sh` has no `pipefail`), and Postgres restores and drills stop at the first SQL error.
+  - Drills check their own verification queries.
+  - Retention keeps the newest N _successful_ backups, and trims failures separately.
+- **R7, sealed values:** deploys track which values came from a sealed variable through any chain of references, and record it on the deployment. Log masking uses that record plus today's seals, so a sealed value copied under another name is masked, old snapshots stay protected after a seal goes, and a new seal applies at once.
+- **R8, logs:**
+  - **Agent:** a byte-budgeted queue (the oldest lines are dropped first, with a note saying how many) and a line-size cap.
+  - **Containers:** Docker log rotation on every container the agent runs.
+  - **Control plane:** log files rotate at 10 MB, tails are read from the end of the file, and logs are deleted after 30 days.
+- **R9, failed starts:** a container that fails to start is retried with backoff (10 seconds, doubling to 5 minutes), and at once when its spec changes.
+- **R11, referenced values:** a deploy redeploys every service whose resolved variables changed (through another service's variable, a shared one, a chain of references, or a built-in), and the changes summary lists those services.
+- **Also:**
+  - The service panel and the variables editor ignore responses for a service or environment no longer shown.
+  - Comments and `SECURITY.md` now match tested behaviour and state their trust assumptions: masking stops accidental disclosure only, builds share a builder, and there must be one control-plane process.
+
+**Hardening 2 (next, before 6c)**
+
+- **R4 + R10, build isolation and job lifecycle:**
+  - **Builders:** a fresh builder container per build, with BuildKit's process sandbox and a cache per organization.
+  - **Limits:** CPU, memory, disk and time.
+  - **Jobs:** explicit queued, running, cancelled and finished states, with real cancellation (a timed-out or removed build stops, and the next one starts) and deadlines on the data queue too.
+  - **Tests:** hostile build steps, and leftover processes between jobs.
+- **R1, second part:** prove the person connecting a GitHub installation controls it, using GitHub's user authorization during install.
+- **Sign-up policy:** closed sign-up after setup, with invitations, configurable per install.
+
+**Later**
+
+- **Backup code:** split `domain/backups.ts` by responsibility (storage settings, job planning, report handling, scheduling, retention), and share one implementation of the encrypted backup format between the agent and the control plane.
+- **UI:** collection updates that roll back only their own change when they fail.
+- **Efficiency:** coalesce reconcile passes instead of running one per agent report, cache desired-state planning by revision, and load environment state in batched queries, with query-count checks.
+- **Resource accounting:** default requests and limits, capacity reserved for infrastructure, and per-organization limits (with Phase 7's requests).
 
 **6c: adapters and Proxmox**
 

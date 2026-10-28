@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DbOrTx } from '../db/client';
 import { AppError } from '../api/errors';
-import { build, container, joinToken, node } from '../db/schema';
+import { build, container, deployment, joinToken, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
 import { recordVolumes } from './volumes';
@@ -168,8 +168,19 @@ export function nextMeshAddress(db: DbOrTx) {
 /** Replaces the node's container rows with what the agent just observed. */
 export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInput) {
 	db.transaction((tx) => {
+		// a node speaks only for deployments placed on it: a report about another node's
+		// deployment (a stolen node token, or a stale one) is ignored
+		const assigned = new Set(
+			tx
+				.select({ id: deployment.id })
+				.from(deployment)
+				.where(eq(deployment.nodeId, nodeId))
+				.all()
+				.map((row) => row.id)
+		);
 		tx.delete(container).where(eq(container.nodeId, nodeId)).run();
 		for (const c of report.containers) {
+			if (!assigned.has(c.deploymentId)) continue;
 			tx.insert(container)
 				.values({
 					name: c.name,
@@ -194,6 +205,7 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 		});
 		tx.delete(build).where(eq(build.nodeId, nodeId)).run();
 		for (const b of report.builds ?? []) {
+			if (!assigned.has(b.deploymentId)) continue;
 			tx.insert(build)
 				.values({
 					deploymentId: b.deploymentId,

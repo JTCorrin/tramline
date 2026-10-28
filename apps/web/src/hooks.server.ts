@@ -6,6 +6,7 @@ import { db } from '#lib/server/db/index.js';
 import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
+import { ensureSetupToken } from '#lib/server/domain/admins.js';
 import { securityHeaders } from '#lib/server/security.js';
 import { settings } from '#lib/server/settings.server.js';
 import { reachableFromInternet } from '#lib/server/settings.js';
@@ -15,6 +16,7 @@ import { runBackupSchedules } from '#lib/server/domain/backups.js';
 import { recheckDomains } from '#lib/server/domain/domains.js';
 import { pruneAuditLog } from '#lib/server/domain/tokens.js';
 import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
+import { pruneLogs } from '#lib/server/nodes/logs.js';
 import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
 import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
 import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
@@ -27,6 +29,12 @@ const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 export const init: ServerInit = () => {
 	if (building) return;
 	ensureLocalNode(db, settings.dataDir);
+	const setup = ensureSetupToken(db, settings.dataDir);
+	if (setup) {
+		console.log(
+			`[tramline] no install admin yet: sign in, open Nodes, and claim the install with the token in ${setup}`
+		);
+	}
 
 	// survive dev-server HMR re-running this hook
 	const g = globalThis as { __tramlineReconciler?: () => void };
@@ -63,6 +71,7 @@ export const init: ServerInit = () => {
 			.then(() => recheckDomains(db))
 			.then(() => pruneAuditLog(db))
 			.then(() => pruneExpiredTokens(db))
+			.then(() => pruneLogs(settings.dataDir))
 			.catch((error) => console.error('[backups]', error))
 			.finally(() => (scheduling = false));
 	}, BACKUP_SCHEDULE_INTERVAL_MS);

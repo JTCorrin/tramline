@@ -58,7 +58,15 @@ function authorize(ctx: Ctx, event: RequestEvent, options: EndpointOptions) {
 	if (options.session) {
 		throw new AppError('forbidden', 'API tokens cannot do this; sign in to Tramline instead');
 	}
-	const scope = options.scope ?? (event.request.method === 'GET' ? 'read' : 'write');
+	// deleting takes down what is running (services, projects, environments, domains, backups),
+	// so it needs the scope that applies changes, not the one that stages them
+	const scope =
+		options.scope ??
+		(event.request.method === 'GET'
+			? 'read'
+			: event.request.method === 'DELETE'
+				? 'deploy'
+				: 'write');
 	if (!allows(ctx.token.scopes, scope)) {
 		throw new AppError('forbidden', `This token needs the ${scope} scope`);
 	}

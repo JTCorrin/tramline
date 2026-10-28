@@ -1,10 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import {
-	DEFAULT_SERVICE_CONFIG,
-	parseReferences,
-	type Deployment,
-	type StagedChanges
-} from '@tramline/contracts';
+import { DEFAULT_SERVICE_CONFIG, type Deployment, type StagedChanges } from '@tramline/contracts';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { parseCron } from '../cron';
 import { AppError } from '../api/errors';
@@ -21,7 +16,7 @@ import type { Ctx } from './context';
 import { toDto as deploymentDto } from './deployments';
 import { builtinVariables, resolveVariables } from './resolve';
 import { describeConfigChanges, scopeOf } from './staging';
-import { pruneSeals } from './variables';
+import { pruneSeals, sealedKeys } from './variables';
 import { hasStaged, loadEnvironmentState } from './state';
 
 export function summary(ctx: Ctx, environmentId: string): StagedChanges {
@@ -36,8 +31,25 @@ export function summary(ctx: Ctx, environmentId: string): StagedChanges {
 			details: describeVariables(state.shared.applied, state.shared.effective)
 		});
 	}
+	// services that change only because something they use changed
+	let changed = new Map<string, string[]>();
+	try {
+		changed = plan(ctx, env, state).changed;
+	} catch {
+		// a reference loop: deploying will say so
+	}
 	for (const svc of state.services) {
-		if (!hasStaged(svc.staged)) continue;
+		if (!hasStaged(svc.staged)) {
+			const keys = changed.get(svc.service.id);
+			if (keys && svc.effective.source) {
+				changes.push({
+					serviceId: svc.service.id,
+					label: svc.service.name,
+					details: [`Redeploys with new values: ${keys.join(', ')}`]
+				});
+			}
+			continue;
+		}
 		changes.push({
 			serviceId: svc.service.id,
 			label: svc.service.name,
@@ -86,10 +98,7 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 	const env = requireEnvironment(ctx, environmentId);
 	const state = loadEnvironmentState(ctx.db, ctx.secrets, env);
 
-	const changedShared = changedKeys(state.shared.applied, state.shared.effective);
-	const affected = state.services.filter(
-		(svc) => hasStaged(svc.staged) || usesShared(svc.effectiveVariables, changedShared)
-	);
+	const { affected, after, domains } = plan(ctx, env, state);
 	if (!affected.length && !hasStaged(state.shared.staged)) {
 		throw new AppError('conflict', 'There are no changes to deploy');
 	}
@@ -137,32 +146,7 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 		}
 	}
 
-	// generated once per service and environment, then kept for every later deploy
-	const domains = new Map(
-		state.services.map((svc) => [
-			svc.service.id,
-			svc.domain ??
-				(svc.effective.networking.publicDomain
-					? generateDomain(svc.service.name, ctx.settings)
-					: null)
-		])
-	);
-
-	const { variables } = resolveVariables({
-		shared: state.shared.effective,
-		services: state.services.map((svc) => ({
-			id: svc.service.id,
-			name: svc.service.name,
-			variables: svc.effectiveVariables,
-			builtins: builtinVariables(
-				svc.service,
-				env,
-				svc.effective.networking.port,
-				domains.get(svc.service.id) ?? null,
-				svc.effective.volume?.mountPath ?? null
-			)
-		}))
-	});
+	const { variables, sensitive } = after;
 
 	const created = ctx.db.transaction((tx) => {
 		replaceVariables(tx, ctx.secrets, environmentId, null, state.shared.effective);
@@ -212,6 +196,7 @@ export function deploy(ctx: Ctx, environmentId: string): Deployment[] {
 						status: 'queued',
 						config: svc.effective,
 						variables: ctx.secrets.encrypt(JSON.stringify(variables.get(svc.service.id) ?? {})),
+						sensitiveKeys: [...(sensitive.get(svc.service.id) ?? [])].sort(),
 						createdBy: ctx.userId
 					})
 					.returning()
@@ -267,16 +252,89 @@ function replaceVariables(
 	}
 }
 
+type EnvironmentState = ReturnType<typeof loadEnvironmentState>;
+
+/** Sealed variables in the environment, as `shared.KEY` and `ServiceName.KEY`. */
+function sealedIds(ctx: Ctx, env: { id: string }, state: EnvironmentState) {
+	return new Set([
+		...[...sealedKeys(ctx.db, env.id, null)].map((key) => `shared.${key}`),
+		...state.services.flatMap((svc) =>
+			[...sealedKeys(ctx.db, env.id, svc.service.id)].map((key) => `${svc.service.name}.${key}`)
+		)
+	]);
+}
+
+/**
+ * What deploying the environment would change. A service is affected when it
+ * has staged changes, or when its resolved variables differ from its last
+ * deploy: through a shared variable, another service's variable, a chain of
+ * references, or a built-in like a new domain. Throws on reference loops.
+ */
+function plan(ctx: Ctx, env: { id: string; name: string }, state: EnvironmentState) {
+	// generated once per service and environment, then kept for every later deploy
+	const domains = new Map(
+		state.services.map((svc) => [
+			svc.service.id,
+			svc.domain ??
+				(svc.effective.networking.publicDomain
+					? generateDomain(svc.service.name, ctx.settings)
+					: null)
+		])
+	);
+	const sealed = sealedIds(ctx, env, state);
+	const after = resolveVariables({
+		shared: state.shared.effective,
+		sealed,
+		services: state.services.map((svc) => ({
+			id: svc.service.id,
+			name: svc.service.name,
+			variables: svc.effectiveVariables,
+			builtins: builtinVariables(
+				svc.service,
+				env,
+				svc.effective.networking.port,
+				domains.get(svc.service.id) ?? null,
+				svc.effective.volume?.mountPath ?? null
+			)
+		}))
+	});
+	let before: Map<string, Record<string, string>> | null = null;
+	try {
+		before = resolveVariables({
+			shared: state.shared.applied,
+			services: state.services.map((svc) => ({
+				id: svc.service.id,
+				name: svc.service.name,
+				variables: svc.appliedVariables,
+				builtins: builtinVariables(
+					svc.service,
+					env,
+					svc.applied?.networking.port ?? null,
+					svc.domain,
+					svc.applied?.volume?.mountPath ?? null
+				)
+			}))
+		}).variables;
+	} catch {
+		// what's deployed can't be resolved again (e.g. a loop since fixed): treat all as changed
+	}
+	const changed = new Map<string, string[]>();
+	for (const svc of state.services) {
+		if (!svc.applied) continue;
+		const keys = [
+			...changedKeys(before?.get(svc.service.id) ?? {}, after.variables.get(svc.service.id) ?? {})
+		].sort();
+		if (keys.length) changed.set(svc.service.id, keys);
+	}
+	const affected = state.services.filter(
+		(svc) => hasStaged(svc.staged) || changed.has(svc.service.id)
+	);
+	return { affected, after, domains, changed };
+}
+
 function changedKeys(before: Record<string, string>, after: Record<string, string>) {
 	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
 	return new Set([...keys].filter((key) => before[key] !== after[key]));
-}
-
-function usesShared(variables: Record<string, string>, keys: Set<string>) {
-	if (!keys.size) return false;
-	return Object.values(variables).some((value) =>
-		parseReferences(value).some((ref) => ref.namespace === 'shared' && keys.has(ref.key))
-	);
 }
 
 function describeVariables(before: Record<string, string>, after: Record<string, string>) {

@@ -27,20 +27,27 @@
 	let view = $state<ServiceConfigView>();
 	let suggestions = $state<string[]>([]);
 
+	// a response for another service or environment than the one now shown is dropped:
+	// the effect's cleanup runs as soon as either changes
 	$effect(() => {
 		void workspace.version;
-		const { id } = service;
+		let current = true;
 		client.services
-			.config(id, workspace.environmentId)
+			.config(service.id, workspace.environmentId)
 			.then((v) => {
-				if (id === service.id) view = v;
+				if (current) view = v;
 			})
 			.catch(reportError);
+		return () => (current = false);
 	});
 
 	$effect(() => {
 		void workspace.version;
-		workspace.referenceSuggestions(service.id).then((s) => (suggestions = s), reportError);
+		let current = true;
+		workspace.referenceSuggestions(service.id).then((s) => {
+			if (current) suggestions = s;
+		}, reportError);
+		return () => (current = false);
 	});
 
 	async function stage(patch: ServiceConfigPatch) {

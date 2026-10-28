@@ -1,0 +1,1 @@
+ALTER TABLE `deployment` ADD `sensitive_keys` text DEFAULT '[]' NOT NULL;

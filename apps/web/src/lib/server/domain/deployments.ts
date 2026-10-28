@@ -161,6 +161,7 @@ export function copyDeployment(
 			status: 'queued',
 			config,
 			variables: source.variables,
+			sensitiveKeys: source.sensitiveKeys,
 			image,
 			commit: source.commit,
 			// the same image needs no new scan

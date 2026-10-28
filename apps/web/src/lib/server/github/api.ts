@@ -95,11 +95,18 @@ export async function getInstallation(jwt: string, installationId: string, fetch
 export async function createInstallationToken(
 	jwt: string,
 	installationId: string,
-	fetcher?: typeof fetch
+	fetcher?: typeof fetch,
+	/** Restrict the token to these repositories (names, without the owner). */
+	repositories?: string[]
 ) {
 	const { data } = await request(
 		`/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
-		{ method: 'POST', token: jwt, fetcher }
+		{
+			method: 'POST',
+			token: jwt,
+			fetcher,
+			...(repositories ? { body: { repositories } } : {})
+		}
 	);
 	return data as { token: string; expires_at: string };
 }
@@ -166,7 +173,9 @@ export function verifySignature(secret: string, body: string, header: string | n
 export function githubFullName(repo: string) {
 	try {
 		const url = new URL(repo);
-		if (url.hostname !== 'github.com') return null;
+		// installation tokens only ever go to GitHub itself, over HTTPS
+		if (url.protocol !== 'https:' || url.host !== 'github.com' || url.username || url.password)
+			return null;
 		const [owner, name] = url.pathname
 			.replace(/^\//, '')
 			.replace(/\.git$/, '')
