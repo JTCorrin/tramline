@@ -87,3 +87,54 @@ test('the API rejects unauthenticated requests with the error envelope', async (
 		error: { code: 'unauthenticated', message: 'You need to sign in' }
 	});
 });
+
+test('an invite link brings someone new straight into the organization', async ({
+	page,
+	browser
+}) => {
+	await signUp(page, 'Inviting Org');
+	await createProject(page, 'Shared');
+	await page.goto('/settings');
+	const invites = page.getByTestId('invites');
+	await invites.getByRole('button', { name: 'Create invite link' }).click();
+	const link = await page.getByTestId('invite-link').inputValue();
+	expect(link).toMatch(/\/invite\/tlinv_/);
+
+	// someone else, signed out, opens it and signs up: no onboarding, already a member
+	const guest = await browser.newContext();
+	const other = await guest.newPage();
+	await other.goto(link);
+	await expect(other).toHaveURL(/\/sign-up$/);
+	await other.getByLabel('Name').fill('Guest');
+	await other.getByLabel('Email').fill(`guest-${crypto.randomUUID()}@tramline.test`);
+	await other.getByLabel('Password').fill('e2e-password-1234');
+	await other.getByRole('button', { name: 'Create account' }).click();
+	await expect(other.getByRole('button', { name: 'Inviting Org' })).toBeVisible();
+	await expect(other.getByTestId('project-card').filter({ hasText: 'Shared' })).toBeVisible();
+
+	// the link is spent
+	await other.goto(link);
+	await expect(other.getByText("This invite can't be used")).toBeVisible();
+	await guest.close();
+});
+
+test('someone already signed in joins only after confirming the invite', async ({
+	page,
+	browser
+}) => {
+	await signUp(page, 'Hosting Org');
+	await page.goto('/settings');
+	await page.getByTestId('invites').getByRole('button', { name: 'Create invite link' }).click();
+	const link = await page.getByTestId('invite-link').inputValue();
+
+	const guest = await browser.newContext();
+	const other = await guest.newPage();
+	await signUp(other, 'Own Org');
+	// opening the link changes nothing by itself
+	await other.goto(link);
+	const join = other.getByRole('button', { name: 'Join Hosting Org' });
+	await expect(join).toBeVisible();
+	await join.click();
+	await expect(other.getByRole('button', { name: 'Hosting Org' })).toBeVisible();
+	await guest.close();
+});

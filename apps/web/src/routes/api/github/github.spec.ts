@@ -10,6 +10,7 @@ import * as manifestStart from '../v1/github/manifest/+server';
 import * as install from './install/+server';
 import * as manifest from './manifest/+server';
 import * as setup from './setup/+server';
+import * as callback from './callback/+server';
 import * as webhook from './webhook/+server';
 
 const PEM = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -36,6 +37,9 @@ async function call(
 		get: (name: string) => jar[name],
 		set: (name: string, value: string) => {
 			jar[name] = value;
+		},
+		delete: (name: string) => {
+			delete jar[name];
 		}
 	};
 	const locals = options.user
@@ -200,6 +204,15 @@ describe('manifest flow', () => {
 		expect(res.body.action).toBe(`https://github.com/settings/apps/new?state=${state}`);
 	});
 
+	it('sends authorizations without our state (later edits on GitHub) back to settings', async () => {
+		const user = seedCtx(db);
+		const res = await call(callback.GET as Handler, {
+			path: '/api/github/callback?code=c&installation_id=55&setup_action=update',
+			user
+		});
+		expect(res).toMatchObject({ status: 303, location: '/settings' });
+	});
+
 	it('refuses callbacks whose state does not match the cookie', async () => {
 		db.delete(schema.githubApp).run();
 		const user = seedCtx(db);
@@ -242,31 +255,80 @@ describe('manifest flow', () => {
 		expect(res.jar.tramline_github_state).not.toBe('good');
 	});
 
-	it('connects the installation GitHub sends back, and tolerates edits made on GitHub', async () => {
-		seedApp();
-		const user = seedCtx(db);
-		vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
-			Response.json({
+	/** GitHub, for a person who can access installation 55. */
+	function fakeGitHub(accessible = [55]) {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/login/oauth/access_token'))
+				return Response.json({ access_token: 'ghu_x' });
+			if (url.includes('/user/installations')) {
+				return Response.json({ installations: accessible.map((id) => ({ id })) });
+			}
+			return Response.json({
 				id: 55,
 				account: { login: 'me', type: 'User' },
 				html_url: 'https://github.com/settings/installations/55'
-			})
-		);
-		const connected = await call(setup.GET as Handler, {
+			});
+		});
+	}
+
+	it('connects an installation only after GitHub confirms who is connecting it', async () => {
+		seedApp();
+		const user = seedCtx(db);
+		fakeGitHub();
+		// an app that doesn't ask during install: setup sends the browser to authorize first
+		const setupRes = await call(setup.GET as Handler, {
 			path: '/api/github/setup?installation_id=55&setup_action=install&state=s',
 			user,
 			cookies: { tramline_github_state: 's' }
+		});
+		expect(setupRes.status).toBe(303);
+		const authorize = new URL(setupRes.location!);
+		expect(authorize.origin + authorize.pathname).toBe('https://github.com/login/oauth/authorize');
+		expect(authorize.searchParams.get('client_id')).toBe('Iv1.x');
+		expect(authorize.searchParams.get('redirect_uri')).toBe(
+			'http://localhost:5173/api/github/callback'
+		);
+		expect(setupRes.jar.tramline_github_installation).toBe('55');
+		expect(
+			(await call(status.GET as Handler, { path: '/api/v1/github', user })).body.installations
+		).toEqual([]);
+
+		const state = authorize.searchParams.get('state')!;
+		const connected = await call(callback.GET as Handler, {
+			path: `/api/github/callback?code=c&state=${state}`,
+			user,
+			cookies: setupRes.jar
 		});
 		expect(connected).toMatchObject({ status: 303, location: '/settings?github=connected' });
 		expect(
 			(await call(status.GET as Handler, { path: '/api/v1/github', user })).body.installations
 		).toEqual([expect.objectContaining({ id: '55', account: 'me' })]);
 
+		// edits made later on GitHub come back without our state, and connect nothing
 		const edited = await call(setup.GET as Handler, {
 			path: '/api/github/setup?installation_id=55&setup_action=update',
 			user
 		});
-		expect(edited).toMatchObject({ status: 303, location: '/settings?github=connected' });
+		expect(edited).toMatchObject({ status: 303, location: '/settings' });
+	});
+
+	it('refuses an installation the person can’t access, or a callback without our state', async () => {
+		seedApp();
+		const user = seedCtx(db);
+		fakeGitHub([1]);
+		const refused = await call(callback.GET as Handler, {
+			path: '/api/github/callback?code=c&installation_id=55&setup_action=install&state=s',
+			user,
+			cookies: { tramline_github_state: 's' }
+		});
+		expect(refused.status).toBe(403);
+		const forged = await call(callback.GET as Handler, {
+			path: '/api/github/callback?code=c&installation_id=55&state=other',
+			user,
+			cookies: { tramline_github_state: 's' }
+		});
+		expect(forged.status).toBe(403);
 	});
 
 	it('sends signed-in users to install the app', async () => {

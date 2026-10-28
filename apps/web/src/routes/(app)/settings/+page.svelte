@@ -7,6 +7,7 @@
 	import AuditLog from '#lib/components/settings/audit-log.svelte';
 	import BackupStorage from '#lib/components/settings/backup-storage.svelte';
 	import GithubActions from '#lib/components/settings/github-actions.svelte';
+	import Invites from '#lib/components/settings/invites.svelte';
 	import { Button, buttonVariants } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import * as Field from '#lib/components/ui/field/index.js';
@@ -143,6 +144,14 @@
 						>
 							Install on GitHub
 						</a>
+						<p class="text-xs text-muted-foreground">
+							Before connecting, GitHub asks you to authorize Tramline so it can check you can
+							access the installation. An app created before this check needs its <em
+								>Callback URL</em
+							>
+							set to <code>{data.oidcAudience ?? 'your Tramline URL'}/api/github/callback</code> in its
+							settings on GitHub.
+						</p>
 					{/if}
 				</div>
 			{/if}
@@ -150,6 +159,10 @@
 	</Card.Root>
 
 	<AccountSecurity twoFactorEnabled={data.user.twoFactorEnabled} />
+
+	{#if data.invites}
+		<Invites invites={data.invites} />
+	{/if}
 
 	<ApiTokens tokens={data.tokens} />
 

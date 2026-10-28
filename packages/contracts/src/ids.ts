@@ -18,6 +18,7 @@ export const ID_PREFIXES = {
 	run: 'run',
 	token: 'tok',
 	trust: 'trs',
+	invite: 'inv',
 	join: 'jtk'
 } as const;
 

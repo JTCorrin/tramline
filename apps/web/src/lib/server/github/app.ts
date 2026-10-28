@@ -19,8 +19,10 @@ import {
 	convertManifest,
 	githubFullName,
 	createInstallationToken,
+	exchangeUserCode,
 	getInstallation,
-	installationRepos
+	installationRepos,
+	userInstallationIds
 } from './api';
 
 export interface AppCredentials {
@@ -81,6 +83,9 @@ export function manifestForm(
 		redirect_url: `${url}/api/github/manifest`,
 		setup_url: `${url}/api/github/setup`,
 		setup_on_update: true,
+		// installing also asks who you are, so Tramline can check you control the account
+		callback_urls: [`${url}/api/github/callback`],
+		request_oauth_on_install: true,
 		public: false,
 		default_permissions: { contents: 'read', metadata: 'read' },
 		...(webhooks
@@ -123,15 +128,34 @@ export async function completeManifest(ctx: Ctx, code: string, fetcher?: typeof 
 	return { slug: app.slug };
 }
 
-/** Connects an installation to the caller's organization, after checking it really belongs to the app. */
+/**
+ * Connects an installation to the caller's organization. Two things are
+ * checked: that it belongs to Tramline's app, and, through the one-time code
+ * from GitHub's user authorization, that the person connecting it can access
+ * it on GitHub. Knowing an installation's ID proves nothing.
+ */
 export async function connectInstallation(
 	ctx: Ctx,
 	installationId: string,
+	code: string,
 	fetcher?: typeof fetch
 ) {
 	requireManager(ctx);
 	const app = loadApp(ctx.db, ctx.secrets);
 	if (!app) throw new AppError('conflict', 'Create the GitHub App first');
+	const client = ctx.db.select().from(githubApp).get()!;
+	const userToken = await exchangeUserCode(
+		client.clientId,
+		ctx.secrets.decrypt(client.clientSecret),
+		code,
+		fetcher
+	);
+	if (!(await userInstallationIds(userToken, fetcher)).has(installationId)) {
+		throw new AppError(
+			'forbidden',
+			'Your GitHub account cannot access that installation, so it was not connected'
+		);
+	}
 	const installation = await getInstallation(
 		appJwt(app.id, app.privateKey),
 		installationId,

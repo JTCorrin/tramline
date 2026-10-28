@@ -7,6 +7,7 @@ export * as deployments from './deployments';
 export * as domains from './domains';
 export * as environments from './environments';
 export * as admins from './admins';
+export * as invites from './invites';
 export * as nodes from './nodes';
 export * as oidc from './oidc';
 export * as organizations from './organizations';

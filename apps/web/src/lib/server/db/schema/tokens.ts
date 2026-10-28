@@ -59,3 +59,21 @@ export const oidcTrust = sqliteTable('oidc_trust', {
 	lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
 	...timestamps
 });
+
+/**
+ * A one-time link that lets someone join an organization, and create an
+ * account when sign-up is by invitation. Only its hash is stored.
+ */
+export const orgInvite = sqliteTable('org_invite', {
+	id: text('id').primaryKey(),
+	tokenHash: text('token_hash').notNull().unique(),
+	organizationId: text('organization_id')
+		.notNull()
+		.references(() => organization.id, { onDelete: 'cascade' }),
+	role: text('role', { enum: ['member', 'admin'] }).notNull(),
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+	expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+	usedAt: integer('used_at', { mode: 'timestamp_ms' }),
+	usedBy: text('used_by').references(() => user.id, { onDelete: 'set null' }),
+	...timestamps
+});

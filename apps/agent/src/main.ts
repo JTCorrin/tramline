@@ -75,6 +75,7 @@ const agent = new Agent({
 	},
 	stateDir,
 	version: VERSION,
+	buildMemoryMb: Number(process.env.TRAMLINE_BUILD_MEMORY_MB) || undefined,
 	// TRAMLINE_MESH=off for an agent that should never run the mesh container
 	mesh:
 		process.env.TRAMLINE_MESH === 'off'

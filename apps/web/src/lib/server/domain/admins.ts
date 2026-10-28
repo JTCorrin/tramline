@@ -17,7 +17,8 @@ import type { Ctx } from './context';
 
 export const setupTokenFile = (dataDir: string) => path.join(dataDir, 'setup-token');
 
-const hasAdmins = (db: DbOrTx) => (db.select({ n: count() }).from(installAdmin).get()?.n ?? 0) > 0;
+export const hasAdmins = (db: DbOrTx) =>
+	(db.select({ n: count() }).from(installAdmin).get()?.n ?? 0) > 0;
 
 /**
  * While no one is an admin, keeps a setup token in `<dataDir>/setup-token`

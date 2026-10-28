@@ -70,9 +70,9 @@ export default function teardown() {
 	}
 	// the builder's cache volume and the images built for this run's services
 	try {
-		execFileSync('docker', ['volume', 'rm', '-f', `tramline-buildkit-${node.id}`], {
-			stdio: 'ignore'
-		});
+		// one build cache per organization (and one for registry scans)
+		const caches = docker('volume', 'ls', '-q', '--filter', `name=tramline-buildkit-${node.id}`);
+		if (caches) docker('volume', 'rm', '-f', ...caches.split('\n'));
 	} catch {
 		// never created
 	}

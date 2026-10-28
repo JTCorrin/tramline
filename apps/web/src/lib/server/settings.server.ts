@@ -1,4 +1,5 @@
 import {
+	TRAMLINE_SIGNUP,
 	TRAMLINE_BASE_DOMAIN,
 	TRAMLINE_DATA_DIR,
 	TRAMLINE_INGRESS_PORT,
@@ -10,5 +11,6 @@ export const settings: PlatformSettings = {
 	baseDomain: TRAMLINE_BASE_DOMAIN,
 	ingressPort: TRAMLINE_INGRESS_PORT,
 	dataDir: TRAMLINE_DATA_DIR,
-	publicUrl: TRAMLINE_URL ?? null
+	publicUrl: TRAMLINE_URL ?? null,
+	signup: TRAMLINE_SIGNUP
 };

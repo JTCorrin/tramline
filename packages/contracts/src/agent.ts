@@ -76,6 +76,8 @@ export type DesiredContainer = z.infer<typeof DesiredContainer>;
 export const DesiredBuild = z.object({
 	deploymentId: z.string(),
 	serviceId: z.string(),
+	/** Build caches are kept per organization, so one can't poison another's. */
+	organizationId: z.string().default('shared'),
 	/** Clone URL without credentials. */
 	repo: z.string(),
 	/** Branch to build, or the commit to check out when known (e.g. from a push). */

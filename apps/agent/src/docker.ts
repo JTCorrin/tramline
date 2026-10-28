@@ -116,6 +116,7 @@ export class DockerRuntime implements ContainerRuntime {
 				})),
 				PidsLimit: spec.security.pidsLimit,
 				Init: spec.security.init ?? false,
+				...(spec.security.unmaskSystemPaths ? { MaskedPaths: [], ReadonlyPaths: [] } : {}),
 				// whatever the daemon's default, a noisy container can't fill the node's disk
 				LogConfig: { Type: 'json-file', Config: { 'max-size': '10m', 'max-file': '3' } },
 				Privileged: false,

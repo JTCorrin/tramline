@@ -10,8 +10,8 @@ export const load: PageLoad = async ({ fetch, parent, data }) => {
 		client.tokens.getAll()
 	]);
 	// only owners and admins may read the audit log or manage GitHub Actions access
-	const [audit, trust] = github.canManage
-		? await Promise.all([client.tokens.auditLog(), client.oidc.trust()])
-		: [null, null];
-	return { ...data, github, backups, tokens, audit, trust };
+	const [audit, trust, invites] = github.canManage
+		? await Promise.all([client.tokens.auditLog(), client.oidc.trust(), client.invites.getAll()])
+		: [null, null, null];
+	return { ...data, github, backups, tokens, audit, trust, invites };
 };
