@@ -87,9 +87,7 @@ export const DeployConfig = z.object({
 export const CIDR = z
 	.string()
 	.trim()
-	.regex(/^(\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?|[0-9a-fA-F:]+(\/\d{1,3})?)$/, {
-		message: 'Use an IP address or CIDR block, e.g. 203.0.113.7 or 198.51.100.0/24'
-	});
+	.pipe(z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]));
 
 export const NetworkingConfig = z.object({
 	port: z.number().int().min(1).max(65535).nullable(),

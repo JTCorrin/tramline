@@ -237,6 +237,66 @@ describe('mesh daemon', () => {
 		echo.close();
 	});
 
+	it('retries an unchanged config after a transient tunnel failure', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'tl-meshd-retry-'));
+		const file = path.join(dir, 'mesh.json');
+		writeFileSync(file, JSON.stringify({ ...config, forwards: [] }));
+		const controller = new AbortController();
+		let attempts = 0;
+		const logs: string[] = [];
+		const done = runMeshDaemon(file, {
+			intervalMs: 5,
+			signal: controller.signal,
+			log: (line) => logs.push(line),
+			exec: async (cmd, args) => {
+				if (cmd === 'ip' && args.join(' ') === 'link show' && ++attempts === 1) {
+					throw new Error('temporary tunnel failure');
+				}
+				return '';
+			}
+		});
+		try {
+			await expect.poll(() => logs.some((l) => l.includes('forwarding 0 ports'))).toBe(true);
+			expect(attempts).toBe(2);
+		} finally {
+			controller.abort();
+			await done;
+		}
+	});
+
+	it('retries an unchanged config when a forward port becomes available', async () => {
+		const taken = net.createServer();
+		await new Promise<void>((resolve) => taken.listen(0, '127.0.0.1', resolve));
+		const port = (taken.address() as net.AddressInfo).port;
+		const dir = mkdtempSync(path.join(tmpdir(), 'tl-meshd-port-'));
+		const file = path.join(dir, 'mesh.json');
+		writeFileSync(
+			file,
+			JSON.stringify({
+				...config,
+				address: '127.0.0.1',
+				forwards: [{ to: 'local', port, target: '127.0.0.1:1', network: 'tl-env_1' }]
+			})
+		);
+		const controller = new AbortController();
+		const logs: string[] = [];
+		const done = runMeshDaemon(file, {
+			intervalMs: 5,
+			signal: controller.signal,
+			exec: async () => '',
+			log: (line) => logs.push(line)
+		});
+		try {
+			await expect.poll(() => logs.some((l) => l.includes('could not bind'))).toBe(true);
+			await new Promise<void>((resolve) => taken.close(() => resolve()));
+			await expect.poll(() => logs.some((l) => l.includes('forwarding 1 ports'))).toBe(true);
+		} finally {
+			controller.abort();
+			taken.close();
+			await done;
+		}
+	});
+
 	it('applies each new config, and reports a broken one once', async () => {
 		const dir = mkdtempSync(path.join(tmpdir(), 'tl-meshd-'));
 		const file = path.join(dir, 'mesh.json');

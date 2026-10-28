@@ -235,7 +235,14 @@ test('enroll a second node, reach it over the mesh, then move off it and remove 
 
 	// and a service on the local node reaches it by its private name
 	await page.goBack();
-	await page.keyboard.press('ControlOrMeta+k');
+	// History navigation can finish before the project has hydrated. Opening
+	// via Add is idempotent, so retry until its handler opens the palette.
+	await expect(async () => {
+		await page.getByRole('button', { name: /^Add/ }).click({ timeout: 1_000 });
+		await expect(page.getByRole('option', { name: 'Docker Image' })).toBeVisible({
+			timeout: 1_000
+		});
+	}).toPass({ timeout: 15_000 });
 	await page.getByRole('option', { name: 'Docker Image' }).click();
 	await dialog.getByLabel('Image').fill('busybox:1.37');
 	await dialog.getByRole('button', { name: 'Add service' }).click();

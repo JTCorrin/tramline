@@ -79,6 +79,12 @@ async function proxy(target: number, allow = ['127.0.0.1']) {
 }
 
 describe('allowlist', () => {
+	it('ignores invalid saved prefixes without opening access or crashing', () => {
+		const allowed = allowlist(['192.0.2.1/99', '::/129', '999.1.2.3', '203.0.113.7']);
+		expect(allowed('192.0.2.1')).toBe(false);
+		expect(allowed('::1')).toBe(false);
+		expect(allowed('203.0.113.7')).toBe(true);
+	});
 	it('matches addresses and blocks, IPv4 and IPv6, including mapped IPv4', () => {
 		const allowed = allowlist(['203.0.113.7', '198.51.100.0/24', '2001:db8::/32', 'nonsense']);
 		expect(allowed('203.0.113.7')).toBe(true);
