@@ -175,6 +175,20 @@ describe('scheduling', () => {
 		expect(placed[c.id]!.nodeId).toBe(first);
 	});
 
+	it('does not spill an environment onto another node when memory runs out', () => {
+		const { ctx, project, env, local } = setup();
+		recordHello(ctx.db, local.id, hello(1024));
+		const a = addService(ctx, project.id, env.id, { deploy: { memoryMb: 1024 } });
+		expect(deployAll(ctx, env.id)[a.id]!.nodeId).toBe(local.id);
+		enroll(ctx, 'spare');
+		const b = addService(ctx, project.id, env.id, { deploy: { memoryMb: 512 } });
+		expect(deployAll(ctx, env.id)[b.id]).toMatchObject({
+			status: 'queued',
+			nodeId: null,
+			message: 'Waiting to keep this environment on one node; cross-node networking is unavailable'
+		});
+	});
+
 	it('skips cordoned nodes, unless the service is pinned there', () => {
 		const { ctx, project, env, local } = setup();
 		const quiet = enroll(ctx, 'quiet', { cordoned: true });
@@ -182,7 +196,7 @@ describe('scheduling', () => {
 		const b = addService(ctx, project.id, env.id, { deploy: { node: quiet.id } });
 		const placed = deployAll(ctx, env.id);
 		expect(placed[a.id]!.nodeId).toBe(local.id);
-		expect(placed[b.id]!.nodeId).toBe(quiet.id);
+		expect(placed[b.id]).toMatchObject({ status: 'queued', nodeId: null });
 
 		nodes.update(ctx, local.id, { cordoned: true });
 		const c = addService(ctx, project.id, env.id);
@@ -283,7 +297,7 @@ describe('draining and removing', () => {
 		for (const dep of Object.values(placed)) {
 			ctx.db.update(deployment).set({ status: 'active' }).where(eq(deployment.id, dep.id)).run();
 		}
-		const other = enroll(ctx, 'other');
+		enroll(ctx, 'other');
 
 		const result = nodes.drain(ctx, local.id);
 		expect(result.moved).toBe(1);
@@ -296,7 +310,11 @@ describe('draining and removing', () => {
 		reconcile(ctx.db, ctx.settings);
 		const copies = ctx.db.select().from(deployment).where(eq(deployment.serviceId, web.id)).all();
 		expect(copies).toHaveLength(2);
-		expect(copies.find((d) => d.id !== placed[web.id]!.id)!.nodeId).toBe(other.id);
+		expect(copies.find((d) => d.id !== placed[web.id]!.id)).toMatchObject({
+			status: 'queued',
+			nodeId: null,
+			message: 'Waiting to keep this environment on one node; cross-node networking is unavailable'
+		});
 
 		// uncordoning ends the drain
 		expect(nodes.update(ctx, local.id, { cordoned: false })).toMatchObject({

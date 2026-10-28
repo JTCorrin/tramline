@@ -230,7 +230,18 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		n.info?.memoryMb
 			? allocated(n) / n.info.memoryMb
 			: others.filter((d) => d.nodeId === n.id).length;
-	const ranked = fits
+	// Until the mesh lands, different services communicate only on one node's
+	// Docker network. A replacement of the same service may move on its own.
+	const peers = others.filter(
+		(d) => d.environmentId === dep.environmentId && d.serviceId !== dep.serviceId
+	);
+	const connected = fits.filter((n) => peers.every((d) => d.nodeId === n.id));
+	if (!connected.length) {
+		return {
+			message: 'Waiting to keep this environment on one node; cross-node networking is unavailable'
+		};
+	}
+	const ranked = connected
 		.map((n, order) => ({ n, order }))
 		.sort(
 			(a, b) =>
