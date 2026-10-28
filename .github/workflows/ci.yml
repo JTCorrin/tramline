@@ -45,7 +45,7 @@ jobs:
       - name: Coverage summary
         if: always()
         run: |
-          for f in packages/*/coverage/coverage-summary.json packages/adapters/*/coverage/coverage-summary.json apps/*/coverage/coverage-summary.json; do
+          for f in packages/*/coverage/coverage-summary.json apps/*/coverage/coverage-summary.json; do
             [ -f "$f" ] || continue
             node -e "const t=require('./$f').total;console.log('| $(dirname $(dirname $f)) | '+['lines','branches','functions','statements'].map(k=>t[k].pct+'%').join(' | ')+' |')"
           done | (echo '| Workspace | Lines | Branches | Functions | Statements |'; echo '|---|---|---|---|---|'; cat) >> "$GITHUB_STEP_SUMMARY"
