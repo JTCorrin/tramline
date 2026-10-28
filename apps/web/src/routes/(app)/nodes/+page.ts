@@ -3,9 +3,13 @@ import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch, data }) => {
 	const client = api(fetch);
-	const [nodes, admins] = await Promise.all([
+	const none = Promise.resolve([]);
+	const [nodes, admins, adapters, accounts, provisioning] = await Promise.all([
 		client.nodes.getAll(),
-		data.canManage ? client.install.admins() : Promise.resolve([])
+		data.canManage ? client.install.admins() : none,
+		data.canManage ? client.adapters.getAll() : none,
+		data.canManage ? client.adapters.accounts() : none,
+		data.canManage ? client.adapters.provisioning() : none
 	]);
-	return { ...data, nodes, admins };
+	return { ...data, nodes, admins, adapters, accounts, provisioning };
 };

@@ -6,6 +6,7 @@ export * as data from './data';
 export * as deployments from './deployments';
 export * as domains from './domains';
 export * as environments from './environments';
+export * as adapters from './adapters';
 export * as admins from './admins';
 export * as invites from './invites';
 export * as nodes from './nodes';

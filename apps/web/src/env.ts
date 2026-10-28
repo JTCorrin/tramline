@@ -61,6 +61,11 @@ export const variables = defineEnvVars({
 			return policy as 'open' | 'invite';
 		}
 	},
+	TRAMLINE_FAKE_ADAPTER: {
+		description:
+			'Offer the in-memory fake compute adapter (tests only; its machines exist nowhere). Off unless set to 1.',
+		schema: (value) => value === '1'
+	},
 	TRAMLINE_AUTH_RATE_LIMIT: {
 		description:
 			'Rate limit sign-in and sign-up attempts in production (default true). Only disable for automated tests.',

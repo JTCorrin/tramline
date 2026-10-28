@@ -59,6 +59,37 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['nodes.update', (c) => c.nodes.update('node_1', { cordoned: true }), 'PATCH /nodes/node_1'],
 	['nodes.drain', (c) => c.nodes.drain('node_1'), 'POST /nodes/node_1/drain'],
 	['nodes.remove', (c) => c.nodes.remove('node_1'), 'DELETE /nodes/node_1'],
+	['adapters.getAll', (c) => c.adapters.getAll(), 'GET /adapters'],
+	['adapters.accounts', (c) => c.adapters.accounts(), 'GET /adapter-accounts'],
+	[
+		'adapters.connect',
+		(c) => c.adapters.connect({ adapter: 'proxmox', name: 'lab', credentials: {} }),
+		'POST /adapter-accounts'
+	],
+	[
+		'adapters.updateAccount',
+		(c) => c.adapters.updateAccount('acct_1', { name: 'lab' }),
+		'PATCH /adapter-accounts/acct_1'
+	],
+	[
+		'adapters.removeAccount',
+		(c) => c.adapters.removeAccount('acct_1'),
+		'DELETE /adapter-accounts/acct_1'
+	],
+	['adapters.test', (c) => c.adapters.test('acct_1'), 'POST /adapter-accounts/acct_1/test'],
+	['adapters.regions', (c) => c.adapters.regions('acct_1'), 'GET /adapter-accounts/acct_1/regions'],
+	[
+		'adapters.offers',
+		(c) => c.adapters.offers('acct_1', 'eu central'),
+		'GET /adapter-accounts/acct_1/regions/eu%20central/offers'
+	],
+	[
+		'adapters.provision',
+		(c) => c.adapters.provision({ account: 'acct_1', name: 'box', region: 'r', offer: 'o' }),
+		'POST /nodes/provision'
+	],
+	['adapters.provisioning', (c) => c.adapters.provisioning(), 'GET /nodes/provisioning'],
+	['adapters.cancel', (c) => c.adapters.cancel('join_1'), 'DELETE /nodes/provisioning/join_1'],
 	['github.status', (c) => c.github.status(), 'GET /github'],
 	['github.manifest', (c) => c.github.manifest('acme'), 'POST /github/manifest'],
 	['github.repos', (c) => c.github.repos(), 'GET /github/repos'],

@@ -296,27 +296,29 @@ describe('draining and removing', () => {
 		});
 	});
 
-	it('removes an empty node and revokes its token, but not one still in use', () => {
+	it('removes an empty node and revokes its token, but not one still in use', async () => {
 		const { ctx, project, env, local } = setup();
 		const created = nodes.createJoinToken(ctx, { name: 'spare' }, 'http://x');
 		const joined = join(ctx.db, created.token, hello());
 
-		expect(() => nodes.remove(ctx, local.id)).toThrow('Cordon it instead');
+		await expect(nodes.remove(ctx, local.id)).rejects.toThrow('Cordon it instead');
 		const a = addService(ctx, project.id, env.id, { deploy: { node: joined.nodeId } });
 		deployAll(ctx, env.id);
-		expect(() => nodes.remove(ctx, joined.nodeId)).toThrow('still runs 1 deployment. Drain it');
+		await expect(nodes.remove(ctx, joined.nodeId)).rejects.toThrow(
+			'still runs 1 deployment. Drain it'
+		);
 
 		ctx.db
 			.update(deployment)
 			.set({ status: 'removed' })
 			.where(eq(deployment.serviceId, a.id))
 			.run();
-		nodes.remove(ctx, joined.nodeId);
+		await nodes.remove(ctx, joined.nodeId);
 		expect(authenticate(ctx.db, joined.token)).toBeUndefined();
 		expect(nodes.list(ctx).map((n) => n.name)).toEqual(['local']);
 	});
 
-	it('will not remove a node holding a service’s data', () => {
+	it('will not remove a node holding a service’s data', async () => {
 		const { ctx, project, env } = setup();
 		const box = enroll(ctx, 'box');
 		const a = addService(ctx, project.id, env.id, {
@@ -329,7 +331,7 @@ describe('draining and removing', () => {
 			.set({ status: 'removed' })
 			.where(eq(deployment.serviceId, a.id))
 			.run();
-		expect(() => nodes.remove(ctx, box.id)).toThrow(`holds the data of ${a.name}`);
+		await expect(nodes.remove(ctx, box.id)).rejects.toThrow(`holds the data of ${a.name}`);
 	});
 });
 

@@ -1,0 +1,24 @@
+{
+	"name": "@tramline/adapter-manual",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "The built-in adapter for any Linux machine: it hands back the command that enrolls it",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit",
+		"lint": "tsc --noEmit",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage"
+	},
+	"dependencies": {
+		"@tramline/adapter-sdk": "workspace:*",
+		"zod": "^4.1.12"
+	},
+	"devDependencies": {
+		"@vitest/coverage-v8": "^4.1.12",
+		"vitest": "^4.1.12"
+	}
+}

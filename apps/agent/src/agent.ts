@@ -12,6 +12,7 @@ import { runQuery } from './query';
 import { Builder, type BuilderOptions } from './builder';
 import { ControlPlaneError, type ControlPlane } from './client';
 import { Converger } from './converge';
+import { detectGpus } from './gpus';
 import { JobCancelled, JobQueue } from './jobs';
 import { meshKeys } from './mesh';
 import { serviceCertificate } from './tls';
@@ -39,6 +40,8 @@ export interface AgentOptions {
 	tools?: BuilderOptions['tools'];
 	/** Memory each build may use. */
 	buildMemoryMb?: number;
+	/** Where to look for NVIDIA GPUs; tests point it elsewhere. */
+	gpuDir?: string;
 	log?: (message: string) => void;
 	/**
 	 * Join the WireGuard mesh: the agent's own image (which the mesh container
@@ -224,6 +227,7 @@ export class Agent {
 			memoryMb: Math.round(os.totalmem() / 1024 / 1024),
 			docker,
 			dockerError: this.dockerError,
+			gpus: await detectGpus(this.options.gpuDir),
 			mesh: this.#meshPublicKey
 				? { publicKey: this.#meshPublicKey, endpoint: this.options.mesh?.endpoint ?? null }
 				: null

@@ -6,6 +6,7 @@ import { domains } from './resources/domains';
 import { environments } from './resources/environments';
 import { github } from './resources/github';
 import { install } from './resources/install';
+import { adapters } from './resources/adapters';
 import { invites } from './resources/invites';
 import { nodes } from './resources/nodes';
 import { oidc } from './resources/oidc';
@@ -28,6 +29,7 @@ export function createClient(options: ClientOptions) {
 		variables: variables(http),
 		deployments: deployments(http),
 		nodes: nodes(http),
+		adapters: adapters(http),
 		github: github(http),
 		backups: backups(http),
 		domains: domains(http),

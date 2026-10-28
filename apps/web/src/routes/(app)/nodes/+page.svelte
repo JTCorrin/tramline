@@ -4,14 +4,15 @@
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
-	import * as Field from '#lib/components/ui/field/index.js';
+	import AddNode from '#lib/components/nodes/add-node.svelte';
+	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
 	import { cn } from '#lib/utils.js';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import type { CreatedJoinToken, NodeSummary, UpdateNode } from '@tramline/contracts';
+	import type { NodeSummary, UpdateNode } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import type { PageProps } from './$types';
 
@@ -19,9 +20,10 @@
 
 	// svelte-ignore state_referenced_locally
 	let nodes = $state<NodeSummary[]>(data.nodes);
-	let name = $state('');
-	let startCordoned = $state(false);
-	let joining = $state<CreatedJoinToken | null>(null);
+	// svelte-ignore state_referenced_locally
+	let computeAccounts = $state(data.accounts);
+	// svelte-ignore state_referenced_locally
+	let provisioning = $state(data.provisioning);
 
 	$effect(() => {
 		// health and placement change without page events, so poll gently
@@ -32,18 +34,10 @@
 	async function refresh() {
 		try {
 			nodes = await api().nodes.getAll();
+			// a machine that just enrolled leaves the provisioning list
+			if (provisioning.length) provisioning = await api().adapters.provisioning();
 		} catch {
 			// keep showing the last list
-		}
-	}
-
-	async function add(event: SubmitEvent) {
-		event.preventDefault();
-		try {
-			joining = await api().nodes.join({ name: name.trim(), cordoned: startCordoned });
-			name = '';
-		} catch (error) {
-			reportError(error);
 		}
 	}
 
@@ -57,7 +51,9 @@
 						(kept ? `. Staying: ${kept} (data or pin on this node)` : '')
 				);
 			} else if (action === 'remove') {
-				if (!confirm(`Remove ${node.name}? Its agent stops being able to connect.`)) return;
+				const machine = node.account ? ` Its machine on ${node.account.name} is destroyed.` : '';
+				if (!confirm(`Remove ${node.name}? Its agent stops being able to connect.${machine}`))
+					return;
 				await api().nodes.remove(node.id);
 				toast.success(`Removed ${node.name}`);
 			} else {
@@ -155,59 +151,8 @@
 	{/if}
 
 	{#if data.canManage}
-		<Card.Root data-testid="add-node">
-			<Card.Header>
-				<Card.Title>Add a node</Card.Title>
-				<Card.Description>
-					Any Linux machine with Docker: a VM, a VPS, a spare box. Run the command on it as root.
-					The agent connects out to Tramline, so the machine needs no open ports for it.
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-4">
-				{#if joining}
-					<div class="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-						<p class="font-medium">
-							Run this on the new machine. The token works once and expires {timeAgo(
-								joining.expiresAt
-							)}.
-						</p>
-						<div class="flex gap-2">
-							<Input
-								readonly
-								value={joining.command}
-								class="font-mono text-xs"
-								data-testid="join-command"
-							/>
-							<Button
-								variant="outline"
-								onclick={() =>
-									navigator.clipboard
-										.writeText(joining!.command)
-										.then(() => toast.success('Copied'))}>Copy</Button
-							>
-						</div>
-						<p class="text-xs text-muted-foreground">
-							It installs nothing but the agent, which runs as a container with access to the Docker
-							socket. Read the script first with <code
-								>curl -fsSL {new URL(joining.command.split(' ')[2]!).origin}/install.sh</code
-							>.
-						</p>
-						<Button variant="ghost" size="sm" onclick={() => (joining = null)}>Done</Button>
-					</div>
-				{/if}
-				<form class="flex flex-wrap items-end gap-3" onsubmit={add}>
-					<Field.Field class="min-w-48 flex-1">
-						<Field.Label for="node-name">Name</Field.Label>
-						<Input id="node-name" placeholder="hetzner-1" bind:value={name} required />
-					</Field.Field>
-					<label class="flex h-9 items-center gap-2 text-sm">
-						<Switch bind:checked={startCordoned} aria-label="Start cordoned" />
-						Start cordoned
-					</label>
-					<Button type="submit">Create join command</Button>
-				</form>
-			</Card.Content>
-		</Card.Root>
+		<AddNode accounts={computeAccounts} bind:provisioning />
+		<ComputeAccounts adapters={data.adapters} bind:accounts={computeAccounts} />
 	{/if}
 
 	{#if data.canManage}
@@ -273,7 +218,9 @@
 					{node.hostname ?? 'not connected yet'}
 					{#if node.cpus}· {node.cpus} CPUs{/if}
 					{#if node.memoryMb}· {gb(node.memoryMb)}{/if}
+					{#if node.gpus.length}· {node.gpus.length}× {node.gpus[0]!.model}{/if}
 					{#if node.dockerVersion}· Docker {node.dockerVersion}{/if}
+					{#if node.account}· on {node.account.name}{/if}
 					{#if node.lastSeenAt && node.status !== 'online'}· last seen {timeAgo(
 							node.lastSeenAt
 						)}{/if}
