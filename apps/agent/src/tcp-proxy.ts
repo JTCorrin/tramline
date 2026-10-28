@@ -1,3 +1,4 @@
+import { CIDR } from '@tramline/contracts';
 import { BlockList, isIPv4, isIPv6 } from 'node:net';
 import net from 'node:net';
 
@@ -26,9 +27,12 @@ const CANCEL_REQUEST = 80877102;
 export function allowlist(entries: string[]) {
 	const list = new BlockList();
 	for (const entry of entries) {
-		const [address, bits] = entry.split('/');
+		// Older saved configs may predate strict API validation. Ignore invalid
+		// entries without granting access or crashing the proxy.
+		const parsed = CIDR.safeParse(entry);
+		if (!parsed.success) continue;
+		const [address, bits] = parsed.data.split('/');
 		const type = isIPv6(address!) ? 'ipv6' : 'ipv4';
-		if (!isIPv4(address!) && !isIPv6(address!)) continue;
 		if (bits === undefined) list.addAddress(address!, type);
 		else list.addSubnet(address!, Number(bits), type);
 	}
