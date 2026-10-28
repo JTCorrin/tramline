@@ -28,6 +28,9 @@ export const guarded = (producer: string, consumer: string) =>
 	`if [ $C -ne 0 ]; then rm -f "$S"; exit $C; fi; ` +
 	`if [ -s "$S" ]; then echo "the dump or decompression failed (exit $(cat "$S"))" >&2; rm -f "$S"; exit 1; fi; exit 0`;
 
+/** Fail the drill if listing databases or any individual count fails. */
+export const COUNT_POSTGRES_TABLES = `dbs=$(psql -h 127.0.0.1 -U postgres -tAc "select datname from pg_database where not datistemplate and datname <> 'postgres'") || exit $?; for db in $dbs; do psql -h 127.0.0.1 -U postgres -d "$db" -tAc "select count(*) from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema')" || exit $?; done`;
+
 /**
  * Native dumps run inside the database's own container, with the credentials
  * already in its environment, so no password ever appears on a command line
@@ -345,9 +348,7 @@ export class Backups {
 				)
 		);
 		if (load.code !== 0) throw new Error(lastLines(load.errors) || 'psql failed');
-		const counted = await run(
-			`for db in $(psql -h 127.0.0.1 -U postgres -tAc "select datname from pg_database where not datistemplate and datname <> 'postgres'"); do psql -h 127.0.0.1 -U postgres -d "$db" -tAc "select count(*) from information_schema.tables where table_schema not in ('pg_catalog', 'information_schema')"; done`
-		);
+		const counted = await run(COUNT_POSTGRES_TABLES);
 		if (counted.code !== 0) {
 			throw new Error(lastLines(counted.errors) || 'Counting the restored tables failed');
 		}

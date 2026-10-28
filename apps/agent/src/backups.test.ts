@@ -9,7 +9,16 @@ import { pipeline } from 'node:stream/promises';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { extract } from 'tar-stream';
 import { describe, expect, it, vi } from 'vitest';
-import { Backups, decryptFile, DUMP, encrypt, guarded, LOAD, MAGIC } from './backups';
+import {
+	Backups,
+	COUNT_POSTGRES_TABLES,
+	decryptFile,
+	DUMP,
+	encrypt,
+	guarded,
+	LOAD,
+	MAGIC
+} from './backups';
 import type { DesiredDrill } from '@tramline/contracts';
 import { pack } from 'tar-stream';
 import { HELPER_IMAGE } from './pins';
@@ -367,7 +376,7 @@ describe('Backups.drill', () => {
 				expect(script).toContain('ON_ERROR_STOP=1');
 				return options.loadExit ?? 0;
 			}
-			if (script.startsWith('for db')) {
+			if (script === COUNT_POSTGRES_TABLES) {
 				if (options.countExit) {
 					onLine('stderr', 'psql: error: connection refused');
 					return options.countExit;
@@ -489,6 +498,22 @@ describe('dump and load commands', () => {
 
 		// and when the consumer fails, its status is the result
 		expect((await sh(guarded('echo x', 'exit 7'))).code).toBe(7);
+	});
+
+	it('fails a drill when listing databases or an earlier database query fails', async () => {
+		const listing = await sh('psql() { return 9; }; ' + COUNT_POSTGRES_TABLES);
+		expect(listing.code).toBe(9);
+		const counting = await sh(
+			`psql() {
+			case "$*" in
+				*datname*) printf 'broken\\nhealthy\\n' ;;
+				*broken*) return 7 ;;
+				*) echo 3 ;;
+			esac
+		}; ` + COUNT_POSTGRES_TABLES
+		);
+		expect(counting.code).toBe(7);
+		expect(counting.out.toString()).toBe('');
 	});
 
 	it('stop a Postgres restore at the first error', () => {
