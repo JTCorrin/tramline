@@ -22,7 +22,7 @@ const image = (
 	...DEFAULT_SERVICE_CONFIG,
 	source: { type: 'image', image: name },
 	deploy: { ...DEFAULT_SERVICE_CONFIG.deploy, startCommand, restartPolicy: 'always' },
-	networking: { port, publicDomain: false },
+	networking: { ...DEFAULT_SERVICE_CONFIG.networking, port },
 	volume: { mountPath }
 });
 

@@ -55,7 +55,9 @@ export const serviceInstance = sqliteTable(
 		/** null until the first deploy. */
 		config: text('config', { mode: 'json' }).$type<ServiceConfig>(),
 		/** Hostname generated the first time a public domain is enabled; kept across deploys. */
-		domain: text('domain').unique()
+		domain: text('domain').unique(),
+		/** Edge port of its TCP proxy, assigned the first time one is deployed; kept after. */
+		tcpPort: integer('tcp_port').unique()
 	},
 	(table) => [primaryKey({ columns: [table.serviceId, table.environmentId] })]
 );

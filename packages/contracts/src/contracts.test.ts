@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	CIDR,
 	Hostname,
 	SaveBackupStorage,
 	VolumeConfig,
@@ -173,4 +174,22 @@ describe('Hostname', () => {
 			'Enter a domain like app.example.com'
 		);
 	});
+});
+
+describe('TCP allowlist addresses', () => {
+	it.each(['999.1.2.3', '192.0.2.1/99', '2001:db8::/129', 'abc', '1:2:3', '192.0.2.1/-1', '::/'])(
+		'rejects invalid address or prefix %s',
+		(value) => {
+			expect(CIDR.safeParse(value).success).toBe(false);
+			expect(ServiceConfigPatch.safeParse({ networking: { tcpAllowlist: [value] } }).success).toBe(
+				false
+			);
+		}
+	);
+	it.each(['192.0.2.1', '0.0.0.0/0', '192.0.2.1/32', '2001:db8::1', '::/0', '2001:db8::1/128'])(
+		'accepts valid address or prefix %s',
+		(value) => {
+			expect(CIDR.parse(` ${value} `)).toBe(value);
+		}
+	);
 });

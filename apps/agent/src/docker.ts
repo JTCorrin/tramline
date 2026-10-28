@@ -132,6 +132,26 @@ export class DockerRuntime implements ContainerRuntime {
 			},
 			NetworkingConfig: { EndpointsConfig: { [spec.network]: { Aliases: spec.aliases } } }
 		});
+		if (spec.files?.length) {
+			// files go in before the first start, so the process never runs without them
+			const archive = pack();
+			const dirs = new Set<string>();
+			for (const file of spec.files) {
+				const parts = file.path.replace(/^\//, '').split('/');
+				for (let i = 1; i < parts.length; i++) {
+					const dir = parts.slice(0, i).join('/');
+					if (dirs.has(dir)) continue;
+					dirs.add(dir);
+					archive.entry({ name: dir, type: 'directory', mode: 0o755 });
+				}
+				archive.entry(
+					{ name: parts.join('/'), mode: file.mode, uid: file.uid ?? 0, gid: file.gid ?? 0 },
+					file.content
+				);
+			}
+			archive.finalize();
+			await container.putArchive(archive as unknown as NodeJS.ReadableStream, { path: '/' });
+		}
 		await container.start();
 	}
 

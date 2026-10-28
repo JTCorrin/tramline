@@ -7,14 +7,22 @@ import {
 	type DesiredState,
 	type IngressRoute
 } from '@tramline/contracts';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { container, deployment, node, serviceInstance } from '../db/schema';
-import { usesTls, type PlatformSettings } from '../settings';
+import { container, deployment, node, service, serviceInstance } from '../db/schema';
+import { tcpProxyHost, usesTls, type PlatformSettings } from '../settings';
 import { runContainerName, runningRuns } from './cron';
-import { meshAlias, meshExports, meshMembers, meshNetworkName, meshPorts, planMesh } from './mesh';
+import {
+	meshAlias,
+	meshExports,
+	meshMembers,
+	meshNetworkName,
+	meshPorts,
+	planMesh,
+	planTcpProxies
+} from './mesh';
 import { pendingQueries } from './queries';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
@@ -46,7 +54,7 @@ export function buildDesiredState(
 	nodeId: string
 ): DesiredState {
 	const rows = db
-		.select({ deployment, domain: serviceInstance.domain })
+		.select({ deployment, domain: serviceInstance.domain, icon: service.icon, kind: service.kind })
 		.from(deployment)
 		.innerJoin(
 			serviceInstance,
@@ -55,6 +63,7 @@ export function buildDesiredState(
 				eq(serviceInstance.environmentId, deployment.environmentId)
 			)
 		)
+		.innerJoin(service, eq(service.id, deployment.serviceId))
 		.where(
 			and(
 				eq(deployment.nodeId, nodeId),
@@ -91,7 +100,7 @@ export function buildDesiredState(
 	const routes: IngressRoute[] = [];
 	const networks = new Set<string>();
 
-	for (const { deployment: dep, domain } of rows) {
+	for (const { deployment: dep, domain, icon, kind } of rows) {
 		// snapshots taken before a field existed pick up its default
 		const config = mergeConfig(DEFAULT_SERVICE_CONFIG, dep.config);
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
@@ -138,6 +147,19 @@ export function buildDesiredState(
 			(alias): alias is string => Boolean(alias)
 		);
 
+		// a database reached from outside speaks TLS itself; it comes with the TCP proxy, so it
+		// starts on a deploy, never by surprise on an upgrade
+		const tls =
+			kind === 'database' && icon === 'postgres' && config.networking.tcpProxy
+				? {
+						kind: 'postgres' as const,
+						names: [
+							env.TRAMLINE_PRIVATE_DOMAIN ?? deploymentAlias(dep.id),
+							tcpProxyHost(settings, domain)
+						]
+					}
+				: null;
+
 		// a cron service only has containers while a run is going
 		if (config.deploy.cronSchedule) {
 			for (const run of runs.get(dep.id) ?? []) {
@@ -157,7 +179,8 @@ export function buildDesiredState(
 					healthcheckPath: null,
 					memoryMb: config.deploy.memoryMb,
 					readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
-					volumes
+					volumes,
+					tls: null
 				});
 			}
 			continue;
@@ -180,7 +203,8 @@ export function buildDesiredState(
 				healthcheckPath: config.deploy.healthcheckPath,
 				memoryMb: config.deploy.memoryMb,
 				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
-				volumes
+				volumes,
+				tls
 			});
 		}
 
@@ -209,7 +233,13 @@ export function buildDesiredState(
 	// other nodes' services, over the mesh
 	const self = db.select().from(node).where(eq(node.id, nodeId)).get();
 	const members = meshMembers(db);
-	const exports = members.length >= 2 ? meshExports(db, secrets) : [];
+	const proxied = !!db
+		.select({ port: serviceInstance.tcpPort })
+		.from(serviceInstance)
+		.where(isNotNull(serviceInstance.tcpPort))
+		.limit(1)
+		.get();
+	const exports = members.length >= 2 || proxied ? meshExports(db, secrets) : [];
 	const mesh = planMesh(members, exports, {
 		id: nodeId,
 		edge: self?.edge ?? false,
@@ -243,6 +273,7 @@ export function buildDesiredState(
 		...backupJobs(db, nodeId),
 		queries: pendingQueries(nodeId),
 		mesh,
+		tcpProxies: planTcpProxies(exports, { id: nodeId, edge: self?.edge ?? false }, mesh),
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

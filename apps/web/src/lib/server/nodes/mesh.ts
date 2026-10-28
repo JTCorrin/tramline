@@ -4,7 +4,8 @@ import {
 	type DesiredMesh,
 	type MeshForward,
 	type MeshLink,
-	type MeshPeer
+	type MeshPeer,
+	type TcpProxy
 } from '@tramline/contracts';
 import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,7 @@ import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
 import { deployment, node, serviceInstance } from '../db/schema';
 import { verifiedHostnames } from '../domain/domains';
-import { networkName, RUNNING_STATUSES } from './names';
+import { deploymentAlias, networkName, RUNNING_STATUSES } from './names';
 import { isOnline, MESH_CIDR, type NodeRow } from './registry';
 
 /**
@@ -49,8 +50,15 @@ export interface MeshExport {
 	port: number;
 	/** e.g. `postgres.production.tramline.internal`, as the service's deployment saw it. */
 	alias: string;
+	/**
+	 * Where the mesh delivers on the service's node: the chosen deployment's own
+	 * alias, so traffic from other nodes only moves once a new deployment is live.
+	 */
+	target: string;
 	/** Public hostnames of its live deployment, which edge nodes serve. */
 	hosts: { host: string; custom: boolean }[];
+	/** Its TCP proxy, which edge nodes publish: the edge port and who may connect. */
+	tcp: { port: number; allow: string[] } | null;
 }
 
 const FIRST_PORT = 20_000;
@@ -131,7 +139,7 @@ export function meshMembers(db: DbOrTx, now = Date.now()): Member[] {
 export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
 	const hostnames = verifiedHostnames(db);
 	const rows = db
-		.select({ deployment, domain: serviceInstance.domain })
+		.select({ deployment, domain: serviceInstance.domain, tcpPort: serviceInstance.tcpPort })
 		.from(deployment)
 		.innerJoin(
 			serviceInstance,
@@ -153,7 +161,7 @@ export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
 			chosen.set(key, row);
 		}
 	}
-	return [...chosen.values()].flatMap(({ deployment: dep, domain }) => {
+	return [...chosen.values()].flatMap(({ deployment: dep, domain, tcpPort }) => {
 		const config = mergeConfig(DEFAULT_SERVICE_CONFIG, dep.config);
 		if (!config.networking.port || config.deploy.cronSchedule) return [];
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
@@ -176,6 +184,11 @@ export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
 				nodeId: dep.nodeId!,
 				port: config.networking.port,
 				alias: env.TRAMLINE_PRIVATE_DOMAIN,
+				target: deploymentAlias(dep.id),
+				tcp:
+					live && tcpPort && config.networking.tcpProxy && config.networking.tcpAllowlist.length
+						? { port: tcpPort, allow: config.networking.tcpAllowlist }
+						: null,
 				hosts
 			}
 		];
@@ -217,13 +230,13 @@ export function planMesh(
 		const port = ports.get(`${e.environmentId}:${e.serviceId}`)!;
 		const network = networkName(e.environmentId);
 		if (e.nodeId === self.id) {
-			forwards.push({ to: 'local', port, target: `${e.alias}:${e.port}`, network });
+			forwards.push({ to: 'local', port, target: `${e.target}:${e.port}`, network });
 			continue;
 		}
 		const host = members.find((m) => m.id === e.nodeId);
 		if (!host || !reachable.has(host.id)) continue;
 		const consumed = networks.has(network);
-		if (!consumed && !(self.edge && e.hosts.length)) continue;
+		if (!consumed && !(self.edge && (e.hosts.length || e.tcp))) continue;
 		forwards.push({ to: 'remote', port, address: host.address });
 		if (consumed) {
 			links.push({
@@ -247,4 +260,42 @@ export function planMesh(
 		forwards,
 		links
 	};
+}
+
+export const tcpProxyName = (environmentId: string, serviceId: string) =>
+	`tl-tcp-${environmentId}-${serviceId}`;
+
+/**
+ * The TCP proxies an edge node publishes: to the service's own deployment
+ * when it runs here, otherwise through this node's mesh container.
+ */
+export function planTcpProxies(
+	exports: MeshExport[],
+	self: { id: string; edge: boolean },
+	mesh: DesiredMesh | null
+): TcpProxy[] {
+	if (!self.edge) return [];
+	const ports = meshPorts(exports);
+	const forwarded = new Set(mesh?.forwards.filter((f) => f.to === 'remote').map((f) => f.port));
+	return exports.flatMap((e) => {
+		if (!e.tcp) return [];
+		const base = {
+			name: tcpProxyName(e.environmentId, e.serviceId),
+			port: e.tcp.port,
+			protocol: 'postgres' as const,
+			allow: e.tcp.allow
+		};
+		if (e.nodeId === self.id) {
+			return [{ ...base, target: `${e.target}:${e.port}`, network: networkName(e.environmentId) }];
+		}
+		const meshPort = ports.get(`${e.environmentId}:${e.serviceId}`)!;
+		if (!forwarded.has(meshPort)) return [];
+		return [
+			{
+				...base,
+				target: `${meshAlias(self.id)}:${meshPort}`,
+				network: meshNetworkName(self.id)
+			}
+		];
+	});
 }

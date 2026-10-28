@@ -83,9 +83,22 @@ export const DeployConfig = z.object({
 	node: z.string().nullable()
 });
 
+/** An IPv4 or IPv6 address or CIDR block, e.g. 203.0.113.7 or 198.51.100.0/24. */
+export const CIDR = z
+	.string()
+	.trim()
+	.pipe(z.union([z.ipv4(), z.ipv6(), z.cidrv4(), z.cidrv6()]));
+
 export const NetworkingConfig = z.object({
 	port: z.number().int().min(1).max(65535).nullable(),
-	publicDomain: z.boolean()
+	publicDomain: z.boolean(),
+	/**
+	 * Reach the service from outside Tramline through a TCP port on the edge
+	 * nodes. Postgres only for now, and only over TLS.
+	 */
+	tcpProxy: z.boolean(),
+	/** Addresses allowed through the TCP proxy; it stays closed while this is empty. */
+	tcpAllowlist: z.array(CIDR).max(50)
 });
 
 /** Absolute path inside the container, e.g. `/var/lib/postgresql/data`. */
@@ -144,7 +157,7 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		readOnlyRootFilesystem: false,
 		node: null
 	},
-	networking: { port: null, publicDomain: false },
+	networking: { port: null, publicDomain: false, tcpProxy: false, tcpAllowlist: [] },
 	volume: { mountPath: null }
 };
 

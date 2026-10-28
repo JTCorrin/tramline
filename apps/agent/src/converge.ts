@@ -1,4 +1,4 @@
-import type { DesiredState } from '@tramline/contracts';
+import type { DesiredContainer, DesiredState } from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
 import {
 	MESH_CONFIG_PATH,
@@ -9,6 +9,10 @@ import {
 } from './mesh';
 import { SOCAT_IMAGE } from './pins';
 import { LABELS, type ContainerRuntime, type ManagedContainer, type RunSpec } from './runtime';
+import type { Certificate } from './tls';
+
+/** Where a database finds its TLS certificate and key. */
+export const TLS_DIR = '/etc/tramline/tls';
 import { hash, toRunSpec } from './spec';
 
 export interface ConvergeOptions {
@@ -23,6 +27,10 @@ export interface ConvergeOptions {
 	log?: (message: string) => void;
 	/** This node's WireGuard identity and the image its mesh container runs. */
 	mesh?: { image: string; privateKey: string; endpoint: string | null };
+	/** The agent's own image, which TCP proxies run; without it there are none. */
+	agentImage?: string;
+	/** A service's TLS certificate, created and kept on this node. */
+	certificates?: (id: string, names: string[]) => Certificate;
 }
 
 export const DEFAULT_DRAIN_MS = 10_000;
@@ -127,6 +135,7 @@ export class Converger {
 		for (const network of desired.networks) await this.runtime.ensureNetwork(network);
 
 		const wanted = new Map(desired.containers.map((c) => [c.name, toRunSpec(c, nodeId)]));
+		const tls = new Map(desired.containers.map((c) => [c.name, c]));
 		const existing = this.owned(await this.runtime.list());
 		const workloads = existing.filter((c) => c.labels[LABELS.role] === 'workload');
 		const present = new Set<string>();
@@ -163,7 +172,7 @@ export class Converger {
 					});
 				}
 				log(`starting ${name}`);
-				await this.runtime.run(spec);
+				await this.runtime.run(this.#withTls(spec, tls.get(name)!));
 			} catch (error) {
 				this.errors.set(name, error instanceof Error ? error.message : String(error));
 				log(`failed to start ${name}: ${this.errors.get(name)}`);
@@ -179,6 +188,11 @@ export class Converger {
 		} catch (error) {
 			// this node's own services and routes don't depend on the mesh
 			log(`the mesh failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		try {
+			await this.#ensureTcpProxies(desired, existing);
+		} catch (error) {
+			log(`a TCP proxy failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
 		await this.#publishRoutes(desired);
@@ -204,6 +218,100 @@ export class Converger {
 				if (await this.runtime.removeVolume(volume.name)) log(`removed volume ${volume.name}`);
 			}
 		}
+	}
+
+	/**
+	 * One container per TCP proxy, each publishing its own edge port, so
+	 * adding or changing one never interrupts another.
+	 */
+	async #ensureTcpProxies(desired: DesiredState, existing: ManagedContainer[]) {
+		const nodeId = this.#node();
+		const image = this.options.agentImage;
+		const wanted = new Map(
+			(image ? (desired.tcpProxies ?? []) : []).map((proxy) => {
+				const spec: RunSpec = {
+					name: proxy.name,
+					image: image!,
+					cmd: [
+						'proxy',
+						JSON.stringify({
+							listen: proxy.port,
+							target: proxy.target,
+							allow: proxy.allow,
+							protocol: proxy.protocol
+						})
+					],
+					env: {},
+					network: proxy.network,
+					aliases: [],
+					restart: { name: 'always', maxRetries: 0 },
+					ports: [{ container: proxy.port, host: proxy.port }],
+					security: {
+						capabilities: [],
+						pidsLimit: 128,
+						memoryMb: 128,
+						readOnlyRootFilesystem: true
+					},
+					labels: {
+						[LABELS.managed]: 'true',
+						[LABELS.node]: nodeId,
+						[LABELS.role]: 'tcp-proxy',
+						[LABELS.spec]: hash({ proxy, image })
+					}
+				};
+				return [proxy.name, spec];
+			})
+		);
+		const current = existing.filter((c) => c.labels[LABELS.role] === 'tcp-proxy');
+		for (const container of current) {
+			if (wanted.get(container.name)?.labels[LABELS.spec] !== container.labels[LABELS.spec]) {
+				await this.runtime.remove(container.name);
+			}
+		}
+		const present = new Set(
+			current
+				.filter((c) => wanted.get(c.name)?.labels[LABELS.spec] === c.labels[LABELS.spec])
+				.map((c) => c.name)
+		);
+		for (const [name, spec] of wanted) {
+			if (present.has(name)) continue;
+			if (!(await this.runtime.hasImage(spec.image))) await this.runtime.pull(spec.image);
+			await this.runtime.run(spec);
+		}
+	}
+
+	/**
+	 * Gives a database its TLS certificate (one per service, kept on this
+	 * node) and starts it with TLS on. The spec hash doesn't change, since
+	 * the certificate is the node's business.
+	 */
+	#withTls(spec: RunSpec, container: DesiredContainer): RunSpec {
+		if (!container.tls) return spec;
+		const certificates = this.options.certificates;
+		if (!certificates) throw new Error('This agent cannot create TLS certificates');
+		const { cert, key } = certificates(
+			`${container.environmentId}-${container.serviceId}`,
+			container.tls.names
+		);
+		// the official image runs Postgres as uid 999; its key must be that user's alone
+		const owner = { uid: 999, gid: 999 };
+		return {
+			...spec,
+			// a start command set by the user wins; they can add the same flags
+			cmd: spec.cmd ?? [
+				'postgres',
+				'-c',
+				'ssl=on',
+				'-c',
+				`ssl_cert_file=${TLS_DIR}/server.crt`,
+				'-c',
+				`ssl_key_file=${TLS_DIR}/server.key`
+			],
+			files: [
+				{ path: `${TLS_DIR}/server.crt`, content: Buffer.from(cert), mode: 0o644, ...owner },
+				{ path: `${TLS_DIR}/server.key`, content: Buffer.from(key), mode: 0o600, ...owner }
+			]
+		};
 	}
 
 	/** Stops a workload gracefully (databases flush to disk), then removes it. */

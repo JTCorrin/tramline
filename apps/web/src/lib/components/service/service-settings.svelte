@@ -414,6 +414,61 @@
 				>{slug(service.name)}.{slug(environmentName)}.tramline.internal</code
 			>
 		</p>
+		{#if service.kind === 'database' && service.icon === 'postgres'}
+			<div class="space-y-3 rounded-lg border p-3" data-testid="tcp-proxy">
+				<div class="flex items-start justify-between gap-3">
+					<div>
+						<div class="flex items-center gap-2 text-sm font-medium">
+							TCP proxy
+							{#if staged('networking', 'tcpProxy') || staged('networking', 'tcpAllowlist')}
+								<span class="size-1.5 rounded-full bg-amber-400"></span>
+							{/if}
+						</div>
+						<p class="text-xs text-muted-foreground">
+							Connect from outside Tramline, over TLS only, from the addresses you list. The
+							database's own TLS secures the connection end to end.
+						</p>
+					</div>
+					<Switch
+						checked={config.networking.tcpProxy}
+						onCheckedChange={(checked) => stage('networking', { tcpProxy: checked })}
+						aria-label="TCP proxy"
+					/>
+				</div>
+				{#if config.networking.tcpProxy}
+					<Setting
+						label="Allowed addresses"
+						for="tcp-allowlist"
+						description="IP addresses or CIDR blocks, separated by commas. 0.0.0.0/0 lets anyone try to connect."
+					>
+						<CommitInput
+							id="tcp-allowlist"
+							mono
+							placeholder="203.0.113.7, 198.51.100.0/24"
+							value={config.networking.tcpAllowlist.join(', ') || null}
+							onsave={(v) =>
+								stage('networking', {
+									tcpAllowlist: (v ?? '')
+										.split(/[\s,]+/)
+										.map((entry) => entry.trim())
+										.filter(Boolean)
+								})}
+						/>
+					</Setting>
+					{#if service.tcpProxy}
+						<p class="text-xs text-muted-foreground" data-testid="tcp-proxy-address">
+							Connect to <code class="font-mono">{service.tcpProxy}</code> with
+							<code class="font-mono">sslmode=require</code>, e.g.
+							<code class="font-mono break-all"
+								>postgresql://USER:PASSWORD@{service.tcpProxy}/DATABASE?sslmode=require</code
+							>
+						</p>
+					{:else}
+						<p class="text-xs text-muted-foreground">The address appears once this is deployed.</p>
+					{/if}
+				{/if}
+			</div>
+		{/if}
 		{@render networking?.()}
 	</section>
 

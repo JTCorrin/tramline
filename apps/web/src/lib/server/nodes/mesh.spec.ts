@@ -106,7 +106,9 @@ describe('planMesh', () => {
 		nodeId: 'node_b',
 		port: 5432,
 		alias: 'postgres.production.tramline.internal',
-		hosts: []
+		target: 'dep_db.tramline.internal',
+		hosts: [],
+		tcp: null
 	};
 	const web = {
 		serviceId: 'svc_web',
@@ -114,7 +116,9 @@ describe('planMesh', () => {
 		nodeId: 'node_b',
 		port: 3000,
 		alias: 'web.production.tramline.internal',
-		hosts: [{ host: 'web-1.example.com', custom: false }]
+		target: 'dep_web.tramline.internal',
+		hosts: [{ host: 'web-1.example.com', custom: false }],
+		tcp: null
 	};
 	const ports = meshPorts([db, web]);
 
@@ -158,13 +162,13 @@ describe('planMesh', () => {
 				{
 					to: 'local',
 					port: ports.get('env_1:svc_db')!,
-					target: 'postgres.production.tramline.internal:5432',
+					target: 'dep_db.tramline.internal:5432',
 					network: networkName('env_1')
 				},
 				{
 					to: 'local',
 					port: ports.get('env_2:svc_web')!,
-					target: 'web.production.tramline.internal:3000',
+					target: 'dep_web.tramline.internal:3000',
 					network: networkName('env_2')
 				}
 			].sort((x, y) => x.port - y.port)
@@ -303,6 +307,30 @@ describe('mesh in the desired state', () => {
 		});
 	});
 
+	it('keeps delivering to the live deployment until its replacement is live', () => {
+		const { ctx, remote, project, env } = cluster();
+		const app = services.create(ctx, {
+			projectId: project.id,
+			kind: 'image',
+			source: { type: 'image', image: 'traefik/whoami' }
+		});
+		services.stageConfig(ctx, app.id, env.id, {
+			build: { scan: 'off' },
+			networking: { port: 80 },
+			deploy: { node: remote }
+		});
+		const [first] = deploy(ctx, env.id);
+		services.stageConfig(ctx, app.id, env.id, { deploy: { startCommand: 'again' } });
+		const [second] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const target = () =>
+			meshExports(ctx.db, testSecrets).find((e) => e.serviceId === app.id)!.target;
+		expect(target()).toBe(`${first!.id}.tramline.internal`);
+
+		ctx.db.update(deployment).set({ status: 'active' }).where(eq(deployment.id, second!.id)).run();
+		expect(target()).toBe(`${second!.id}.tramline.internal`);
+	});
+
 	it('shows each node’s place in the mesh', () => {
 		const { ctx, local } = cluster();
 		const listed = nodes.list(ctx);
@@ -314,5 +342,97 @@ describe('mesh in the desired state', () => {
 		});
 		expect(nodes.update(ctx, local, { edge: false }).edge).toBe(false);
 		expect(nodes.update(ctx, local, {}).edge).toBe(false);
+	});
+});
+
+describe('TCP proxy', () => {
+	function proxied(allow: string[] = ['203.0.113.0/24']) {
+		const ctx = seedCtx();
+		ctx.settings = { ...ctx.settings, dataDir: mkdtempSync(path.join(tmpdir(), 'tramline-tcp-')) };
+		const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
+		recordHello(ctx.db, local.id, hello());
+		const project = projects.create(ctx, { name: 'Shop' });
+		const [env] = environments.list(ctx, project.id);
+		const pg = services.create(ctx, {
+			projectId: project.id,
+			kind: 'database',
+			engine: 'postgres'
+		});
+		services.stageConfig(ctx, pg.id, env!.id, {
+			build: { scan: 'off' },
+			networking: { tcpProxy: true, tcpAllowlist: allow }
+		});
+		return { ctx, local: local.id, env: env!, pg, project };
+	}
+
+	it('gives Postgres TLS and publishes it on the edge, to the allowlist only', () => {
+		const { ctx, local, env, pg } = proxied();
+		const [dep] = deploy(ctx, env.id);
+		const port = ctx.db
+			.select()
+			.from(serviceInstance)
+			.where(eq(serviceInstance.serviceId, pg.id))
+			.get()!.tcpPort!;
+		expect(port).toBe(30_000);
+
+		const desired = buildDesiredState(ctx.db, testSecrets, ctx.settings, local);
+		expect(desired.containers[0]!.tls).toEqual({
+			kind: 'postgres',
+			names: ['postgres.production.tramline.internal', 'localhost']
+		});
+		expect(desired.tcpProxies).toEqual([
+			{
+				name: `tl-tcp-${env.id}-${pg.id}`,
+				port: 30_000,
+				protocol: 'postgres',
+				allow: ['203.0.113.0/24'],
+				target: `${dep!.id}.tramline.internal:5432`,
+				network: networkName(env.id)
+			}
+		]);
+
+		// a non-edge node publishes nothing
+		nodes.update(ctx, local, { edge: false });
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local).tcpProxies).toEqual([]);
+	});
+
+	it('keeps the port across deploys and gives each service its own', () => {
+		const { ctx, env, project } = proxied();
+		deploy(ctx, env.id);
+		const other = services.create(ctx, {
+			projectId: project.id,
+			kind: 'database',
+			engine: 'postgres'
+		});
+		services.stageConfig(ctx, other.id, env.id, {
+			build: { scan: 'off' },
+			networking: { tcpProxy: true, tcpAllowlist: ['0.0.0.0/0'] }
+		});
+		deploy(ctx, env.id);
+		expect(
+			ctx.db
+				.select({ port: serviceInstance.tcpPort })
+				.from(serviceInstance)
+				.all()
+				.map((r) => r.port)
+				.sort()
+		).toEqual([30_000, 30_001]);
+	});
+
+	it('refuses to open without an allowlist, or for anything but Postgres', () => {
+		const { ctx, env, project } = proxied([]);
+		expect(() => changes.deploy(ctx, env.id)).toThrow('list the addresses the TCP proxy');
+		services.stageConfig(ctx, services.list(ctx, project.id)[0]!.id, env.id, {
+			networking: { tcpAllowlist: ['198.51.100.7'] }
+		});
+		const app = services.create(ctx, {
+			projectId: project.id,
+			kind: 'image',
+			source: { type: 'image', image: 'traefik/whoami' }
+		});
+		services.stageConfig(ctx, app.id, env.id, {
+			networking: { port: 80, tcpProxy: true, tcpAllowlist: ['0.0.0.0/0'] }
+		});
+		expect(() => changes.deploy(ctx, env.id)).toThrow('supports Postgres only');
 	});
 });

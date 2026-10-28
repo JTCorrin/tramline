@@ -506,7 +506,17 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
   - **Ports:** each service gets the same mesh port everywhere, from a hash, so adding one never moves another.
 - **Edge nodes:** an edge serves every public domain, forwarding over the mesh to the node a service runs on. The local node is an edge by default. Other nodes serve their own services' domains as before.
 - **Isolation of failures:** if the mesh can't start, a node still runs its services and serves its routes.
-- **Moved to 6b.2:** spreading a service's replicas across nodes, and the TCP proxy for databases. Edge traffic to another node follows the service's private name, so during a deploy it can briefly reach the new deployment before its healthcheck passes; 6b.2 routes it to the live deployment only.
+
+**6b.2: TCP proxy ✅** (unit-tested; e2e in CI)
+
+- **Live deployments only:** traffic from other nodes (links and edge routes) goes to a service's live deployment, so it moves only once a new deployment passes its healthcheck.
+- **The TCP proxy for Postgres** (Settings → Networking):
+  - **Off by default:** it opens only when switched on with an allowlist of addresses (`0.0.0.0/0` has to be written out).
+  - **Ports:** each proxied database gets its own edge port from 30000, kept across deploys. Every edge node publishes it through a small locked-down container (no capabilities, read-only filesystem).
+  - **TLS only:** addresses outside the allowlist are dropped before anything is read. A client's first message must ask for TLS, and the database must agree to it, so a plaintext session can't start. TLS ends in Postgres itself; the proxy never holds a key.
+  - **The certificate:** Postgres gets a TLS certificate the agent creates on its node (ECDSA P-256, ten years, kept across deploys; the key never leaves the node). It comes with the proxy, so it starts on a deploy, never by surprise on an upgrade. Clients use `sslmode=require`.
+- **Later:** MySQL, Redis and MongoDB through the proxy; `verify-full` with a downloadable certificate; TLS for connections inside an environment too.
+- **Moved to Phase 7:** spreading a service's replicas across nodes, which belongs with CPU and memory requests and node pools.
 
 **6c: adapters and Proxmox**
 
@@ -525,6 +535,7 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
   - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
   - **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
   - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
+- **Requests and spreading:** services get CPU and memory requests (defaults per template), the scheduler packs by them, and a service's replicas spread across nodes.
 - Node pools per environment (adapter account + region + size, min/max) and auto-provisioning when the scheduler can't fit a workload. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
 - **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
 

@@ -182,6 +182,7 @@ export function desiredContainer(overrides: Partial<DesiredContainer> = {}): Des
 		memoryMb: null,
 		readOnlyRootFilesystem: false,
 		volumes: [],
+		tls: null,
 		...overrides
 	};
 }
@@ -203,6 +204,7 @@ export function desiredState(
 		drills: [],
 		queries: [],
 		mesh: null,
+		tcpProxies: [],
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

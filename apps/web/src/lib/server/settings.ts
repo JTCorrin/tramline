@@ -32,3 +32,10 @@ export function publicUrl(settings: PlatformSettings, host: string) {
 	if (usesTls(settings)) return `https://${host}`;
 	return `http://${host}${settings.ingressPort === 80 ? '' : `:${settings.ingressPort}`}`;
 }
+
+/**
+ * Where the TCP proxy is reached: the service's own domain when it has one
+ * (it points at the edge nodes), else the base domain.
+ */
+export const tcpProxyHost = (settings: PlatformSettings, domain: string | null) =>
+	domain ?? settings.baseDomain;
