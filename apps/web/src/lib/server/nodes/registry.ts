@@ -67,7 +67,7 @@ export function ensureLocalNode(db: DbOrTx, dataDir: string) {
 				.get()!
 		: db
 				.insert(node)
-				.values({ id: newId('node'), name: 'local', tokenHash: hashToken(token) })
+				.values({ id: newId('node'), name: 'local', tokenHash: hashToken(token), edge: true })
 				.returning()
 				.get();
 	return { node: row, tokenFile };
@@ -125,15 +125,44 @@ export function authenticate(db: DbOrTx, token: string | null) {
 }
 
 export function recordHello(db: DbOrTx, nodeId: string, hello: AgentHello) {
+	const row = db.select().from(node).where(eq(node.id, nodeId)).get();
+	const mesh = hello.mesh;
 	db.update(node)
 		.set({
 			info: hello,
 			error: hello.docker ? null : (hello.dockerError ?? 'Docker is unavailable'),
-			lastSeenAt: new Date()
+			lastSeenAt: new Date(),
+			...(mesh
+				? {
+						meshPublicKey: mesh.publicKey,
+						meshAddress: row?.meshAddress ?? nextMeshAddress(db),
+						// an address the agent was configured with wins; otherwise keep what an admin set
+						meshEndpoint: mesh.endpoint ?? row?.meshEndpoint ?? null
+					}
+				: {})
 		})
 		.where(eq(node.id, nodeId))
 		.run();
 	notifyNodes();
+}
+
+/** The mesh's private range. Docker's default pools and the CGNAT range Tailscale uses are avoided. */
+export const MESH_CIDR = '10.231.0.0/16';
+
+/** The lowest free address in the mesh range, from 10.231.0.1. */
+export function nextMeshAddress(db: DbOrTx) {
+	const taken = new Set(
+		db
+			.select({ address: node.meshAddress })
+			.from(node)
+			.all()
+			.map((row) => row.address)
+	);
+	for (let n = 1; n < 65_535; n++) {
+		const address = `10.231.${n >> 8}.${n & 255}`;
+		if ((n & 255) !== 0 && (n & 255) !== 255 && !taken.has(address)) return address;
+	}
+	throw new Error('The mesh has no addresses left');
 }
 
 /** Replaces the node's container rows with what the agent just observed. */

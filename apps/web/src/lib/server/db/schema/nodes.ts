@@ -21,6 +21,14 @@ export const node = sqliteTable('node', {
 	cordoned: integer('cordoned', { mode: 'boolean' }).notNull().default(false),
 	/** Cordoned, with its stateless deployments moving elsewhere. */
 	draining: integer('draining', { mode: 'boolean' }).notNull().default(false),
+	/** Serves every public domain, forwarding to other nodes over the mesh. */
+	edge: integer('edge', { mode: 'boolean' }).notNull().default(false),
+	/** WireGuard public key the agent generated; the private key stays on the node. */
+	meshPublicKey: text('mesh_public_key'),
+	/** Its address in the mesh, assigned when it first reports a key. */
+	meshAddress: text('mesh_address').unique(),
+	/** `host:port` other nodes reach it on (UDP); null behind NAT. */
+	meshEndpoint: text('mesh_endpoint'),
 	...timestamps
 });
 

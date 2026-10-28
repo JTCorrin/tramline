@@ -100,6 +100,10 @@ export class FakeRuntime implements ContainerRuntime {
 		this.#guard(`connect ${container} ${network}`);
 		this.containers.get(container)?.networks.push(network);
 	}
+	async addresses(container: string) {
+		const c = this.containers.get(container);
+		return Object.fromEntries((c?.networks ?? []).map((n, i) => [n, `172.30.${i}.2`]));
+	}
 	async exec(container: string, cmd: string[]) {
 		this.#guard(`exec ${container} ${cmd.at(-1)}`);
 		return { exitCode: this.execExit, output: '' };
@@ -198,6 +202,7 @@ export function desiredState(
 		restores: [],
 		drills: [],
 		queries: [],
+		mesh: null,
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

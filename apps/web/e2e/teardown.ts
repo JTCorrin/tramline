@@ -105,7 +105,7 @@ export default function teardown() {
 			execFileSync('docker', ['rmi', '-f', ...new Set(images.split('\n'))], { stdio: 'ignore' });
 	}
 	// only this run's environments; another install on the same host may use the same naming scheme
-	for (const { id } of environments) {
+	for (const id of [...environments.map((e) => e.id), `mesh-${node.id}`]) {
 		try {
 			execFileSync('docker', ['network', 'rm', `tl-${id}`], { stdio: 'ignore' });
 		} catch {

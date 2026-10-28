@@ -6,8 +6,16 @@ import { Agent } from './agent';
 import { ControlPlane } from './client';
 import { DockerRuntime } from './docker';
 import { enroll, nodeTokenFile } from './enroll';
+import { DEFAULT_MESH_IMAGE } from './mesh';
 
 const VERSION = '0.1.0';
+
+// the mesh container runs this same program in mesh mode
+if (process.argv[2] === 'mesh') {
+	const { runMeshDaemon } = await import('./mesh-daemon');
+	const { MESH_CONFIG_PATH } = await import('./mesh');
+	await runMeshDaemon(MESH_CONFIG_PATH);
+}
 
 const url = process.env.TRAMLINE_URL ?? 'http://localhost:5173';
 const stateDir =
@@ -59,7 +67,15 @@ const agent = new Agent({
 		}
 	},
 	stateDir,
-	version: VERSION
+	version: VERSION,
+	// TRAMLINE_MESH=off for an agent that should never run the mesh container
+	mesh:
+		process.env.TRAMLINE_MESH === 'off'
+			? undefined
+			: {
+					image: process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE,
+					endpoint: process.env.TRAMLINE_MESH_ENDPOINT || null
+				}
 });
 
 try {

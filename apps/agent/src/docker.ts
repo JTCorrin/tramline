@@ -95,7 +95,9 @@ export class DockerRuntime implements ContainerRuntime {
 			Cmd: spec.cmd,
 			Env: Object.entries(spec.env).map(([key, value]) => `${key}=${value}`),
 			Labels: spec.labels,
-			ExposedPorts: Object.fromEntries(ports.map((p) => [`${p.container}/tcp`, {}])),
+			ExposedPorts: Object.fromEntries(
+				ports.map((p) => [`${p.container}/${p.protocol ?? 'tcp'}`, {}])
+			),
 			HostConfig: {
 				RestartPolicy: { Name: spec.restart.name, MaximumRetryCount: spec.restart.maxRetries },
 				NetworkMode: spec.network,
@@ -120,8 +122,12 @@ export class DockerRuntime implements ContainerRuntime {
 					? { ReadonlyRootfs: true, Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=64m' } }
 					: {}),
 				PortBindings: Object.fromEntries(
-					ports.map((p) => [`${p.container}/tcp`, [{ HostPort: String(p.host) }]])
+					ports.map((p) => [
+						`${p.container}/${p.protocol ?? 'tcp'}`,
+						[{ HostPort: String(p.host) }]
+					])
 				),
+				...(spec.sysctls ? { Sysctls: spec.sysctls } : {}),
 				Binds: spec.binds
 			},
 			NetworkingConfig: { EndpointsConfig: { [spec.network]: { Aliases: spec.aliases } } }
@@ -176,6 +182,16 @@ export class DockerRuntime implements ContainerRuntime {
 
 	async connect(container: string, network: string) {
 		await this.docker.getNetwork(network).connect({ Container: container });
+	}
+
+	async addresses(container: string) {
+		const info = await this.docker.getContainer(container).inspect();
+		return Object.fromEntries(
+			Object.entries(info.NetworkSettings.Networks ?? {}).map(([name, net]) => [
+				name,
+				net.IPAddress
+			])
+		);
 	}
 
 	async exec(container: string, cmd: string[]) {

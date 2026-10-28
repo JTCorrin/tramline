@@ -1,6 +1,14 @@
 import type { DesiredState } from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
-import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
+import {
+	MESH_CONFIG_PATH,
+	meshAlias,
+	meshContainerName,
+	meshNetworkName,
+	type MeshConfig
+} from './mesh';
+import { SOCAT_IMAGE } from './pins';
+import { LABELS, type ContainerRuntime, type ManagedContainer, type RunSpec } from './runtime';
 import { hash, toRunSpec } from './spec';
 
 export interface ConvergeOptions {
@@ -13,6 +21,8 @@ export interface ConvergeOptions {
 	drainMs?: number;
 	now?: () => number;
 	log?: (message: string) => void;
+	/** This node's WireGuard identity and the image its mesh container runs. */
+	mesh?: { image: string; privateKey: string; endpoint: string | null };
 }
 
 export const DEFAULT_DRAIN_MS = 10_000;
@@ -50,6 +60,8 @@ export class Converger {
 	#applied: string | null = null;
 	/** Whether the ingress container has been seen or started, so routes can be pushed to it. */
 	#ingressUp = false;
+	/** The mesh config last written into the mesh container. */
+	#meshApplied: string | null = null;
 
 	constructor(
 		private runtime: ContainerRuntime,
@@ -160,7 +172,14 @@ export class Converger {
 			}
 		}
 
-		// 2. point routes at the new deployments (and drop routes to removed ones, even the last)
+		// 2. reach services on other nodes, then point routes at the new deployments
+		// (and drop routes to removed ones, even the last)
+		try {
+			await this.#ensureMesh(desired, existing);
+		} catch (error) {
+			// this node's own services and routes don't depend on the mesh
+			log(`the mesh failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
 		await this.#publishRoutes(desired);
 
@@ -243,6 +262,137 @@ export class Converger {
 			}
 		});
 		return this.#routes;
+	}
+
+	/**
+	 * The mesh container (WireGuard and the TCP forwards, see mesh-daemon.ts)
+	 * and one link per service on another node that this node's environments
+	 * use. Without a mesh, both are removed.
+	 */
+	async #ensureMesh(desired: DesiredState, existing: ManagedContainer[]) {
+		const log = this.options.log ?? quiet;
+		const nodeId = this.#node();
+		const name = meshContainerName(nodeId);
+		const network = meshNetworkName(nodeId);
+		const mesh = this.options.mesh && desired.mesh ? desired.mesh : null;
+		const owned = (role: string) => existing.filter((c) => c.labels[LABELS.role] === role);
+
+		const links = new Map(
+			(mesh?.links ?? []).map((link) => {
+				const spec: RunSpec = {
+					name: link.name,
+					image: SOCAT_IMAGE,
+					cmd: [
+						`TCP-LISTEN:${link.port},fork,reuseaddr`,
+						`TCP:${meshAlias(nodeId)}:${link.meshPort}`
+					],
+					env: {},
+					network: link.network,
+					aliases: [link.alias],
+					restart: { name: 'always', maxRetries: 0 },
+					security: {
+						capabilities: link.port < 1024 ? ['NET_BIND_SERVICE'] : [],
+						pidsLimit: 256,
+						memoryMb: 64,
+						readOnlyRootFilesystem: true
+					},
+					labels: {
+						[LABELS.managed]: 'true',
+						[LABELS.node]: nodeId,
+						[LABELS.role]: 'link',
+						[LABELS.spec]: hash({ link, image: SOCAT_IMAGE })
+					}
+				};
+				return [link.name, spec];
+			})
+		);
+		for (const container of owned('link')) {
+			if (links.get(container.name)?.labels[LABELS.spec] !== container.labels[LABELS.spec]) {
+				await this.runtime.remove(container.name);
+			}
+		}
+
+		const current = owned('mesh').find((c) => c.name === name);
+		if (!mesh) {
+			if (current) {
+				log('leaving the mesh');
+				await this.runtime.remove(name);
+			}
+			this.#meshApplied = null;
+			return;
+		}
+
+		const image = this.options.mesh!.image;
+		const hostPort = Number(this.options.mesh!.endpoint?.split(':').at(-1)) || mesh.listenPort;
+		const spec: RunSpec = {
+			name,
+			image,
+			cmd: ['mesh'],
+			env: {},
+			network,
+			aliases: [meshAlias(nodeId)],
+			restart: { name: 'always', maxRetries: 0 },
+			ports: [{ container: mesh.listenPort, host: hostPort, protocol: 'udp' }],
+			// relaying passes packets between peers, inside this container's namespace only
+			sysctls: { 'net.ipv4.ip_forward': '1' },
+			security: {
+				capabilities: ['NET_ADMIN'],
+				pidsLimit: 256,
+				memoryMb: 256,
+				readOnlyRootFilesystem: false
+			},
+			labels: {
+				[LABELS.managed]: 'true',
+				[LABELS.node]: nodeId,
+				[LABELS.role]: 'mesh',
+				[LABELS.spec]: hash({ image, port: mesh.listenPort, hostPort, alias: meshAlias(nodeId) })
+			}
+		};
+		let running = current;
+		if (running && running.labels[LABELS.spec] !== spec.labels[LABELS.spec]) {
+			await this.runtime.remove(name);
+			running = undefined;
+		}
+		if (!running) {
+			if (!(await this.runtime.hasImage(image))) await this.runtime.pull(image);
+			log('joining the mesh');
+			await this.runtime.run(spec);
+			this.#meshApplied = null;
+		}
+		// it delivers to services on this node through their environment networks
+		const joined = new Set(running?.networks ?? [network]);
+		for (const f of mesh.forwards) {
+			if (f.to === 'local' && !joined.has(f.network)) {
+				await this.runtime.connect(name, f.network);
+				joined.add(f.network);
+			}
+		}
+
+		const transitAddress = (await this.runtime.addresses(name))[network];
+		if (!transitAddress) throw new Error(`the mesh container has no address on ${network}`);
+		const { links: _links, ...rest } = mesh;
+		const config = JSON.stringify(
+			{ ...rest, privateKey: this.options.mesh!.privateKey, transitAddress } satisfies MeshConfig,
+			null,
+			2
+		);
+		if (config !== this.#meshApplied) {
+			await this.runtime.putFile(name, MESH_CONFIG_PATH, Buffer.from(config), 0o600);
+			this.#meshApplied = config;
+		}
+
+		const present = new Set(
+			owned('link')
+				.filter((c) => links.get(c.name)?.labels[LABELS.spec] === c.labels[LABELS.spec])
+				.map((c) => c.name)
+		);
+		for (const [linkName, linkSpec] of links) {
+			if (present.has(linkName)) continue;
+			if (!(await this.runtime.hasImage(SOCAT_IMAGE))) await this.runtime.pull(SOCAT_IMAGE);
+			await this.runtime.run(linkSpec);
+			// links reach the mesh container over the mesh network
+			await this.runtime.connect(linkName, network);
+		}
 	}
 
 	async #ensureIngress(desired: DesiredState, existing: ManagedContainer[]) {

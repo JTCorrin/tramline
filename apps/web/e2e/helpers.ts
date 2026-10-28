@@ -111,3 +111,10 @@ export function execIn(environmentId: string, image: string, command: string) {
 		encoding: 'utf8'
 	}).trim();
 }
+
+/**
+ * Every node online, however many there are: the two-node test adds one
+ * while other tests run.
+ */
+// whitespace as rendered: a regex sees the text unnormalised
+export const ALL_NODES_ONLINE = /(\d+)\/\1\s+nodes?\s+online/;

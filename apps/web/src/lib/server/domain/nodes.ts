@@ -12,6 +12,7 @@ import type { DbOrTx } from '../db/client';
 import { deployment, joinToken, node, service, user, volume } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
+import { meshMembers, routes } from '../nodes/mesh';
 import { hashToken, nodeStatus, requestedMemory } from '../nodes/registry';
 import type { Ctx } from './context';
 import { copyDeployment } from './deployments';
@@ -57,6 +58,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 			.all(),
 		(row) => row.nodeId
 	);
+	const members = meshMembers(ctx.db);
 	return ctx.db
 		.select()
 		.from(node)
@@ -64,6 +66,8 @@ export function list(ctx: Ctx): NodeSummary[] {
 		.all()
 		.map((row) => {
 			const here = placed.get(row.id) ?? [];
+			const me = members.find((m) => m.id === row.id);
+			const reach = me && members.length > 1 ? routes(members, me) : null;
 			return {
 				id: row.id,
 				name: row.name,
@@ -79,6 +83,15 @@ export function list(ctx: Ctx): NodeSummary[] {
 				deployments: here.length,
 				cordoned: row.cordoned,
 				draining: row.draining,
+				edge: row.edge,
+				mesh: row.meshAddress
+					? {
+							address: row.meshAddress,
+							endpoint: row.meshEndpoint,
+							unreachable: reach?.unreachable.map((m) => m.name) ?? [],
+							relayed: reach?.relayed.map((r) => ({ node: r.node.name, via: r.via.name })) ?? []
+						}
+					: null,
 				createdAt: row.createdAt.toISOString()
 			};
 		});
@@ -135,15 +148,23 @@ function requireNode(ctx: Ctx, id: string) {
 	return row;
 }
 
-/** Cordoning stops new deployments landing on a node; uncordoning also ends a drain. */
+/**
+ * Cordoning stops new deployments landing on a node, and uncordoning also
+ * ends a drain. An edge node serves every public domain; the mesh endpoint
+ * is where other nodes reach this one.
+ */
 export function update(ctx: Ctx, id: string, input: UpdateNode) {
 	requireInstallAdmin(ctx, 'change nodes');
 	requireNode(ctx, id);
-	ctx.db
-		.update(node)
-		.set(input.cordoned ? { cordoned: true } : { cordoned: false, draining: false })
-		.where(eq(node.id, id))
-		.run();
+	const changes = {
+		...(input.cordoned === true ? { cordoned: true } : {}),
+		...(input.cordoned === false ? { cordoned: false, draining: false } : {}),
+		...(input.edge !== undefined ? { edge: input.edge } : {}),
+		...(input.meshEndpoint !== undefined ? { meshEndpoint: input.meshEndpoint } : {})
+	};
+	if (Object.keys(changes).length) {
+		ctx.db.update(node).set(changes).where(eq(node.id, id)).run();
+	}
 	notifyNodes();
 	return list(ctx).find((n) => n.id === id)!;
 }

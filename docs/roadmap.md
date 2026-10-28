@@ -491,32 +491,46 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
 - **Scheduling:**
   - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room.
   - **Preferences:** the node that built the image (anywhere else rebuilds the same commit), then the node already running the environment (its services share one Docker network until the mesh lands), then the least loaded node.
-- **Nodes page:** status, CPUs, memory reserved by limits, deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. Until 6b adds cross-node networking, placements that would separate different services in an environment stay queued, including pins, memory spillover and drains. A drain can therefore wait while another service remains on the original node. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
-- **Still to come in 6b and 6c:**
-  - **Cross-node networking:** services on different nodes can't reach each other until the WireGuard mesh, which is why the scheduler keeps environments together.
-  - **Ingress:** each node serves its own deployments' routes, so public domains need the edge role to work across nodes.
-  - **Spreading replicas across nodes,** CPU requests, metrics and node hardening checks.
+- **Nodes page:** status, CPUs, memory reserved by limits, deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
+- **Still to come:** CPU requests, metrics and node hardening checks. (Cross-node networking and edge nodes arrived in 6b; the scheduler still prefers to keep an environment together, which saves a hop.)
 
-**6b: mesh**
+**6b: mesh ✅** (verified on Docker with a Docker-in-Docker node; e2e in CI)
 
-- WireGuard mesh managed by agents and coordinated by the control plane; per-node DNS for `*.tramline.internal` across nodes; edge/ingress node role; replicas spread across nodes; the TCP proxy for databases.
+- **WireGuard between nodes:**
+  - **Keys:** each agent creates its own key pair. The private key stays on the node, and the control plane only sees public keys and hands out addresses in `10.231.0.0/16`.
+  - **The mesh container:** it holds the tunnel in its own network namespace, with `NET_ADMIN` and no other capability. Nothing on the host changes: no routes, no firewall rules, no IP forwarding.
+  - **Reaching a node:** a node with an endpoint (`--endpoint host:port` in the install command, or set on the Nodes page) is reached directly. Nodes behind NAT connect out to it, and two NATed nodes reach each other through it as a relay. The Nodes page says when a pair has no way through.
+- **Private names across nodes, one TCP port at a time:**
+  - **Links:** a tiny socat container on the consumer's node answers to the remote service's private name (e.g. `postgres.production.tramline.internal`) on that environment's network only. It forwards to the mesh container, which carries the connection to the service's node.
+  - **Isolation:** environments stay isolated as they are on one node, and only a service's declared port crosses nodes.
+  - **Ports:** each service gets the same mesh port everywhere, from a hash, so adding one never moves another.
+- **Edge nodes:** an edge serves every public domain, forwarding over the mesh to the node a service runs on. The local node is an edge by default. Other nodes serve their own services' domains as before.
+- **Isolation of failures:** if the mesh can't start, a node still runs its services and serves its routes.
+- **Moved to 6b.2:** spreading a service's replicas across nodes, and the TCP proxy for databases. Edge traffic to another node follows the service's private name, so during a deploy it can briefly reach the new deployment before its healthcheck passes; 6b.2 routes it to the live deployment only.
 
 **6c: adapters and Proxmox**
 
 - `packages/adapter-sdk` (contract, conformance suite, fake adapter), adapter registry, `adapter_account` UI with a form generated from each adapter's zod credentials schema and a "Test connection" button.
+- **GPUs in the contract from the start:** an adapter declares whether it has GPUs, and each offer carries the GPU model, count, VRAM and price. Nodes report their GPUs at hello, so GPU machines join the same placement and price comparison as everything else instead of being a separate kind of adapter.
 - **`manual` adapter** (6a's join tokens, behind the adapter contract). **`proxmox` adapter**: provisions VMs from a cloud-init template via the Proxmox API, and they enroll on their own.
 - Metrics: agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
 - **Exit:** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 
-### Phase 7: Cloud adapters + node pools
+### Phase 7: Cloud adapters, GPU nodes and node pools
 
 - Further adapters on the same contract, in order: **Hetzner**, **AWS EC2**, **GCP Compute**, **Azure VMs**. Each one is a package that passes the conformance suite, with no changes to core.
+- **GPU nodes:**
+  - **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
+  - **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
+  - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
+  - **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
+  - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
 - Node pools per environment (adapter account + region + size, min/max) and auto-provisioning when the scheduler can't fit a workload. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
-- **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM.
+- **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
 
 ### Phase 8: Price engine and placement
 
-- Catalog sync jobs call each adapter's `listOffers`. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
+- Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
 - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
 - UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
 - **Exit:** for a given set of service requirements, Tramline shows a ranked provider/region/instance list with monthly cost and provisions the chosen option in one click.

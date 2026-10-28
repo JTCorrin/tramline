@@ -12,8 +12,10 @@ COPY apps/agent apps/agent
 RUN pnpm --filter @tramline/agent bundle
 
 FROM node:24-alpine
-# tini forwards signals, so the agent shuts down cleanly on `docker stop`
-RUN apk add --no-cache tini
+# tini forwards signals, so the agent shuts down cleanly on `docker stop`; the same
+# image runs each node's mesh container (`mesh`), which needs ip and wg
+RUN apk add --no-cache tini iproute2 wireguard-tools-wg \
+	&& mkdir -p /etc/tramline
 COPY --from=build /src/apps/agent/dist/agent.mjs /opt/tramline/agent.mjs
 ENV NODE_ENV=production \
 	TRAMLINE_AGENT_STATE_DIR=/var/lib/tramline

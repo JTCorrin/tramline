@@ -38,3 +38,7 @@ export const TRIVY = {
 	} as Record<string, string>,
 	target: { aarch64: 'Linux-ARM64', x86_64: 'Linux-64bit' } as Record<string, string>
 };
+
+/** Forwards one TCP port for a mesh link: a few MB, nothing else in it. */
+export const SOCAT_IMAGE =
+	'alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e';

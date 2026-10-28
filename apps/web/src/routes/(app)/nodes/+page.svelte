@@ -10,7 +10,7 @@
 	import { timeAgo } from '#lib/format.js';
 	import { cn } from '#lib/utils.js';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import type { CreatedJoinToken, NodeSummary } from '@tramline/contracts';
+	import type { CreatedJoinToken, NodeSummary, UpdateNode } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import type { PageProps } from './$types';
 
@@ -62,6 +62,15 @@
 			} else {
 				await api().nodes.update(node.id, { cordoned: action === 'cordon' });
 			}
+			await refresh();
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	async function configure(node: NodeSummary, input: UpdateNode) {
+		try {
+			await api().nodes.update(node.id, input);
 			await refresh();
 		} catch (error) {
 			reportError(error);
@@ -155,6 +164,7 @@
 					{:else if node.cordoned}
 						<Badge variant="secondary">Cordoned</Badge>
 					{/if}
+					{#if node.edge}<Badge variant="outline">Edge</Badge>{/if}
 					<span class="ml-auto text-xs text-muted-foreground">
 						{node.deployments} deployment{node.deployments === 1 ? '' : 's'}
 					</span>
@@ -169,6 +179,19 @@
 						)}{/if}
 				</div>
 				{#if node.error}<p class="mt-1 text-xs text-red-400">{node.error}</p>{/if}
+				{#if node.mesh}
+					<div class="mt-1 text-xs text-muted-foreground" data-testid="node-mesh">
+						Mesh {node.mesh.address} ·
+						{node.mesh.endpoint ? `reachable at ${node.mesh.endpoint}` : 'behind NAT'}
+						{#each node.mesh.relayed as r (r.node)}· reaches {r.node} via {r.via}{/each}
+					</div>
+					{#if node.mesh.unreachable.length}
+						<p class="mt-1 text-xs text-amber-400">
+							Can't reach {node.mesh.unreachable.join(', ')}: neither side has a public address, and
+							no node can relay. Give one of them a mesh endpoint.
+						</p>
+					{/if}
+				{/if}
 				{#if node.memoryMb}
 					<div class="mt-3 space-y-1">
 						<div class="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -195,6 +218,33 @@
 						{#if node.name !== 'local'}
 							<Button size="sm" variant="ghost" onclick={() => act(node, 'remove')}>Remove</Button>
 						{/if}
+					</div>
+					<div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
+						<label class="flex items-center gap-2">
+							<Switch
+								checked={node.edge}
+								onCheckedChange={(edge) => configure(node, { edge })}
+								aria-label="Edge node"
+							/>
+							Edge: serve every public domain
+						</label>
+						<form
+							class="flex items-center gap-2"
+							onsubmit={(event) => {
+								event.preventDefault();
+								const value = new FormData(event.currentTarget).get('endpoint');
+								configure(node, { meshEndpoint: String(value ?? '').trim() || null });
+							}}
+						>
+							<Input
+								name="endpoint"
+								class="h-8 w-56 font-mono text-xs"
+								placeholder="Mesh endpoint, e.g. 203.0.113.7:51820"
+								aria-label="Mesh endpoint"
+								value={node.mesh?.endpoint ?? ''}
+							/>
+							<Button size="sm" variant="outline" type="submit">Save</Button>
+						</form>
 					</div>
 				{/if}
 			</li>
