@@ -156,22 +156,28 @@ export async function runMeshDaemon(path: string, options: DaemonOptions = {}) {
 	const log = options.log ?? console.log;
 	const forwarder = new Forwarder(log);
 	let applied = '';
+	let lastError = '';
 	log('[mesh] waiting for config');
 	while (!options.signal?.aborted) {
 		try {
 			const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
 			if (text && text !== applied) {
-				// remembered even if it fails, so a broken config is reported once
-				applied = text;
 				const config = JSON.parse(text) as MeshConfig;
 				await applyTunnel(config, options.exec);
 				await forwarder.apply(config);
+				if (forwarder.ports.length !== config.forwards.length) {
+					throw new Error('Some mesh forwards could not bind; retrying');
+				}
+				applied = text;
+				lastError = '';
 				log(
 					`[mesh] ${config.address}: ${config.peers.length} peers, forwarding ${forwarder.ports.length} ports`
 				);
 			}
 		} catch (error) {
-			log(`[mesh] ${error instanceof Error ? error.message : String(error)}`);
+			const message = error instanceof Error ? error.message : String(error);
+			if (message !== lastError) log(`[mesh] ${message}`);
+			lastError = message;
 		}
 		await new Promise((resolve) => setTimeout(resolve, options.intervalMs ?? 1_000));
 	}
