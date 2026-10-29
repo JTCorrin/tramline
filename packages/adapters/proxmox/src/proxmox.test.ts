@@ -27,6 +27,8 @@ interface Vm {
 	tags: string;
 	config: Record<string, string>;
 	type: 'qemu';
+	/** What cluster/resources reports, when it lags behind the VM's own status */
+	listed?: 'running' | 'stopped';
 }
 
 let vms: Vm[];
@@ -74,7 +76,10 @@ async function handle(method: string, url: URL, form: URLSearchParams) {
 		];
 	}
 	if (method === 'GET' && p === 'cluster/resources') {
-		return vms.map(({ config: _config, ...vm }) => vm);
+		return vms.map(({ config: _config, listed, ...vm }) => ({
+			...vm,
+			status: listed ?? vm.status
+		}));
 	}
 	if (method === 'GET' && p === 'cluster/nextid') {
 		// like Proxmox: the lowest free ID from 100
@@ -112,6 +117,7 @@ async function handle(method: string, url: URL, form: URLSearchParams) {
 		if (form.get('tags')) vm.tags = form.get('tags')!;
 		return null;
 	}
+	if (vm && m![3] === '/status/current' && method === 'GET') return { status: vm.status };
 	if (vm && m![3] === '/status/start' && method === 'POST') {
 		vm.status = 'running';
 		return task(vm.node);
@@ -290,6 +296,17 @@ describe('the Proxmox adapter', () => {
 		expect(await adapter.getNode(creds(), '100')).toBeNull();
 		// already gone is fine
 		await adapter.destroyNode(creds(), '555');
+	});
+
+	it('stops a VM before destroying it, even while the cluster still lists it as stopped', async () => {
+		await adapter.createNode(creds(), spec());
+		const vm = vms.find((v) => v.vmid === 101)!;
+		vm.listed = 'stopped';
+		await adapter.destroyNode(creds(), '101');
+		expect(requests.join('\n')).toMatch(
+			/POST \S+\/qemu\/101\/status\/stop\n[^]*DELETE \S+\/qemu\/101/
+		);
+		expect(vms.some((v) => v.vmid === 101)).toBe(false);
 	});
 
 	it('removes a clone it could not set up', async () => {
