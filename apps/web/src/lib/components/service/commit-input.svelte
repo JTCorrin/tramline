@@ -7,6 +7,7 @@
 		value,
 		placeholder,
 		type = 'text',
+		step,
 		mono = false,
 		onsave
 	}: {
@@ -14,6 +15,8 @@
 		value: string | number | null;
 		placeholder?: string;
 		type?: 'text' | 'number';
+		/** For number inputs; whole numbers unless set. */
+		step?: string;
 		mono?: boolean;
 		/** Called on blur or Enter when the value changed; empty input saves null. */
 		onsave: (value: string | null) => void;
@@ -33,6 +36,7 @@
 <Input
 	{id}
 	{type}
+	{step}
 	{placeholder}
 	class={cn(mono && 'font-mono text-xs')}
 	value={draft ?? current}

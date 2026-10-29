@@ -326,6 +326,35 @@
 					onsave={(v) => stage('deploy', { memoryMb: toNumber(v) })}
 				/>
 			</Setting>
+			<Setting
+				label="Memory request (MB)"
+				for="deploy-memory-request"
+				staged={staged('deploy', 'memoryRequestMb')}
+				description="Reserved on the node for each replica. Defaults to the limit."
+			>
+				<CommitInput
+					id="deploy-memory-request"
+					type="number"
+					placeholder={config.deploy.memoryMb ? String(config.deploy.memoryMb) : 'None'}
+					value={config.deploy.memoryRequestMb}
+					onsave={(v) => stage('deploy', { memoryRequestMb: toNumber(v) })}
+				/>
+			</Setting>
+			<Setting
+				label="CPU request"
+				for="deploy-cpu-request"
+				staged={staged('deploy', 'cpuRequest')}
+				description="Cores reserved for each replica, e.g. 0.5."
+			>
+				<CommitInput
+					id="deploy-cpu-request"
+					type="number"
+					step="0.05"
+					placeholder="None"
+					value={config.deploy.cpuRequest}
+					onsave={(v) => stage('deploy', { cpuRequest: toNumber(v) })}
+				/>
+			</Setting>
 			<div class="flex items-start justify-between gap-3 rounded-lg border p-3">
 				<div>
 					<div class="flex items-center gap-2 text-sm font-medium">

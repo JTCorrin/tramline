@@ -77,6 +77,13 @@ export const DeployConfig = z.object({
 	cronSchedule: optionalText,
 	/** Hard memory limit; null for no limit. */
 	memoryMb: z.number().int().min(16).max(262_144).nullable(),
+	/**
+	 * Memory each replica reserves on its node, which the scheduler packs by.
+	 * Null reserves the limit, if there is one.
+	 */
+	memoryRequestMb: z.number().int().min(16).max(262_144).nullable(),
+	/** CPU cores each replica reserves, e.g. 0.25. Null reserves none. */
+	cpuRequest: z.number().min(0.01).max(256).nullable(),
 	/** Mount the container's root filesystem read-only (with a writable /tmp). */
 	readOnlyRootFilesystem: z.boolean(),
 	/** Run only on this node (its id); null lets the scheduler choose. */
@@ -154,6 +161,8 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		restartPolicy: 'on_failure',
 		cronSchedule: null,
 		memoryMb: null,
+		memoryRequestMb: null,
+		cpuRequest: null,
 		readOnlyRootFilesystem: false,
 		node: null
 	},

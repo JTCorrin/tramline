@@ -8,6 +8,8 @@ test("a node's CPU, memory and disk are charted from its agent's samples", async
 	await becomeInstallAdmin(page);
 	const add = page.getByTestId('add-node');
 	await add.getByLabel('Name').fill('metrics-box');
+	// cordoned from the start, so other tests' deployments never land on it
+	await add.getByRole('switch', { name: 'Start cordoned' }).click();
 	await add.getByRole('button', { name: 'Create join command' }).click();
 	const token = (await page.getByTestId('join-command').inputValue()).split('--token ')[1]!;
 
@@ -29,9 +31,6 @@ test("a node's CPU, memory and disk are charted from its agent's samples", async
 	expect(joined.ok()).toBe(true);
 	const { token: nodeToken, nodeId } = (await joined.json()) as { token: string; nodeId: string };
 	try {
-		expect(
-			(await page.request.patch(`/api/v1/nodes/${nodeId}`, { data: { cordoned: true } })).ok()
-		).toBe(true);
 		const send = (cpuPercent: number) =>
 			request.post('/api/agent/v1/metrics', {
 				headers: { authorization: `Bearer ${nodeToken}` },
@@ -67,6 +66,8 @@ test("a node's CPU, memory and disk are charted from its agent's samples", async
 			'2.9 GB of 7.8 GB'
 		);
 		await expect(metrics.getByTestId('node-disk')).toContainText('45 GB of 100 GB (45%)');
+		// what's reserved by requests sits beside what's measured
+		await expect(row.getByTestId('node-reserved')).toContainText('CPU: 0 CPUs of 4 CPUs reserved');
 
 		// the chart moves through time with the keyboard, and the same numbers come as a table
 		const slider = cpu.getByRole('slider');
@@ -83,13 +84,10 @@ test("a node's CPU, memory and disk are charted from its agent's samples", async
 			'true'
 		);
 	} finally {
-		expect(
-			(
-				await page.request.delete(`/api/v1/nodes/${nodeId}`, {
-					headers: { origin: new URL(page.url()).origin }
-				})
-			).ok()
-		).toBe(true);
+		const removed = await page.request.delete(`/api/v1/nodes/${nodeId}`, {
+			headers: { origin: new URL(page.url()).origin }
+		});
+		expect(removed.ok(), await removed.text()).toBe(true);
 	}
 });
 
@@ -113,6 +111,15 @@ test("a service's Metrics tab shows its charts, empty until its deployments repo
 	);
 	await metrics.getByRole('button', { name: '30d' }).click();
 	await expect(metrics).toContainText('Hourly averages.');
+
+	// requests are set beside the memory limit, and staged like any other change
+	await panel.getByRole('tab', { name: 'Settings' }).click();
+	await page.getByLabel('CPU request').fill('0.5');
+	await page.getByLabel('CPU request').press('Enter');
+	await page.getByLabel('Memory request (MB)').fill('256');
+	await page.getByLabel('Memory request (MB)').press('Enter');
+	await expect(page.getByLabel('CPU request')).toHaveValue('0.5');
+	await expect(page.getByLabel('Memory request (MB)')).toHaveValue('256');
 
 	// the API behind it checks the range and the node
 	expect((await page.request.get('/api/v1/alerts')).ok()).toBe(true);

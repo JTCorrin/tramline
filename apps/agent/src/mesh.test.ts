@@ -237,6 +237,41 @@ describe('mesh daemon', () => {
 		echo.close();
 	});
 
+	it('takes turns between the nodes of a spread service, and skips one that refuses', async () => {
+		const port = 30_000 + Math.floor(Math.random() * 20_000);
+		// two "nodes" on loopback addresses, answering on the service's mesh port
+		const node = (name: string, host: string) =>
+			new Promise<net.Server>((resolve) => {
+				const server = net.createServer((socket) => socket.end(name));
+				server.listen(port, host, () => resolve(server));
+			});
+		const a = await node('a', '127.0.0.2');
+		const b = await node('b', '127.0.0.3');
+		const forwarder = new Forwarder(() => {});
+		await forwarder.apply({
+			...config,
+			transitAddress: '127.0.0.1',
+			forwards: [
+				{ to: 'remote', port, address: '127.0.0.2', addresses: ['127.0.0.2', '127.0.0.3'] }
+			]
+		});
+		const ask = () =>
+			new Promise<string>((resolve, reject) => {
+				let reply = '';
+				const socket = net.connect(port, '127.0.0.1');
+				socket.on('data', (data) => (reply += data));
+				socket.on('close', () => resolve(reply));
+				socket.on('error', reject);
+			});
+		expect([await ask(), await ask(), await ask()]).toEqual(['a', 'b', 'a']);
+
+		await new Promise((resolve) => a.close(resolve));
+		expect([await ask(), await ask()]).toEqual(['b', 'b']);
+
+		forwarder.close();
+		b.close();
+	});
+
 	it('retries an unchanged config after a transient tunnel failure', async () => {
 		const dir = mkdtempSync(path.join(tmpdir(), 'tl-meshd-retry-'));
 		const file = path.join(dir, 'mesh.json');

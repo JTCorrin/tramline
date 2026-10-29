@@ -156,7 +156,13 @@ export const deployment = sqliteTable(
 			.notNull()
 			.default(sql`'[]'`),
 		createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+		/** Where it builds, and where its replicas run unless `replicaNodes` spreads them. */
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		/**
+		 * The node of each replica, by index, when they are spread across nodes;
+		 * null when every replica runs on `nodeId`. The first is always `nodeId`.
+		 */
+		replicaNodes: text('replica_nodes', { mode: 'json' }).$type<string[]>(),
 		/** Why it is in its current status, shown in the UI. */
 		message: text('message'),
 		/** When the current stage (build, then deploy) started; timeouts count from here, not from queueing. */

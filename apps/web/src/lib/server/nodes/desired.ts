@@ -23,6 +23,7 @@ import {
 	planMesh,
 	planTcpProxies
 } from './mesh';
+import { onNode, replicaNode } from './placement';
 import { pendingQueries } from './queries';
 import { deletedVolumes, recreatePlan, volumeFor, volumeName } from './volumes';
 
@@ -71,12 +72,7 @@ export function buildDesiredState(
 		)
 		.innerJoin(service, eq(service.id, deployment.serviceId))
 		.innerJoin(project, eq(project.id, service.projectId))
-		.where(
-			and(
-				eq(deployment.nodeId, nodeId),
-				inArray(deployment.status, [...RUNNING_STATUSES, 'building'])
-			)
-		)
+		.where(and(onNode(nodeId), inArray(deployment.status, [...RUNNING_STATUSES, 'building'])))
 		.orderBy(deployment.id)
 		.all();
 
@@ -113,6 +109,8 @@ export function buildDesiredState(
 		const env = JSON.parse(secrets.decrypt(dep.variables)) as Record<string, string>;
 
 		if (dep.status === 'building') {
+			// builds and scans run on the deployment's own node
+			if (dep.nodeId !== nodeId) continue;
 			if (config.source?.type === 'image') {
 				if (config.build.scan !== 'off') {
 					scans.push({ deploymentId: dep.id, image: config.source.image, scan: config.build.scan });
@@ -170,6 +168,7 @@ export function buildDesiredState(
 
 		// a cron service only has containers while a run is going
 		if (config.deploy.cronSchedule) {
+			if (dep.nodeId !== nodeId) continue;
 			for (const run of runs.get(dep.id) ?? []) {
 				containers.push({
 					name: runContainerName(run.id),
@@ -195,6 +194,8 @@ export function buildDesiredState(
 		}
 
 		for (let replica = 0; replica < config.deploy.replicas; replica++) {
+			// spread replicas run on their own nodes
+			if (replicaNode(dep, replica) !== nodeId) continue;
 			containers.push({
 				name: containerName(dep.id, replica),
 				deploymentId: dep.id,
@@ -260,7 +261,7 @@ export function buildDesiredState(
 		const forwarded = new Set(mesh.forwards.filter((f) => f.to === 'remote').map((f) => f.port));
 		for (const e of exports) {
 			const port = ports.get(`${e.environmentId}:${e.serviceId}`)!;
-			if (!self?.edge || e.nodeId === nodeId || !forwarded.has(port)) continue;
+			if (!self?.edge || e.nodeIds.includes(nodeId) || !forwarded.has(port)) continue;
 			for (const { host, custom } of e.hosts) {
 				routes.push({
 					host,

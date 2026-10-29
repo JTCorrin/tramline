@@ -5,7 +5,8 @@ import { publish } from '../events';
 import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
-import { isOnline, ONLINE_WINDOW_MS, requestedMemory } from './registry';
+import { nodesOf, replicaNode, replicaRequest, reservedOn } from './placement';
+import { isOnline, ONLINE_WINDOW_MS } from './registry';
 import { isCron, runCronSchedules } from './cron';
 import { ensureVolume, recreatePlan, volumeFor } from './volumes';
 
@@ -27,6 +28,8 @@ interface Transition {
 	status?: Status;
 	message: string | null;
 	nodeId?: string;
+	/** Where each replica runs, when they are spread; null puts them all on `nodeId`. */
+	replicaNodes?: string[] | null;
 	startedAt?: Date;
 	/** Other columns to update, e.g. the built image. */
 	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit' | 'scan'>>;
@@ -57,10 +60,12 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 		const extra = Object.entries(t.set ?? {}).filter(
 			([key, value]) => dep[key as keyof DeploymentRow] !== value
 		);
+		const replicaNodes = t.replicaNodes !== undefined ? t.replicaNodes : dep.replicaNodes;
 		if (
 			status === dep.status &&
 			t.message === dep.message &&
 			(t.nodeId ?? dep.nodeId) === dep.nodeId &&
+			JSON.stringify(replicaNodes) === JSON.stringify(dep.replicaNodes) &&
 			!extra.length
 		) {
 			return;
@@ -71,6 +76,7 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 				status,
 				message: t.message,
 				nodeId: t.nodeId ?? dep.nodeId,
+				replicaNodes,
 				startedAt: t.startedAt ?? dep.startedAt,
 				...Object.fromEntries(extra)
 			})
@@ -90,29 +96,37 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 		.where(inArray(deployment.status, ['queued', 'building', 'deploying', 'active', 'crashed']))
 		.orderBy(asc(deployment.createdAt), asc(deployment.id))
 		.all();
-	// only what the assigned node says counts (recordReport already enforces it). Every
+	// only what each replica's node says counts (recordReport already enforces it). Every
 	// deployment, not just live ones: a stopping one's containers hold back its replacement
-	const nodeOf = new Map(
+	const placement = new Map(
 		db
-			.select({ id: deployment.id, nodeId: deployment.nodeId })
+			.select({
+				id: deployment.id,
+				nodeId: deployment.nodeId,
+				replicaNodes: deployment.replicaNodes
+			})
 			.from(deployment)
 			.all()
-			.map((d) => [d.id, d.nodeId])
+			.map((d) => [d.id, d])
 	);
 	const containers = Map.groupBy(
 		db
 			.select()
 			.from(container)
 			.all()
-			.filter((row: ContainerRow) => nodeOf.get(row.deploymentId) === row.nodeId),
+			.filter((row: ContainerRow) => {
+				const dep = placement.get(row.deploymentId);
+				return dep !== undefined && replicaNode(dep, row.replica) === row.nodeId;
+			}),
 		(row: ContainerRow) => row.deploymentId
 	);
+	// builds and scans happen on the deployment's own node
 	const builds = new Map(
 		db
 			.select()
 			.from(build)
 			.all()
-			.filter((row) => nodeOf.get(row.deploymentId) === row.nodeId)
+			.filter((row) => placement.get(row.deploymentId)?.nodeId === row.nodeId)
 			.map((row) => [row.deploymentId, row])
 	);
 
@@ -121,7 +135,7 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	for (const dep of active.filter((d) => d.status === 'queued')) {
 		const t = schedule(db, dep, { online, all: nodes, placed }, now);
 		apply(dep, t);
-		if (t.nodeId) placed.push({ ...dep, nodeId: t.nodeId });
+		if (t.nodeId) placed.push({ ...dep, nodeId: t.nodeId, replicaNodes: t.replicaNodes ?? null });
 		// the volume lives on the node the service first ran on
 		if (t.nodeId && dep.config.volume?.mountPath) {
 			ensureVolume(db, dep.serviceId, dep.environmentId, t.nodeId);
@@ -168,12 +182,14 @@ interface Cluster {
  * Hard rules: a service with a volume runs where its data is, and a service
  * pinned to a node runs only there, even when that node is cordoned (so a
  * database can always be redeployed, and you can place work on a node you
- * are still checking); cordoned nodes take nothing else; and a deployment
- * with a memory limit needs that much memory free.
+ * are still checking); cordoned nodes take nothing else; and every replica
+ * needs room for its CPU and memory requests (a memory limit counts as the
+ * request when there is none).
  *
- * Then preferences: the node that built the image (others don't have it), a
- * node already running the same environment (its services find each other on
- * one Docker network until the cross-node mesh arrives), and the least loaded.
+ * Replicas of a registry image spread over as many nodes as there are,
+ * fewest replicas first. Otherwise, preferences: the node that built the
+ * image (others don't have it), a node already running the same environment
+ * (which saves a hop over the mesh), and the least loaded by its requests.
  */
 function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Transition {
 	const { online, all, placed } = cluster;
@@ -222,38 +238,85 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	}
 
 	const others = placed.filter((d) => d.id !== dep.id);
-	const allocated = (n: NodeRow) =>
-		others.filter((d) => d.nodeId === n.id).reduce((sum, d) => sum + requestedMemory(d.config), 0);
-	const wanted = requestedMemory(dep.config);
-	// nodes that haven't reported their memory yet are given the benefit of the doubt
-	const fits = candidates.filter(
-		(n) => !wanted || !n.info?.memoryMb || n.info.memoryMb - allocated(n) >= wanted
+	const reserved = new Map(
+		candidates.map((n) => [
+			n.id,
+			others.reduce(
+				(sum, d) => {
+					const r = reservedOn(d, n.id);
+					return { memoryMb: sum.memoryMb + r.memoryMb, cpus: sum.cpus + r.cpus };
+				},
+				{ memoryMb: 0, cpus: 0 }
+			)
+		])
 	);
-	if (!fits.length) {
-		return {
-			message: `Waiting for a node with ${wanted} MB of memory free`
-		};
-	}
+	const one = replicaRequest(dep.config);
+	const cron = Boolean(dep.config.deploy.cronSchedule);
+	const replicas = cron ? 1 : dep.config.deploy.replicas;
+	// nodes that haven't reported their size yet are given the benefit of the doubt
+	const room = (n: NodeRow, count: number) => {
+		const used = reserved.get(n.id)!;
+		const memory =
+			!one.memoryMb || !n.info?.memoryMb || n.info.memoryMb - used.memoryMb >= one.memoryMb * count;
+		const cpu = !one.cpus || !n.info?.cpus || n.info.cpus - used.cpus >= one.cpus * count - 1e-9;
+		return memory && cpu;
+	};
 
 	// a built image lives on the node that built it; anywhere else builds it again
 	const builtOn =
 		dep.config.source?.type === 'repo' && dep.image ? builder(db, dep.image) : undefined;
 	const sameEnvironment = (n: NodeRow) =>
-		others.filter((d) => d.nodeId === n.id && d.environmentId === dep.environmentId).length;
-	const load = (n: NodeRow) =>
-		n.info?.memoryMb
-			? allocated(n) / n.info.memoryMb
-			: others.filter((d) => d.nodeId === n.id).length;
-	const ranked = fits
-		.map((n, order) => ({ n, order }))
-		.sort(
-			(a, b) =>
-				Number(b.n.id === builtOn) - Number(a.n.id === builtOn) ||
-				sameEnvironment(b.n) - sameEnvironment(a.n) ||
-				load(a.n) - load(b.n) ||
-				a.order - b.order
-		);
-	const target = ranked[0]!.n;
+		others.filter((d) => nodesOf(d).includes(n.id) && d.environmentId === dep.environmentId).length;
+	const load = (n: NodeRow, extra = 0) => {
+		const used = reserved.get(n.id)!;
+		const memory = n.info?.memoryMb ? (used.memoryMb + one.memoryMb * extra) / n.info.memoryMb : 0;
+		const cpu = n.info?.cpus ? (used.cpus + one.cpus * extra) / n.info.cpus : 0;
+		return n.info?.memoryMb || n.info?.cpus
+			? Math.max(memory, cpu)
+			: others.filter((d) => nodesOf(d).includes(n.id)).length;
+	};
+
+	// Replicas of a registry image spread across nodes, since every node can pull it. A
+	// built image is only on the node that built it, and data or a pin holds a service to one node.
+	const spread = replicas > 1 && !home && !pin && dep.config.source?.type === 'image';
+	let target: NodeRow;
+	let replicaNodes: string[] | null = null;
+	if (spread) {
+		const count = new Map<string, number>();
+		const chosen: NodeRow[] = [];
+		for (let r = 0; r < replicas; r++) {
+			const fits = candidates.filter((n) => room(n, (count.get(n.id) ?? 0) + 1));
+			if (!fits.length) return { message: waitingFor(one, replicas) };
+			const best = fits
+				.map((n, order) => ({ n, order }))
+				.sort(
+					(a, b) =>
+						(count.get(a.n.id) ?? 0) - (count.get(b.n.id) ?? 0) ||
+						sameEnvironment(b.n) - sameEnvironment(a.n) ||
+						load(a.n, count.get(a.n.id) ?? 0) - load(b.n, count.get(b.n.id) ?? 0) ||
+						a.order - b.order
+				)[0]!.n;
+			count.set(best.id, (count.get(best.id) ?? 0) + 1);
+			chosen.push(best);
+		}
+		target = chosen[0]!;
+		replicaNodes = count.size > 1 ? chosen.map((n) => n.id) : null;
+	} else {
+		const fits = candidates.filter((n) => room(n, replicas));
+		if (!fits.length) return { message: waitingFor(one, replicas) };
+		target = fits
+			.map((n, order) => ({ n, order }))
+			.sort(
+				(a, b) =>
+					Number(b.n.id === builtOn) - Number(a.n.id === builtOn) ||
+					sameEnvironment(b.n) - sameEnvironment(a.n) ||
+					load(a.n) - load(b.n) ||
+					a.order - b.order
+			)[0]!.n;
+	}
+	const where = replicaNodes
+		? `nodes ${[...new Set(replicaNodes)].map(named).join(', ')}`
+		: `node ${target.name}`;
 	const rebuild = Boolean(builtOn !== undefined && target.id !== builtOn);
 	const image = rebuild ? null : dep.image;
 
@@ -261,6 +324,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		return {
 			status: 'building',
 			nodeId: target.id,
+			replicaNodes,
 			startedAt: new Date(now),
 			message: 'Scanning image',
 			log: `Scanning on node ${target.name}`
@@ -270,6 +334,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		return {
 			status: 'building',
 			nodeId: target.id,
+			replicaNodes: null,
 			startedAt: new Date(now),
 			message: 'Waiting for the builder',
 			log: rebuild
@@ -281,10 +346,24 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	return {
 		status: 'deploying',
 		nodeId: target.id,
+		replicaNodes,
 		startedAt: new Date(now),
 		message: 'Pulling image',
-		log: `Scheduled on node ${target.name}`
+		log: `Scheduled on ${where}`
 	};
+}
+
+/** Why a deployment can't be placed yet: no node has room for its requests. */
+function waitingFor(one: { memoryMb: number; cpus: number }, replicas: number) {
+	const each = [
+		one.memoryMb ? `${one.memoryMb} MB of memory` : null,
+		one.cpus ? `${one.cpus} CPU` : null
+	]
+		.filter(Boolean)
+		.join(' and ');
+	return replicas > 1
+		? `Waiting for room for ${replicas} replicas with ${each} each`
+		: `Waiting for a node with ${each} free`;
 }
 
 /** The node that built an image: the first deployment that ran it. */
