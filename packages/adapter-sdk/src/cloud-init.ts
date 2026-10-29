@@ -16,9 +16,11 @@ export function cloudInit(install: { url: string; token: string }) {
 		'  else echo "tramline: no package manager to install Docker with" >&2; exit 1; fi',
 		'fi',
 		'systemctl enable --now docker',
-		'if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ] && ! command -v qemu-ga >/dev/null 2>&1; then',
-		'  { if command -v apt-get >/dev/null 2>&1; then apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq qemu-guest-agent',
+		'if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ]; then',
+		'  { if ! command -v qemu-ga >/dev/null 2>&1; then',
+		'    if command -v apt-get >/dev/null 2>&1; then apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq qemu-guest-agent',
 		'    else dnf install -yq qemu-guest-agent; fi',
+		'    fi',
 		'    systemctl start qemu-guest-agent; } || echo "tramline: could not set up the QEMU guest agent" >&2',
 		'fi',
 		`curl -fsSL ${quote(`${install.url}/install.sh`)} | sh -s -- --url ${quote(install.url)} --token ${quote(install.token)}`
