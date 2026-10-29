@@ -88,6 +88,7 @@ describe('MetricsSampler', () => {
 		running(runtime, 'tl-dep_2-0', 'dep_2');
 		// a container from another deployment's spec, and an agent-owned one, aren't sampled
 		running(runtime, 'tl-ingress', 'none');
+		delete runtime.containers.get('tl-ingress')!.labels[LABELS.deployment];
 		let now = 1_000_000;
 		const sampler = new MetricsSampler(runtime, {
 			procDir: proc(0, 0),
@@ -105,6 +106,7 @@ describe('MetricsSampler', () => {
 			rxBytes: rx,
 			txBytes: rx / 2
 		});
+		runtime.containerStats.set('tl-ingress', stats(10, 1000));
 		runtime.containerStats.set('tl-dep_1-0', stats(10, 1000));
 		runtime.containerStats.set('tl-dep_2-0', stats(10, 1000));
 		expect(await sampler.containers(desired)).toEqual([]);

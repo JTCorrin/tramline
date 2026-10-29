@@ -99,7 +99,9 @@ export class MetricsSampler {
 		const wanted = new Map((desired?.containers ?? []).map((c) => [c.name, c]));
 		const running = (await this.runtime.list()).filter(
 			(c) =>
-				c.status === 'running' && wanted.get(c.name)?.deploymentId === c.labels[LABELS.deployment]
+				c.status === 'running' &&
+				wanted.has(c.name) &&
+				wanted.get(c.name)!.deploymentId === c.labels[LABELS.deployment]
 		);
 		const samples: ContainerSample[] = [];
 		const seen = new Set<string>();

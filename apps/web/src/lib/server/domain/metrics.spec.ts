@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { alert, containerMetric, deployment, node, nodeMetric } from '../db/schema';
 import {
 	evaluateAlerts,
@@ -35,6 +35,9 @@ const hello: AgentHello = {
 
 /** A fixed minute boundary, so buckets are predictable. */
 const T0 = Date.UTC(2026, 9, 29, 10, 0, 0);
+// Query windows must use the same clock as the samples, regardless of the CI date.
+beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(T0 + 2 * 60_000));
+afterEach(() => vi.restoreAllMocks());
 
 /** A service with a 512 MB limit, deployed on the local node. */
 function setup() {
