@@ -20,7 +20,8 @@ export const ID_PREFIXES = {
 	trust: 'trs',
 	invite: 'inv',
 	adapterAccount: 'acct',
-	join: 'jtk'
+	join: 'jtk',
+	alert: 'alr'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

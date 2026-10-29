@@ -8,6 +8,7 @@ import { github } from './resources/github';
 import { install } from './resources/install';
 import { adapters } from './resources/adapters';
 import { invites } from './resources/invites';
+import { metrics } from './resources/metrics';
 import { nodes } from './resources/nodes';
 import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
@@ -29,6 +30,7 @@ export function createClient(options: ClientOptions) {
 		variables: variables(http),
 		deployments: deployments(http),
 		nodes: nodes(http),
+		metrics: metrics(http),
 		adapters: adapters(http),
 		github: github(http),
 		backups: backups(http),

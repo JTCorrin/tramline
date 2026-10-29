@@ -35,6 +35,13 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['services.remove', (c) => c.services.remove('s'), 'DELETE /services/s'],
 	['services.config', (c) => c.services.config('s', 'e'), 'GET /services/s/config?environmentId=e'],
 	[
+		'metrics.service',
+		(c) => c.metrics.service('s', 'e', '24h'),
+		'GET /services/s/metrics?environmentId=e&range=24h'
+	],
+	['metrics.node', (c) => c.metrics.node('n'), 'GET /nodes/n/metrics?range=1h'],
+	['metrics.alerts', (c) => c.metrics.alerts(), 'GET /alerts'],
+	[
 		'variables.getAll (service)',
 		(c) => c.variables.getAll({ environmentId: 'e', serviceId: 's' }),
 		'GET /variables?environmentId=e&serviceId=s'

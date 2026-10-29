@@ -136,6 +136,59 @@ describe('Agent', () => {
 	});
 });
 
+describe('Agent metrics', () => {
+	it('sends samples of the node and its workloads, once it has a baseline', async () => {
+		const runtime = new FakeRuntime();
+		const { client } = fakeClient([desiredState()]);
+		const metrics = vi.fn(async () => {});
+		const proc = mkdtempSync(path.join(tmpdir(), 'tramline-proc-'));
+		const stat = (busy: number, idle: number) =>
+			writeFileSync(path.join(proc, 'stat'), `cpu  ${busy} 0 0 ${idle} 0 0 0 0\n`);
+		writeFileSync(path.join(proc, 'meminfo'), 'MemTotal: 8192000 kB\nMemAvailable: 4096000 kB\n');
+		stat(100, 900);
+		const agent = new Agent({
+			runtime,
+			client: { ...client, metrics },
+			stateDir: mkdtempSync(path.join(tmpdir(), 'tramline-agent-')),
+			version: 'test',
+			procDir: proc,
+			log: () => {}
+		});
+		await agent.hello();
+		await agent.sync();
+		runtime.containerStats.set('tl-dep_1-0', {
+			cpuNs: 0,
+			memoryBytes: 64 * 1024 * 1024,
+			memoryLimitBytes: 0,
+			rxBytes: 0,
+			txBytes: 0
+		});
+		// the first round only sets baselines, so there's nothing to send
+		await agent.sendMetrics();
+		expect(metrics).not.toHaveBeenCalled();
+
+		// a rate needs time to pass between samples
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		stat(200, 1800);
+		runtime.containerStats.set('tl-dep_1-0', {
+			cpuNs: 1e6,
+			memoryBytes: 64 * 1024 * 1024,
+			memoryLimitBytes: 0,
+			rxBytes: 10,
+			txBytes: 5
+		});
+		await agent.sendMetrics();
+		expect(metrics).toHaveBeenCalledWith(
+			expect.objectContaining({
+				node: expect.objectContaining({ cpuPercent: 10, memoryUsedMb: 4000, memoryTotalMb: 8000 }),
+				containers: [
+					expect.objectContaining({ deploymentId: 'dep_1', memoryMb: 64, rxBytes: 10, txBytes: 5 })
+				]
+			})
+		);
+	});
+});
+
 describe('Agent builds', () => {
 	const build = (deploymentId: string) => ({
 		deploymentId,
@@ -354,6 +407,9 @@ describe('ControlPlane client', () => {
 		expect(await cp.desired(null)).toMatchObject({ revision: desiredState().revision });
 		expect(await cp.desired('r1')).toBeNull();
 		await cp.report({ containers: [], revision: null });
+		await expect(
+			cp.metrics({ at: new Date(0).toISOString(), node: null, containers: [] })
+		).rejects.toMatchObject({ status: 401 });
 		await expect(cp.logs([])).rejects.toMatchObject({
 			status: 401,
 			message: 'Unknown agent token'

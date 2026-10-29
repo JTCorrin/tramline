@@ -601,9 +601,13 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **Also:** a machine that enrolls before its adapter has answered is still linked to its machine, so removing it destroys the VM.
 - **Later:** the VM's address from the guest agent, GPU passthrough sizes, and creating the template from a cloud image in Tramline.
 
-**6c.3: metrics**
+**6c.3: metrics ✅** (unit-tested; e2e in CI)
 
-- Agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
+- **Sampling:** every 15 seconds the agent samples its machine (CPU, memory from `/proc`, which a container sees host-wide, and the disk Docker uses) and each workload container (CPU, memory without reclaimable cache, network). Docker's one-shot stats are counters, so each sample is the change since the previous one; a restart starts a fresh baseline.
+- **Storage:** the control plane folds samples into 1-minute buckets as they arrive, on its own clock so a skewed node still lines up, and only for deployments placed on the reporting node. Each minute a job rolls them up into hours (the last two hours are recomputed, so it is idempotent). Minutes are kept for two days, hours for a month.
+- **Charts:** a service's Metrics tab shows CPU, memory (against its limit) and network, summed over replicas, from 1 hour to 30 days. Each node gets CPU and memory charts and a disk meter. Charts have a crosshair tooltip, move through time with the arrow keys (an ARIA slider), and show the same numbers as a table.
+- **Alerts:** built in, checked every minute: a node that stops reporting for 2 minutes, a node's disk or memory at 90%, and a service at 90% of its memory limit. Memory is averaged over 5 minutes, and alerts clear below 85%, so nothing flaps. They show on the Nodes page and in the service's Metrics tab, and post to `TRAMLINE_ALERT_WEBHOOK_URL` (Slack or Discord) when they open and resolve.
+- **Later:** alert rules people define, per-organization notification channels, and disk usage per volume.
 
 **Exit (6c):** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 

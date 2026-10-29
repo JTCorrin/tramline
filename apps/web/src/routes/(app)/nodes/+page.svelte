@@ -6,13 +6,15 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import AddNode from '#lib/components/nodes/add-node.svelte';
 	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
+	import AlertList from '#lib/components/metrics/alert-list.svelte';
+	import NodeMetrics from '#lib/components/metrics/node-metrics.svelte';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
 	import { cn } from '#lib/utils.js';
 	import ServerIcon from '@lucide/svelte/icons/server';
-	import type { NodeSummary, UpdateNode } from '@tramline/contracts';
+	import type { Alert, NodeSummary, UpdateNode } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import type { PageProps } from './$types';
 
@@ -24,9 +26,13 @@
 	let computeAccounts = $state(data.accounts);
 	// svelte-ignore state_referenced_locally
 	let provisioning = $state(data.provisioning);
+	let alerts = $state<Alert[]>([]);
+	/** Nodes whose charts are open. */
+	let charted = $state<Record<string, boolean>>({});
 
 	$effect(() => {
 		// health and placement change without page events, so poll gently
+		void loadAlerts();
 		const timer = setInterval(refresh, 5_000);
 		return () => clearInterval(timer);
 	});
@@ -36,9 +42,18 @@
 			nodes = await api().nodes.getAll();
 			// a machine that just enrolled leaves the provisioning list
 			if (provisioning.length) provisioning = await api().adapters.provisioning();
+			await loadAlerts();
 		} catch {
 			// keep showing the last list
 		}
+	}
+
+	async function loadAlerts() {
+		alerts = (
+			await api()
+				.metrics.alerts()
+				.catch(() => alerts)
+		).filter((a) => a.nodeId);
 	}
 
 	async function act(node: NodeSummary, action: 'cordon' | 'uncordon' | 'drain' | 'remove') {
@@ -194,6 +209,8 @@
 		</Card.Root>
 	{/if}
 
+	<AlertList {alerts} />
+
 	<ul class="space-y-3" data-testid="node-list">
 		{#each nodes as node (node.id)}
 			<li class="rounded-xl border bg-card p-4" data-testid="node-row" data-node={node.name}>
@@ -249,6 +266,18 @@
 						</div>
 					</div>
 				{/if}
+				<div class="mt-3">
+					<button
+						type="button"
+						class="text-xs text-muted-foreground underline-offset-2 hover:underline"
+						aria-expanded={!!charted[node.id]}
+						onclick={() => (charted[node.id] = !charted[node.id])}
+						>{charted[node.id] ? 'Hide metrics' : 'Show metrics'}</button
+					>
+					{#if charted[node.id]}
+						<div class="mt-2"><NodeMetrics nodeId={node.id} /></div>
+					{/if}
+				</div>
 				{#if data.canManage}
 					<div class="mt-3 flex flex-wrap gap-2">
 						{#if node.cordoned}

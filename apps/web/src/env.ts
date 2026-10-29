@@ -61,6 +61,17 @@ export const variables = defineEnvVars({
 			return policy as 'open' | 'invite';
 		}
 	},
+	TRAMLINE_ALERT_WEBHOOK_URL: {
+		description:
+			'Where to post alerts when they open and resolve, e.g. a Slack or Discord incoming webhook. The JSON body has `text` (Slack) and `content` (Discord), plus the alert itself.',
+		schema: (value) => {
+			if (!value) return undefined;
+			if (!/^https?:\/\//.test(value)) {
+				throw new Error('TRAMLINE_ALERT_WEBHOOK_URL must be an http(s) URL');
+			}
+			return value;
+		}
+	},
 	TRAMLINE_FAKE_ADAPTER: {
 		description:
 			'Offer the in-memory fake compute adapter (tests only; its machines exist nowhere). Off unless set to 1.',

@@ -15,6 +15,7 @@
 	import DeploymentsList from './deployments-list.svelte';
 	import ServiceSettings from './service-settings.svelte';
 	import VariablesEditor from './variables-editor.svelte';
+	import ServiceMetrics from '#lib/components/metrics/service-metrics.svelte';
 
 	let {
 		workspace,
@@ -153,9 +154,7 @@
 				/>
 			</Tabs.Content>
 			<Tabs.Content value="metrics" class="p-4">
-				<div class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-					CPU, memory and network charts appear once deployments run on a node.
-				</div>
+				<ServiceMetrics serviceId={service.id} environmentId={workspace.environmentId} />
 			</Tabs.Content>
 			<Tabs.Content value="settings">
 				{#if view}
