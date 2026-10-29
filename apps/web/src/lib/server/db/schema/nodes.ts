@@ -3,12 +3,30 @@ import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { user } from './auth';
 import { timestamps } from './projects';
 
+/**
+ * A connection to a compute provider (Proxmox, a cloud) that creates
+ * machines. Like nodes, accounts belong to the install. The credentials are
+ * one encrypted JSON object, checked against the adapter's schema.
+ */
+export const adapterAccount = sqliteTable('adapter_account', {
+	id: text('id').primaryKey(),
+	adapter: text('adapter').notNull(),
+	name: text('name').notNull().unique(),
+	credentials: text('credentials').notNull(),
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+	...timestamps
+});
+
 /** A machine running the Tramline agent. Nodes belong to the install, not an organization. */
 export const node = sqliteTable('node', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
 	/** Which compute adapter manages it; `manual` for machines enrolled by hand. */
 	adapter: text('adapter').notNull().default('manual'),
+	/** The account that created the machine; removing the node destroys it there. */
+	adapterAccountId: text('adapter_account_id').references(() => adapterAccount.id),
+	/** The provider's ID for the machine. */
+	providerNodeId: text('provider_node_id'),
 	/** sha256 of the agent's bearer token. */
 	tokenHash: text('token_hash').notNull().unique(),
 	/** Last hello from the agent. */
@@ -44,6 +62,17 @@ export const joinToken = sqliteTable('join_token', {
 	name: text('name').notNull(),
 	/** The node starts cordoned. */
 	cordoned: integer('cordoned', { mode: 'boolean' }).notNull().default(false),
+	/** For a machine an adapter created: the account, and the machine it made. */
+	adapterAccountId: text('adapter_account_id').references(() => adapterAccount.id),
+	providerNodeId: text('provider_node_id'),
+	region: text('region'),
+	offer: text('offer'),
+	/**
+	 * sha256 of the ID in the machine's cloud-init seed URL, and the user data
+	 * it serves (encrypted; it holds the join token). Both go once it enrolls.
+	 */
+	seedHash: text('seed_hash').unique(),
+	seed: text('seed'),
 	createdBy: text('created_by'),
 	expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
 	usedAt: integer('used_at', { mode: 'timestamp_ms' }),

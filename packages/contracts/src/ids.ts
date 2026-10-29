@@ -19,6 +19,7 @@ export const ID_PREFIXES = {
 	token: 'tok',
 	trust: 'trs',
 	invite: 'inv',
+	adapterAccount: 'acct',
 	join: 'jtk'
 } as const;
 

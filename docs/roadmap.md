@@ -572,11 +572,40 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 
 **6c: adapters and Proxmox**
 
-- `packages/adapter-sdk` (contract, conformance suite, fake adapter), adapter registry, `adapter_account` UI with a form generated from each adapter's zod credentials schema and a "Test connection" button.
-- **GPUs in the contract from the start:** an adapter declares whether it has GPUs, and each offer carries the GPU model, count, VRAM and price. Nodes report their GPUs at hello, so GPU machines join the same placement and price comparison as everything else instead of being a separate kind of adapter.
-- **`manual` adapter** (6a's join tokens, behind the adapter contract). **`proxmox` adapter**: provisions VMs from a cloud-init template via the Proxmox API, and they enroll on their own.
-- Metrics: agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
-- **Exit:** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
+6c is split in three: the adapter contract and accounts (6c.1), the Proxmox adapter (6c.2), then metrics (6c.3).
+
+**6c.1: adapter SDK and compute accounts ✅** (unit-tested; e2e in CI)
+
+- **`packages/adapter-sdk`:**
+  - **The contract:** what an adapter declares (credentials schema, capabilities) and does (validate, regions, offers, create, get, list and destroy machines). Adapter failures carry messages a person can act on.
+  - **GPUs from the start:** an adapter says whether it has GPUs, and each offer carries the GPU model, count and VRAM alongside vCPUs, memory, disk, arch and prices (on-demand, spot, egress).
+  - **Cloud-init:** a new machine installs Docker from its distribution's packages if needed, then enrolls with its join token.
+  - **A fake adapter** for tests, and a **conformance suite** every adapter passes. It checks credentials, regions and offers, then runs a machine through its whole life: create, find it, enroll (optional), destroy twice, and check it's gone (no orphans).
+- **`packages/adapters/manual`:** 6a's join command behind the same contract, built in and needing no account. It passes the conformance suite.
+- **Compute accounts** (Nodes → Compute accounts, install admins only):
+  - **The form** is generated from the adapter's zod credentials schema. Secret fields are stored encrypted and never shown again; left blank, they keep their value.
+  - **Test connection** has the adapter check the credentials with the provider.
+  - **Removing an account** is refused while it has nodes, so no machine loses the account that would destroy it.
+- **Adding a node with an account:** pick a region and a size (GPU sizes included), and the adapter creates a machine that enrolls itself. Until it does, it's listed as waiting to enroll, or as never enrolled once its token expires, with a Destroy button either way. If the adapter fails, the join token goes too.
+- **Removing a node** an adapter created destroys its machine first; if that fails, the node stays.
+- **GPUs at hello:** agents report the NVIDIA GPUs their kernel driver describes, and the Nodes page shows them.
+- **Tests:** `TRAMLINE_FAKE_ADAPTER=1` offers the fake adapter, and the e2e suite connects an account, tests it and creates a machine with it.
+
+**6c.2: Proxmox ✅** (unit-tested against a fake Proxmox API over real HTTPS; not yet run against a real cluster)
+
+- **The `proxmox` adapter:** clones a cloud-init template (across hosts too), sets CPUs and memory per size, tags the VM `tramline` and starts it. Removing the node stops and deletes the VM with its disks. It only ever destroys VMs with that tag, and removes a clone it couldn't set up.
+- **Enrolling without uploads:** Proxmox's API can't upload user data, so each VM's SMBIOS serial points cloud-init at its seed on Tramline (`ds=nocloud;s=…/api/agent/v1/seed/<id>/`). The seed is random, stored encrypted, and works only until the VM enrolls or its token expires.
+- **Sizes and prices:** Small to X-Large, offered on each host that fits them. They're priced by their share of a host's memory from a $/month entered on the account (or $0).
+- **TLS:** certificate chain, expiry and hostname validation always run; private hosts use a supplied CA certificate, with optional fingerprint pinning before the API token is sent.
+- **The guide:** `docs/adapters/proxmox.md` covers the template, a least-privilege API token and connecting the account. The conformance suite runs against a real cluster when `TRAMLINE_PROXMOX_*` is set.
+- **Also:** a machine that enrolls before its adapter has answered is still linked to its machine, so removing it destroys the VM.
+- **Later:** the VM's address from the guest agent, GPU passthrough sizes, and creating the template from a cloud image in Tramline.
+
+**6c.3: metrics**
+
+- Agent stats → SQLite rollups (1m/1h), Metrics tab charts, basic alerts.
+
+**Exit (6c):** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 
 ### Phase 7: Cloud adapters, GPU nodes and node pools
 

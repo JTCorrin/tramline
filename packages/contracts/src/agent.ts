@@ -23,6 +23,11 @@ export const AgentHello = z.object({
 	/** null when the Docker daemon is unreachable. */
 	docker: z.object({ version: z.string() }).nullable(),
 	dockerError: z.string().nullable().optional(),
+	/** NVIDIA GPUs the node has, from its driver; VRAM when known. */
+	gpus: z
+		.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() }))
+		.max(64)
+		.optional(),
 	/**
 	 * This node's WireGuard identity. The private key never leaves the node.
 	 * `endpoint` is where other nodes can reach it (`host:port`, UDP), or null
@@ -401,8 +406,11 @@ export const NodeSummary = z.object({
 	dockerVersion: z.string().nullable(),
 	/** Which compute adapter manages it; `manual` for machines enrolled by hand. */
 	adapter: z.string(),
+	/** The adapter account that created it, which destroys it when it's removed. */
+	account: z.object({ id: z.string(), name: z.string() }).nullable(),
 	cpus: z.number().int().nullable(),
 	memoryMb: z.number().int().nullable(),
+	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),
 	/** Memory promised to the deployments placed here (their limits). */
 	allocatedMemoryMb: z.number().int(),
 	/** Live deployments placed on the node. */

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DbOrTx } from '../db/client';
 import { AppError } from '../api/errors';
-import { build, container, deployment, joinToken, node } from '../db/schema';
+import { adapterAccount, build, container, deployment, joinToken, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
 import { recordVolumes } from './volumes';
@@ -102,18 +102,34 @@ export function join(db: DbOrTx, token: string, hello: AgentHello, now = new Dat
 				id: newId('node'),
 				name: invite.name,
 				tokenHash: hashToken(nodeToken),
-				cordoned: invite.cordoned
+				cordoned: invite.cordoned,
+				// a machine an adapter created stays linked to it, to be destroyed with the node
+				...(invite.adapterAccountId
+					? {
+							adapter: accountAdapter(tx, invite.adapterAccountId),
+							adapterAccountId: invite.adapterAccountId,
+							providerNodeId: invite.providerNodeId
+						}
+					: {})
 			})
 			.returning()
 			.get();
 		tx.update(joinToken)
-			.set({ usedAt: now, nodeId: row.id })
+			// its cloud-init seed held the token; nothing needs it now
+			.set({ usedAt: now, nodeId: row.id, seedHash: null, seed: null })
 			.where(eq(joinToken.id, invite.id))
 			.run();
 		recordHello(tx, row.id, hello);
 		return { nodeId: row.id, name: row.name, token: nodeToken };
 	});
 }
+
+const accountAdapter = (db: DbOrTx, id: string) =>
+	db
+		.select({ adapter: adapterAccount.adapter })
+		.from(adapterAccount)
+		.where(eq(adapterAccount.id, id))
+		.get()?.adapter ?? 'manual';
 
 export function authenticate(db: DbOrTx, token: string | null) {
 	if (!token) return undefined;

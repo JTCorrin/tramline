@@ -1,9 +1,9 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { E2E_AGENT_IMAGE, E2E_NODE, INGRESS_PORT } from '../playwright.config';
-import { createProject, expect, signUp, test, viaIngress } from './helpers';
+import { becomeInstallAdmin, createProject, expect, test, viaIngress } from './helpers';
 
 test.skip(process.env.TRAMLINE_E2E_DOCKER !== '1', 'needs Docker: set TRAMLINE_E2E_DOCKER=1');
 // a fresh Docker daemon pulls Caddy and the workload's image
@@ -115,16 +115,7 @@ test('enroll a second node, reach it over the mesh, then move off it and remove 
 	});
 
 	// an install admin creates a join command, starting the node cordoned
-	// whoever has the setup token from the server's data directory claims the install
-	await signUp(page, 'Nodes Org');
-	await page.goto('/nodes');
-	const setupToken = readFileSync(
-		path.resolve(import.meta.dirname, '../data/e2e/setup-token'),
-		'utf8'
-	);
-	await page.getByLabel('Setup token').fill(setupToken.trim());
-	await page.getByRole('button', { name: 'Claim' }).click();
-	await expect(page.getByTestId('install-admins')).toBeVisible();
+	await becomeInstallAdmin(page);
 	const add = page.getByTestId('add-node');
 	await add.getByLabel('Name').fill('dind');
 	await add.getByRole('switch', { name: 'Start cordoned' }).click();

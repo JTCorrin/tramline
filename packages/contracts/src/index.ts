@@ -1,3 +1,4 @@
+export * from './adapters';
 export * from './agent';
 export * from './backups';
 export * from './changes';

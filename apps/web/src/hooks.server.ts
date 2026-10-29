@@ -19,7 +19,8 @@ import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
 import { pruneLogs } from '#lib/server/nodes/logs.js';
 import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
 import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
-import { TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
+import { TRAMLINE_FAKE_ADAPTER, TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
+import { registerFakeAdapter } from '#lib/server/adapters/registry.js';
 import { createInitialModeExpression } from 'mode-watcher';
 
 const RECONCILE_INTERVAL_MS = 2_000;
@@ -28,6 +29,7 @@ const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
 	if (building) return;
+	if (TRAMLINE_FAKE_ADAPTER) registerFakeAdapter();
 	ensureLocalNode(db, settings.dataDir);
 	const setup = ensureSetupToken(db, settings.dataDir);
 	if (setup) {

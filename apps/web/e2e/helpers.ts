@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { test as base, expect, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -37,6 +38,56 @@ export async function signUp(
 	await page.getByLabel('Organization name').fill(org);
 	await page.getByRole('button', { name: 'Create organization' }).click();
 	await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+}
+
+/** The one install admin e2e runs share: claiming an install only works once. */
+const INSTALL_ADMIN = { email: 'install-admin@tramline.test', password: 'e2e-password-1234' };
+
+/**
+ * Signs in as the install admin, creating that account and claiming the
+ * install with the server's setup token the first time. Safe to call from
+ * tests running in parallel: whoever loses a race just signs in.
+ */
+export async function becomeInstallAdmin(page: Page) {
+	const signIn = async () => {
+		await page.goto('/sign-in');
+		await page.getByLabel('Email').fill(INSTALL_ADMIN.email);
+		await page.getByLabel('Password').fill(INSTALL_ADMIN.password);
+		await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+		return page
+			.waitForURL((url) => !url.pathname.startsWith('/sign-in'), { timeout: 5_000 })
+			.then(() => true)
+			.catch(() => false);
+	};
+	if (!(await signIn())) {
+		await page.goto('/sign-up');
+		await page.getByLabel('Name').fill('Install Admin');
+		await page.getByLabel('Email').fill(INSTALL_ADMIN.email);
+		await page.getByLabel('Password').fill(INSTALL_ADMIN.password);
+		await page.getByRole('button', { name: 'Create account' }).click();
+		const created = await page
+			.waitForURL(/\/onboarding$/, { timeout: 5_000 })
+			.then(() => true)
+			.catch(() => false);
+		if (created) {
+			await page.getByLabel('Organization name').fill('Install Admin Org');
+			await page.getByRole('button', { name: 'Create organization' }).click();
+			await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+		} else {
+			// another test created the account first
+			expect(await signIn()).toBe(true);
+		}
+	}
+	await page.goto('/nodes');
+	if (await page.getByTestId('claim-install').isVisible()) {
+		const token = readFileSync(
+			path.resolve(import.meta.dirname, '../data/e2e/setup-token'),
+			'utf8'
+		);
+		await page.getByLabel('Setup token').fill(token.trim());
+		await page.getByRole('button', { name: 'Claim' }).click();
+	}
+	await expect(page.getByTestId('install-admins')).toBeVisible();
 }
 
 /** Creates a project from the dashboard and opens its canvas. */
