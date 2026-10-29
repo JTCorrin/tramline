@@ -124,7 +124,10 @@ export function proxmoxAdapter(options: ProxmoxOptions = {}) {
 	/** Stops a VM if it runs, then deletes it with its disks. */
 	async function remove(api: ProxmoxClient, vm: Resource) {
 		const path = `nodes/${vm.node}/qemu/${vm.vmid}`;
-		if (vm.status === 'running') {
+		// cluster/resources lags a few seconds behind, so a VM started just now can still be
+		// listed as stopped; its own status is current
+		const { status } = await api.get<{ status: string }>(`${path}/status/current`);
+		if (status !== 'stopped') {
 			await api.wait(vm.node, await api.post<string>(`${path}/status/stop`));
 		}
 		await api.wait(
