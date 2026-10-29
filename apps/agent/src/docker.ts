@@ -5,6 +5,7 @@ import { pack } from 'tar-stream';
 import {
 	LABELS,
 	type ContainerRuntime,
+	type ContainerStats,
 	type ExecStreamOptions,
 	type ManagedContainer,
 	type OnLogLine,
@@ -17,6 +18,17 @@ export const withTag = (image: string) =>
 
 /** `ghcr.io/acme/api:1@sha256:…` → `ghcr.io/acme/api`. A port in the registry host is not a tag. */
 export const repositoryOf = (reference: string) => reference.split('@')[0]!.replace(/:[^/]+$/, '');
+
+/** The parts of Docker's stats response the agent reads. */
+interface DockerStats {
+	cpu_stats?: { cpu_usage?: { total_usage?: number } };
+	memory_stats?: {
+		usage?: number;
+		limit?: number;
+		stats?: { inactive_file?: number; total_inactive_file?: number };
+	};
+	networks?: Record<string, { rx_bytes?: number; tx_bytes?: number }>;
+}
 
 const statusCode = (error: unknown) => (error as { statusCode?: number })?.statusCode;
 
@@ -331,6 +343,33 @@ export class DockerRuntime implements ContainerRuntime {
 			// 409: still used by a container; 404: already gone
 			if (![404, 409].includes(statusCode(error) ?? 0)) throw error;
 		}
+	}
+
+	async stats(name: string): Promise<ContainerStats | null> {
+		let raw: DockerStats;
+		try {
+			// one-shot: the current counters, without Docker waiting a second for a second sample
+			raw = (await this.docker
+				.getContainer(name)
+				.stats({ stream: false, 'one-shot': true } as { stream: false })) as unknown as DockerStats;
+		} catch (error) {
+			if ([404, 409].includes(statusCode(error) ?? 0)) return null;
+			throw error;
+		}
+		const cpuNs = raw.cpu_stats?.cpu_usage?.total_usage;
+		const memory = raw.memory_stats;
+		// a stopped container answers with empty stats
+		if (!cpuNs || !memory?.usage) return null;
+		// cgroup v2 reports inactive_file, v1 total_inactive_file: page cache the kernel can take back
+		const cache = memory.stats?.inactive_file ?? memory.stats?.total_inactive_file ?? 0;
+		const networks = Object.values(raw.networks ?? {});
+		return {
+			cpuNs,
+			memoryBytes: Math.max(0, memory.usage - cache),
+			memoryLimitBytes: memory.limit ?? 0,
+			rxBytes: networks.reduce((sum, n) => sum + (n.rx_bytes ?? 0), 0),
+			txBytes: networks.reduce((sum, n) => sum + (n.tx_bytes ?? 0), 0)
+		};
 	}
 
 	logs(name: string, since: number, onLine: OnLogLine, onEnd: () => void) {

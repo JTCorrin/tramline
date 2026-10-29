@@ -28,3 +28,16 @@ export function formatBytes(bytes: number) {
 	}
 	return `${unit && value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
+
+/** Megabytes as "512 MB" or "1.5 GB". */
+export function formatMb(mb: number) {
+	if (mb >= 1024) return `${(mb / 1024).toFixed(mb >= 10_240 ? 0 : 1)} GB`;
+	return `${Math.round(mb)} MB`;
+}
+
+/** "42%", or "0.4%" below one. */
+export const formatPercent = (value: number) =>
+	`${value > 0 && value < 1 ? value.toFixed(1) : Math.round(value)}%`;
+
+/** Bytes per second as "1.4 MB/s". */
+export const formatRate = (bytesPerSecond: number) => `${formatBytes(bytesPerSecond)}/s`;

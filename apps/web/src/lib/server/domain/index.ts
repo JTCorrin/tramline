@@ -9,6 +9,7 @@ export * as environments from './environments';
 export * as adapters from './adapters';
 export * as admins from './admins';
 export * as invites from './invites';
+export * as metrics from './metrics';
 export * as nodes from './nodes';
 export * as oidc from './oidc';
 export * as organizations from './organizations';

@@ -19,12 +19,18 @@ import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
 import { pruneLogs } from '#lib/server/nodes/logs.js';
 import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
 import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
-import { TRAMLINE_FAKE_ADAPTER, TRAMLINE_GIT_POLL_SECONDS } from '$app/env/private';
+import { runMetricsJobs } from '#lib/server/metrics/alerts.js';
+import {
+	TRAMLINE_ALERT_WEBHOOK_URL,
+	TRAMLINE_FAKE_ADAPTER,
+	TRAMLINE_GIT_POLL_SECONDS
+} from '$app/env/private';
 import { registerFakeAdapter } from '#lib/server/adapters/registry.js';
 import { createInitialModeExpression } from 'mode-watcher';
 
 const RECONCILE_INTERVAL_MS = 2_000;
 const BACKUP_SCHEDULE_INTERVAL_MS = 60_000;
+const METRICS_INTERVAL_MS = 60_000;
 const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
@@ -78,10 +84,21 @@ export const init: ServerInit = () => {
 			.finally(() => (scheduling = false));
 	}, BACKUP_SCHEDULE_INTERVAL_MS);
 
+	// metric rollups and retention, then alerts
+	let measuring = false;
+	const metricJobs = setInterval(async () => {
+		if (measuring) return;
+		measuring = true;
+		await runMetricsJobs(db, TRAMLINE_ALERT_WEBHOOK_URL)
+			.catch((error) => console.error('[metrics]', error))
+			.finally(() => (measuring = false));
+	}, METRICS_INTERVAL_MS);
+
 	g.__tramlineReconciler = () => {
 		clearInterval(timer);
 		clearInterval(poll);
 		clearInterval(schedules);
+		clearInterval(metricJobs);
 		unsubscribe();
 	};
 };

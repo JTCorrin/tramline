@@ -8,6 +8,7 @@ export * from './environments';
 export * from './errors';
 export * from './github';
 export * from './ids';
+export * from './metrics';
 export * from './projects';
 export * from './scan';
 export * from './services';

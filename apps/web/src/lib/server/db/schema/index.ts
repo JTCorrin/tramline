@@ -5,3 +5,4 @@ export * from './nodes';
 export * from './github';
 export * from './backups';
 export * from './tokens';
+export * from './metrics';

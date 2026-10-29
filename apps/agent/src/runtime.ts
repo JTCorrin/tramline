@@ -47,8 +47,22 @@ export interface ContainerRuntime {
 	listImages(repository: string): Promise<{ id: string; tags: string[]; created: number }[]>;
 	/** Removes an image; images in use are left alone. */
 	removeImage(id: string): Promise<void>;
+	/** A running container's resource counters, or null when it isn't running. */
+	stats(name: string): Promise<ContainerStats | null>;
 	/** Follows a container's logs from `since` (epoch seconds) until it stops. Returns a cancel function. */
 	logs(name: string, since: number, onLine: OnLogLine, onEnd: () => void): () => void;
+}
+
+/** Counters that only grow while a container runs, except memory, which is current. */
+export interface ContainerStats {
+	/** CPU time used, in nanoseconds. */
+	cpuNs: number;
+	/** Memory in use, page cache that can be reclaimed left out. */
+	memoryBytes: number;
+	/** Docker's memory limit; without one this is the host's memory. */
+	memoryLimitBytes: number;
+	rxBytes: number;
+	txBytes: number;
 }
 
 export type OnLogLine = (stream: 'stdout' | 'stderr', ts: string, line: string) => void;

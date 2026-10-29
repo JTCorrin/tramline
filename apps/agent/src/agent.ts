@@ -18,16 +18,21 @@ import { meshKeys } from './mesh';
 import { serviceCertificate } from './tls';
 import { HealthChecker } from './health';
 import { LogShipper } from './logs';
+import { MetricsSampler } from './metrics';
 import type { ContainerRuntime, ManagedContainer } from './runtime';
 import { observe } from './state';
 
 export interface AgentOptions {
 	runtime: ContainerRuntime;
 	client: Pick<ControlPlane, 'hello' | 'desired' | 'report' | 'logs'> &
-		Partial<Pick<ControlPlane, 'answer'>>;
+		Partial<Pick<ControlPlane, 'answer' | 'metrics'>>;
 	stateDir: string;
 	version: string;
 	reportIntervalMs?: number;
+	/** How often to sample and send resource metrics (default 15 seconds; 0 turns them off). */
+	metricsIntervalMs?: number;
+	/** Where to read the machine's CPU and memory; tests point it elsewhere. */
+	procDir?: string;
 	/** Re-converge this often even without changes, to repair drift (e.g. a container removed by hand). */
 	healIntervalMs?: number;
 	/** Called when the control plane rejects the token, e.g. to re-read a rotated token file. */
@@ -66,6 +71,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
  * - sync: long-polls the control plane for desired state and converges to it
  * - report: observes containers, runs healthchecks, reports actual state
  * - logs: ships container logs in batches
+ * - metrics: samples the node and its workloads, and sends the samples
  */
 export class Agent {
 	desired: DesiredState | null = null;
@@ -74,6 +80,7 @@ export class Agent {
 	readonly health: HealthChecker;
 	readonly logs: LogShipper;
 	readonly builder: Builder;
+	readonly metrics: MetricsSampler;
 	/** Builds this agent has started, by deployment, until the control plane stops asking for them. */
 	readonly builds = new Map<string, BuildReport>();
 	readonly backups: Backups;
@@ -114,6 +121,10 @@ export class Agent {
 		});
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
+		this.metrics = new MetricsSampler(options.runtime, {
+			procDir: options.procDir,
+			diskDir: options.stateDir
+		});
 		this.builder = new Builder(options.runtime, {
 			stateDir: options.stateDir,
 			nodeId: () => {
@@ -157,6 +168,16 @@ export class Agent {
 		void this.#loop('sync', () => this.sync(), 100);
 		void this.#loop('report', () => this.tick(), this.options.reportIntervalMs ?? 2_000);
 		void this.#loop('logs', () => this.logs.flush(), 500);
+		const metricsEvery = this.options.metricsIntervalMs ?? 15_000;
+		if (metricsEvery && this.options.client.metrics) {
+			void this.#loop('metrics', () => this.sendMetrics(), metricsEvery);
+		}
+	}
+
+	/** One metrics cycle; the first only sets the baselines the next ones measure from. */
+	async sendMetrics() {
+		const batch = await this.metrics.sample(this.desired);
+		if (batch.node || batch.containers.length) await this.options.client.metrics?.(batch);
 	}
 
 	stop() {

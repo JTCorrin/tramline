@@ -5,6 +5,7 @@ import path from 'node:path';
 import { RAILPACK, TRIVY } from './pins';
 import type {
 	ContainerRuntime,
+	ContainerStats,
 	ExecStreamOptions,
 	ManagedContainer,
 	OnLogLine,
@@ -149,6 +150,12 @@ export class FakeRuntime implements ContainerRuntime {
 	async removeImage(id: string) {
 		this.calls.push(`rmi ${id}`);
 		for (const [tag, image] of this.images) if (image.id === id) this.images.delete(tag);
+	}
+	/** Counters tests set per container; running containers without any report nothing. */
+	containerStats = new Map<string, ContainerStats>();
+	async stats(name: string) {
+		const container = this.containers.get(name);
+		return container?.status === 'running' ? (this.containerStats.get(name) ?? null) : null;
 	}
 	logs(name: string, since: number, onLine: OnLogLine, onEnd: () => void) {
 		this.followers.set(name, { since, onLine, onEnd });

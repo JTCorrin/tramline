@@ -3,7 +3,8 @@ import {
 	type AgentHello,
 	type AgentReportInput,
 	type QueryResult,
-	type LogLine
+	type LogLine,
+	type MetricsBatch
 } from '@tramline/contracts';
 
 export class ControlPlaneError extends Error {
@@ -74,5 +75,9 @@ export class ControlPlane {
 
 	async logs(lines: LogLine[]) {
 		await this.#request('/logs', { method: 'POST', body: JSON.stringify({ lines }) });
+	}
+
+	async metrics(batch: MetricsBatch) {
+		await this.#request('/metrics', { method: 'POST', body: JSON.stringify(batch) });
 	}
 }
