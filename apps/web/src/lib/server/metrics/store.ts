@@ -72,7 +72,9 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 				id: deployment.id,
 				nodeId: deployment.nodeId,
 				serviceId: deployment.serviceId,
-				environmentId: deployment.environmentId
+				environmentId: deployment.environmentId,
+				config: deployment.config,
+				status: deployment.status
 			})
 			.from(deployment)
 			.where(inArray(deployment.id, ids))
@@ -82,7 +84,10 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 	);
 	for (const s of batch.containers) {
 		const owner = placed.get(s.deploymentId);
-		if (!owner) continue;
+		if (!owner || !['deploying', 'active', 'crashed'].includes(owner.status)) continue;
+		// The agent may only create series for replicas the control plane assigned.
+		const replicas = owner.config.deploy.cronSchedule ? 1 : owner.config.deploy.replicas;
+		if (!Number.isInteger(s.replica) || s.replica < 0 || s.replica >= replicas) continue;
 		db.insert(containerMetric)
 			.values({
 				step: MINUTE,
@@ -123,11 +128,13 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 }
 
 /**
- * Rolls minutes up into hours. The last two hours are recomputed every time,
- * so an hour still filling up stays current and running it twice is harmless.
+ * Rolls minutes up into hours, resuming each series at its last saved hour.
+ * The last two hours are recomputed, so an hour still filling stays current.
  */
 export function rollUp(db: DbOrTx, now = Date.now()) {
 	const from = bucketOf(now, HOUR) - HOUR * 1000;
+	// Never replace an older complete hour with a partially pruned minute window.
+	const retainedFrom = Math.ceil((now - KEEP_MS[MINUTE]) / (HOUR * 1000)) * HOUR * 1000;
 	// bound numbers are floats to SQLite, so the division is cast back to a whole hour
 	const hour = sql`cast(bucket / ${HOUR * 1000} as integer) * ${HOUR * 1000}`;
 	db.run(sql`
@@ -135,7 +142,9 @@ export function rollUp(db: DbOrTx, now = Date.now()) {
 			memory_used_max, memory_total, disk_used, disk_total)
 		select ${HOUR}, ${hour}, node_id, sum(samples), sum(cpu_sum), max(cpu_max), sum(memory_used_sum),
 			max(memory_used_max), max(memory_total), max(disk_used), max(disk_total)
-		from node_metric where step = ${MINUTE} and bucket >= ${from}
+		from node_metric where step = ${MINUTE} and bucket >= ${retainedFrom}
+			and (bucket >= ${from} or bucket >= coalesce((select max(h.bucket) from node_metric h
+				where h.step = ${HOUR} and h.node_id = node_metric.node_id), ${retainedFrom}))
 		group by node_id, ${hour}
 		on conflict (step, node_id, bucket) do update set samples = excluded.samples,
 			cpu_sum = excluded.cpu_sum, cpu_max = excluded.cpu_max,
@@ -148,7 +157,10 @@ export function rollUp(db: DbOrTx, now = Date.now()) {
 		select ${HOUR}, ${hour}, deployment_id, replica, max(service_id), max(environment_id),
 			sum(samples), sum(cpu_sum), max(cpu_max), sum(memory_sum), max(memory_max),
 			max(memory_limit), sum(rx_bytes), sum(tx_bytes)
-		from container_metric where step = ${MINUTE} and bucket >= ${from}
+		from container_metric where step = ${MINUTE} and bucket >= ${retainedFrom}
+			and (bucket >= ${from} or bucket >= coalesce((select max(h.bucket) from container_metric h
+				where h.step = ${HOUR} and h.deployment_id = container_metric.deployment_id
+				and h.replica = container_metric.replica), ${retainedFrom}))
 		group by deployment_id, replica, ${hour}
 		on conflict (step, deployment_id, replica, bucket) do update set samples = excluded.samples,
 			cpu_sum = excluded.cpu_sum, cpu_max = excluded.cpu_max, memory_sum = excluded.memory_sum,

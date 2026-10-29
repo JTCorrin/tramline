@@ -186,8 +186,18 @@ export function evaluateAlerts(db: DbOrTx, now = Date.now()) {
 	const opened: Alert[] = [];
 	const resolved: Alert[] = [];
 	const holding = new Set<string>();
+	const observed = new Set<string>();
+	const liveServices = new Set(
+		db
+			.select({ serviceId: deployment.serviceId, environmentId: deployment.environmentId })
+			.from(deployment)
+			.where(inArray(deployment.status, ['active', 'crashed']))
+			.all()
+			.map((d) => `${d.serviceId}:${d.environmentId}`)
+	);
 	for (const c of conditions(db, now)) {
 		const key = subject(c);
+		observed.add(key);
 		const existing = open.get(key);
 		if (existing) {
 			if (c.value >= CLEAR_BELOW) holding.add(key);
@@ -210,9 +220,15 @@ export function evaluateAlerts(db: DbOrTx, now = Date.now()) {
 		holding.add(key);
 		opened.push(toAlert(row));
 	}
-	// whatever no longer holds, or has no data any more, is resolved
+	// Missing telemetry is not evidence of recovery. Removed services can resolve.
 	for (const [key, row] of open) {
 		if (holding.has(key)) continue;
+		if (
+			!observed.has(key) &&
+			row.kind !== 'node_offline' &&
+			(row.nodeId || liveServices.has(`${row.serviceId}:${row.environmentId}`))
+		)
+			continue;
 		const done = db
 			.update(alert)
 			.set({ resolvedAt: new Date(now) })

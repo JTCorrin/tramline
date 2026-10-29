@@ -107,8 +107,8 @@ export class MetricsSampler {
 			const spec = wanted.get(container.name)!;
 			const stats = await this.runtime.stats(container.name).catch(() => null);
 			if (!stats) continue;
-			// keyed by deployment too, so a replacement container starts a fresh baseline
-			const key = `${container.name}/${spec.deploymentId}`;
+			// A restart can already have exceeded its old counters by the next sample.
+			const key = `${container.name}/${spec.deploymentId}/${container.startedAt}`;
 			seen.add(key);
 			const at = this.#now();
 			const previous = this.#containers.get(key);

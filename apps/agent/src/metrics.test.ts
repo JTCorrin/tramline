@@ -136,6 +136,32 @@ describe('MetricsSampler', () => {
 		expect(await sampler.containers(null)).toEqual([]);
 	});
 
+	it('starts a new baseline after a restart even when the new counters exceed the old ones', async () => {
+		const runtime = new FakeRuntime();
+		running(runtime, 'tl-dep_1-0', 'dep_1');
+		let now = 1000;
+		const sampler = new MetricsSampler(runtime, { diskDir: tmpdir(), now: () => now });
+		const desired = desiredState([desiredContainer()]);
+		runtime.containerStats.set('tl-dep_1-0', {
+			cpuNs: 1e9,
+			memoryBytes: MB,
+			memoryLimitBytes: MB,
+			rxBytes: 10,
+			txBytes: 10
+		});
+		await sampler.containers(desired);
+		runtime.containers.get('tl-dep_1-0')!.startedAt = '2026-10-29T10:00:01Z';
+		now += 15000;
+		runtime.containerStats.set('tl-dep_1-0', {
+			cpuNs: 2e9,
+			memoryBytes: MB,
+			memoryLimitBytes: MB,
+			rxBytes: 20,
+			txBytes: 20
+		});
+		expect(await sampler.containers(desired)).toEqual([]);
+	});
+
 	it('reports no limit for a container without one', async () => {
 		const runtime = new FakeRuntime();
 		running(runtime, 'tl-dep_1-0', 'dep_1');

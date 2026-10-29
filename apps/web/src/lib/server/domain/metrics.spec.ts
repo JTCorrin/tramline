@@ -89,6 +89,11 @@ const batch = (node: NodeSample | null, containers: ContainerSample[] = []) => (
 describe('recording metrics', () => {
 	it('folds samples into minute buckets, and sums a service over its replicas', () => {
 		const { ctx, local, env, svc, dep } = setup();
+		ctx.db
+			.update(deployment)
+			.set({ config: { ...dep.config, deploy: { ...dep.config.deploy, replicas: 2 } } })
+			.where(eq(deployment.id, dep.id))
+			.run();
 		recordMetrics(ctx.db, local.id, batch(nodeSample(), [containerSample(dep.id)]), T0 + 5_000);
 		recordMetrics(
 			ctx.db,
@@ -146,6 +151,23 @@ describe('recording metrics', () => {
 		expect(ctx.db.select().from(containerMetric).all()).toEqual([]);
 	});
 
+	it('rejects invented replicas and metrics for removed deployments', () => {
+		const { ctx, local, dep } = setup();
+		recordMetrics(
+			ctx.db,
+			local.id,
+			batch(null, [
+				containerSample(dep.id, { replica: 1 }),
+				containerSample(dep.id, { replica: 1000000 })
+			]),
+			T0
+		);
+		expect(ctx.db.select().from(containerMetric).all()).toEqual([]);
+		ctx.db.update(deployment).set({ status: 'removed' }).where(eq(deployment.id, dep.id)).run();
+		recordMetrics(ctx.db, local.id, batch(null, [containerSample(dep.id)]), T0);
+		expect(ctx.db.select().from(containerMetric).all()).toEqual([]);
+	});
+
 	it('checks access, and the range', () => {
 		const { ctx, env, svc, local } = setup();
 		const stranger = seedCtx(ctx.db);
@@ -188,6 +210,34 @@ describe('rollups and retention', () => {
 		expect(metrics.nodeMetrics(ctx, local.id, '30d').points[0]).toMatchObject({
 			cpuPercent: 20
 		});
+	});
+
+	it('finishes partial hours and backfills after a delayed job without losing older totals', () => {
+		const { ctx, local, dep } = setup();
+		const sample = batch(nodeSample(), [containerSample(dep.id)]);
+		recordMetrics(ctx.db, local.id, sample, T0);
+		rollUp(ctx.db, T0);
+		recordMetrics(ctx.db, local.id, sample, T0 + 30 * 60_000);
+		recordMetrics(ctx.db, local.id, sample, T0 + 3600_000);
+		rollUp(ctx.db, T0 + 4 * 3600_000);
+		for (const table of [nodeMetric, containerMetric]) {
+			expect(
+				ctx.db
+					.select({ bucket: table.bucket, samples: table.samples })
+					.from(table)
+					.where(eq(table.step, HOUR))
+					.orderBy(table.bucket)
+					.all()
+			).toEqual([
+				{ bucket: T0, samples: 2 },
+				{ bucket: T0 + 3600_000, samples: 1 }
+			]);
+		}
+		pruneMetrics(ctx.db, T0 + 48 * 3600_000 + 15 * 60_000);
+		rollUp(ctx.db, T0 + 48 * 3600_000 + 15 * 60_000);
+		expect(
+			ctx.db.select().from(nodeMetric).where(eq(nodeMetric.step, HOUR)).all()[0]!.samples
+		).toBe(2);
 	});
 
 	it('keeps minutes for two days and hours for a month', () => {
@@ -288,6 +338,26 @@ describe('alerts', () => {
 			.where(eq(node.id, local.id))
 			.run();
 		expect(evaluateAlerts(ctx.db, calm).resolved).toHaveLength(3);
+	});
+
+	it('does not send recovery notifications when usage telemetry disappears', () => {
+		const { ctx, local, dep } = setup();
+		for (let minute = 0; minute < 3; minute++) {
+			recordMetrics(
+				ctx.db,
+				local.id,
+				batch(nodeSample({ memoryUsedMb: 7900, diskUsedMb: 99000 }), [
+					containerSample(dep.id, { memoryMb: 510 })
+				]),
+				T0 + minute * 60_000
+			);
+		}
+		expect(evaluateAlerts(ctx.db, T0 + 3 * 60_000).opened).toHaveLength(3);
+		expect(evaluateAlerts(ctx.db, T0 + 10 * 60_000).resolved).toEqual([]);
+		ctx.db.update(deployment).set({ status: 'removed' }).where(eq(deployment.id, dep.id)).run();
+		expect(evaluateAlerts(ctx.db, T0 + 11 * 60_000).resolved.map((a) => a.kind)).toEqual([
+			'service_memory'
+		]);
 	});
 
 	it('waits for a few minutes of data before judging memory', () => {
