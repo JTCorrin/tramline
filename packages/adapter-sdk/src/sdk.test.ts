@@ -173,4 +173,13 @@ describe('cloud-init', () => {
 		expect(data).toContain(`--token 'tljoin_a'"'"'b'`);
 		expect(data).toContain('runcmd:\n  - [sh, /run/tramline-enroll.sh]');
 	});
+
+	it('sets up the QEMU guest agent only where the VM has its channel, without failing enrollment', () => {
+		const data = cloudInit({ url: 'https://t.test', token: 'tljoin_x' });
+		expect(data).toContain('if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ]');
+		expect(data).toContain('|| echo "tramline: could not set up the QEMU guest agent" >&2');
+		// the guest agent comes after Docker and before enrolling
+		expect(data.indexOf('qemu-guest-agent')).toBeGreaterThan(data.indexOf('docker.io'));
+		expect(data.indexOf('qemu-guest-agent')).toBeLessThan(data.indexOf('/install.sh'));
+	});
 });

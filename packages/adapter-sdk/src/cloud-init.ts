@@ -2,6 +2,9 @@
  * Cloud-init user data for a new machine: install Docker from the
  * distribution's packages when it's missing, then enroll with the join
  * token. Any image with cloud-init (Debian, Ubuntu, Fedora, Rocky…) works.
+ * A VM with a QEMU guest agent channel (Proxmox's "QEMU Guest Agent" option)
+ * also gets the agent, so its host can see its addresses and shut it down
+ * cleanly; that part is best-effort and never stops enrollment.
  */
 export function cloudInit(install: { url: string; token: string }) {
 	const quote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -13,6 +16,13 @@ export function cloudInit(install: { url: string; token: string }) {
 		'  else echo "tramline: no package manager to install Docker with" >&2; exit 1; fi',
 		'fi',
 		'systemctl enable --now docker',
+		'if [ -e /dev/virtio-ports/org.qemu.guest_agent.0 ]; then',
+		'  { if ! command -v qemu-ga >/dev/null 2>&1; then',
+		'    if command -v apt-get >/dev/null 2>&1; then apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq qemu-guest-agent',
+		'    else dnf install -yq qemu-guest-agent; fi',
+		'    fi',
+		'    systemctl start qemu-guest-agent; } || echo "tramline: could not set up the QEMU guest agent" >&2',
+		'fi',
 		`curl -fsSL ${quote(`${install.url}/install.sh`)} | sh -s -- --url ${quote(install.url)} --token ${quote(install.token)}`
 	].join('\n');
 	return [
