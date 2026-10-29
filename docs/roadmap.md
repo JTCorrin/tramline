@@ -560,7 +560,7 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **R1, second part:** connecting a GitHub installation goes through GitHub's user authorization. The one-time code is traded for a user token, used once and never stored, and the installation must be among those that person can access. New apps ask during install; older ones are sent to authorize after setup and need their callback URL set.
 - **Sign-up policy:**
   - **`TRAMLINE_SIGNUP=invite` (the default):** once the install has an admin, a new account needs an invite link from an organization's owner or admin. Links work once, expire after a week, and carry a role. Set it to `open` for anyone.
-  - **Accepting:** a signed-in person who opens a link joins that organization.
+  - **Accepting:** a signed-in person who opens a link is asked to confirm before joining that organization, so no other site can send them through one and add them to an organization of its choosing.
 - **Still to do:** disk limits for builds (a per-job quota needs a volume driver that supports one), and killing a timed-out command inside a database container.
 
 **Later**
