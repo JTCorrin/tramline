@@ -45,11 +45,8 @@ In Tramline, open **Nodes → Compute accounts → Connect an account**, choose 
 
 - **Proxmox URL:** e.g. `https://pve.lan:8006`.
 - **API token ID and secret:** from step 2 (`tramline@pve!tramline`).
-- **Certificate fingerprint:** needed when the certificate is self-signed, which it is unless you replaced it. Tramline pins it, and checks it before sending anything. Find it under the node's **System → Certificates**, or run:
-
-  ```sh
-  openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256
-  ```
+- **CA certificate:** for the default Proxmox certificates, paste the PEM contents of `/etc/pve/pve-root-ca.pem`, obtained through a trusted host connection. Use a URL whose hostname matches the server certificate. Publicly trusted certificates need no custom CA. Tramline always validates the certificate chain, validity period and hostname.
+- **Certificate fingerprint:** optional extra SHA-256 pin, checked before the API token is sent. A pin alone does not trust a self-signed certificate. Find it under **System → Certificates** or with `openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256`.
 
 - **Template VM ID:** `9000` above.
 - **Storage and pool:** optional; where clones' disks go, and the pool they join.
@@ -77,7 +74,7 @@ The adapter's tests run against a fake Proxmox API. To run the conformance suite
 TRAMLINE_PROXMOX_URL=https://pve.lan:8006 \
 TRAMLINE_PROXMOX_TOKEN_ID='tramline@pve!tramline' \
 TRAMLINE_PROXMOX_TOKEN_SECRET=… \
-TRAMLINE_PROXMOX_FINGERPRINT=AA:BB:… \
+TRAMLINE_PROXMOX_CA_CERTIFICATE="$(cat /trusted/path/pve-root-ca.pem)" \
 TRAMLINE_PROXMOX_TEMPLATE=9000 \
 TRAMLINE_PROXMOX_NODE=pve1 \
 pnpm --filter @tramline/adapter-proxmox test

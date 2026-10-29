@@ -134,6 +134,15 @@ describe('adapter accounts', () => {
 });
 
 describe('provisioning a node', () => {
+	it('quotes YAML-like hostnames in seed metadata', async () => {
+		const { ctx, account } = setup();
+		const started = await provision(ctx, account.id, 'null');
+		const seedId = created[0]!.seedUrl.match(/\/seed\/([^/]+)\/$/)![1]!;
+		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'meta-data')).toBe(
+			`instance-id: ${started.id}\nlocal-hostname: "null"\n`
+		);
+	});
+
 	it('creates a machine that enrolls itself, linked to the account that made it', async () => {
 		const { ctx, account } = setup();
 		const started = await provision(ctx, account.id);
@@ -147,7 +156,7 @@ describe('provisioning a node', () => {
 		expect(spec.seedUrl).toBe(`http://localhost:5173/api/agent/v1/seed/${seedId}/`);
 		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'user-data')).toBe(spec.userData);
 		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'meta-data')).toBe(
-			`instance-id: ${started.id}\nlocal-hostname: gpu-1\n`
+			`instance-id: ${started.id}\nlocal-hostname: "gpu-1"\n`
 		);
 		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'vendor-data')).toBe('');
 		expect(adapters.seedFile(ctx.db, ctx.secrets, seedId, 'secrets')).toBeNull();

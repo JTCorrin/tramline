@@ -293,7 +293,8 @@ export function seedFile(
 	if (!token?.seed) return null;
 	if (file === 'user-data') return secrets.decrypt(token.seed);
 	// instance-id is required; a new one per machine makes cloud-init run its user data
-	if (file === 'meta-data') return `instance-id: ${token.id}\nlocal-hostname: ${token.name}\n`;
+	if (file === 'meta-data')
+		return `instance-id: ${token.id}\nlocal-hostname: ${JSON.stringify(token.name)}\n`;
 	// cloud-init asks for vendor data too; there is none
 	if (file === 'vendor-data') return '';
 	return null;

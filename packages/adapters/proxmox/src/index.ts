@@ -40,8 +40,12 @@ const credentials = z.object({
 		.meta({
 			title: 'Certificate fingerprint',
 			description:
-				"SHA-256, from the node's System → Certificates. Needed when the certificate is self-signed."
+				"SHA-256, from the node's System → Certificates. Optional additional pin; self-signed hosts also need their CA certificate."
 		}),
+	caCertificate: z.string().min(1).optional().meta({
+		title: 'CA certificate',
+		description: 'PEM-encoded Proxmox CA certificate for private or self-signed hosts'
+	}),
 	template: z.coerce.number().int().positive().meta({
 		title: 'Template VM ID',
 		description:
@@ -132,6 +136,7 @@ export function proxmoxAdapter(options: ProxmoxOptions = {}) {
 	async function template(api: ProxmoxClient, creds: ProxmoxCredentials) {
 		const vm = (await vms(api)).find((r) => r.vmid === creds.template);
 		if (!vm) throw new AdapterError(`There is no VM ${creds.template} for the token to see`);
+		if (vm.type !== 'qemu') throw new AdapterError(`VM ${creds.template} is not a QEMU template`);
 		if (!vm.template) throw new AdapterError(`VM ${creds.template} is not a template`);
 		return vm;
 	}
@@ -202,8 +207,8 @@ export function proxmoxAdapter(options: ProxmoxOptions = {}) {
 				pool: creds.pool,
 				description: `Tramline node ${spec.name}`
 			});
-			await api.wait(source.node, cloning);
 			try {
+				await api.wait(source.node, cloning);
 				const path = `nodes/${spec.region}/qemu/${vmid}`;
 				const config = await api.get<{ smbios1?: string }>(`${path}/config`);
 				const uuid = config.smbios1?.match(/(?:^|,)uuid=([^,]+)/)?.[1];

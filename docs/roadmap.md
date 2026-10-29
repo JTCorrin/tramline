@@ -596,7 +596,7 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **The `proxmox` adapter:** clones a cloud-init template (across hosts too), sets CPUs and memory per size, tags the VM `tramline` and starts it. Removing the node stops and deletes the VM with its disks. It only ever destroys VMs with that tag, and removes a clone it couldn't set up.
 - **Enrolling without uploads:** Proxmox's API can't upload user data, so each VM's SMBIOS serial points cloud-init at its seed on Tramline (`ds=nocloud;s=…/api/agent/v1/seed/<id>/`). The seed is random, stored encrypted, and works only until the VM enrolls or its token expires.
 - **Sizes and prices:** Small to X-Large, offered on each host that fits them. They're priced by their share of a host's memory from a $/month entered on the account (or $0).
-- **TLS:** the host's certificate fingerprint is pinned and checked before the API token is sent, so self-signed certificates work without turning verification off.
+- **TLS:** certificate chain, expiry and hostname validation always run; private hosts use a supplied CA certificate, with optional fingerprint pinning before the API token is sent.
 - **The guide:** `docs/adapters/proxmox.md` covers the template, a least-privilege API token and connecting the account. The conformance suite runs against a real cluster when `TRAMLINE_PROXMOX_*` is set.
 - **Also:** a machine that enrolls before its adapter has answered is still linked to its machine, so removing it destroys the VM.
 - **Later:** the VM's address from the guest agent, GPU passthrough sizes, and creating the template from a cloud image in Tramline.

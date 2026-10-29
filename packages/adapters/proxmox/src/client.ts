@@ -1,15 +1,12 @@
 import { AdapterError } from '@tramline/adapter-sdk';
-import type { ClientRequestArgs } from 'node:http';
 import { request } from 'node:https';
-import type { Duplex } from 'node:stream';
-import { connect } from 'node:tls';
+import { checkServerIdentity } from 'node:tls';
 
 /**
  * A small client for the Proxmox VE API (`/api2/json`), authenticated with an
- * API token. Proxmox hosts usually have a self-signed certificate, so instead
- * of turning verification off, the client can pin the certificate's SHA-256
- * fingerprint (shown under the node's System → Certificates). Without one, the
- * certificate must be trusted the usual way.
+ * API token. A private CA can be supplied for self-signed Proxmox hosts.
+ * Chain, expiry and hostname validation always run; an optional SHA-256
+ * fingerprint adds certificate pinning on top of those checks.
  */
 
 export interface Connection {
@@ -17,6 +14,7 @@ export interface Connection {
 	tokenId: string;
 	tokenSecret: string;
 	fingerprint?: string;
+	caCertificate?: string;
 }
 
 const normalize = (fingerprint: string) => fingerprint.replace(/[^0-9a-f]/gi, '').toUpperCase();
@@ -72,6 +70,9 @@ export class ProxmoxClient {
 
 	async #call<T>(method: string, path: string, params: Params = {}): Promise<T> {
 		const url = new URL(path, this.base);
+		if (url.origin !== this.base.origin || !url.pathname.startsWith(this.base.pathname)) {
+			throw new AdapterError('The Proxmox API path must stay within /api2/json/ on its host');
+		}
 		const form = new URLSearchParams();
 		for (const [key, value] of Object.entries(params)) {
 			if (value === undefined) continue;
@@ -123,35 +124,17 @@ export class ProxmoxClient {
 								: {})
 						},
 						timeout: 30_000,
-						// a pinned certificate is checked before anything is sent, token included
-						...(pinned
-							? {
-									createConnection: (
-										_options: ClientRequestArgs,
-										done: (error: Error | null, socket: Duplex) => void
-									) => {
-										const socket = connect({
-											host: url.hostname,
-											port: Number(url.port || 443),
-											servername: url.hostname,
-											rejectUnauthorized: false
-										});
-										socket.once('secureConnect', () => {
-											const actual = normalize(socket.getPeerCertificate().fingerprint256 ?? '');
-											if (actual === pinned) return done(null, socket);
-											socket.destroy();
-											return done(
-												new AdapterError(
-													`${url.host}'s certificate doesn't match the fingerprint; it is ${actual.match(/../g)?.join(':')}`
-												),
-												socket
-											);
-										});
-										socket.once('error', (error) => done(error, socket));
-										return undefined;
-									}
-								}
-							: {})
+						rejectUnauthorized: true,
+						ca: this.connection.caCertificate || undefined,
+						// Do not reuse a TLS session authenticated with another account's pin.
+						agent: false,
+						checkServerIdentity: (host, cert) => {
+							const error = checkServerIdentity(host, cert);
+							if (error) return error;
+							if (pinned && normalize(cert.fingerprint256 ?? '') !== pinned) {
+								return new AdapterError(`${url.host}'s certificate doesn't match the fingerprint`);
+							}
+						}
 					},
 					(res) => {
 						const chunks: Buffer[] = [];

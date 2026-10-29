@@ -62,6 +62,7 @@ test('the Proxmox form asks for what a cloud-init template clone needs', async (
 		'API token ID',
 		'API token secret',
 		'Certificate fingerprint',
+		'CA certificate',
 		'Template VM ID'
 	]) {
 		await expect(accounts.getByLabel(label)).toBeVisible();

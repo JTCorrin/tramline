@@ -2,7 +2,7 @@ import { conformance, type NodeSpec } from '@tramline/adapter-sdk';
 import { execFileSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:https';
+import { createServer, type Server, type ServerOptions } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -105,7 +105,10 @@ async function handle(method: string, url: URL, form: URLSearchParams) {
 	if (m && !vm) throw Object.assign(new Error('no such VM'), { status: 500 });
 	if (vm && m![3] === '/config' && method === 'GET') return vm.config;
 	if (vm && m![3] === '/config' && method === 'PUT') {
-		for (const [key, value] of form) vm.config[key] = value;
+		for (const key of ['cores', 'memory', 'smbios1', 'tags', 'agent', 'onboot']) {
+			const value = form.get(key);
+			if (value !== null) vm.config[key] = value;
+		}
 		if (form.get('tags')) vm.tags = form.get('tags')!;
 		return null;
 	}
@@ -126,6 +129,10 @@ async function handle(method: string, url: URL, form: URLSearchParams) {
 
 let server: Server;
 let fingerprint: string;
+let caCertificate: string;
+let validContext: ServerOptions;
+let wrongHostContext: ServerOptions;
+let wrongHostCertificate: string;
 let url: string;
 
 beforeAll(async () => {
@@ -140,13 +147,35 @@ beforeAll(async () => {
 			'-days',
 			'1',
 			'-subj',
-			'/CN=pve.test'
+			'/CN=pve.test',
+			'-addext',
+			'subjectAltName=IP:127.0.0.1,DNS:localhost'
 		]),
 		{ stdio: 'ignore' }
 	);
 	const cert = readFileSync(path.join(dir, 'cert.pem'));
 	fingerprint = new X509Certificate(cert).fingerprint256;
-	server = createServer({ key: readFileSync(path.join(dir, 'key.pem')), cert }, (req, res) => {
+	caCertificate = cert.toString();
+	validContext = { key: readFileSync(path.join(dir, 'key.pem')), cert };
+	execFileSync(
+		'openssl',
+		[
+			'req',
+			'-x509',
+			'-key',
+			path.join(dir, 'key.pem'),
+			'-out',
+			path.join(dir, 'wrong.pem'),
+			'-days',
+			'1',
+			'-subj',
+			'/CN=wrong.test'
+		],
+		{ stdio: 'ignore' }
+	);
+	wrongHostCertificate = readFileSync(path.join(dir, 'wrong.pem'), 'utf8');
+	wrongHostContext = { key: validContext.key, cert: wrongHostCertificate };
+	server = createServer(validContext, (req, res) => {
 		const chunks: Buffer[] = [];
 		req.on('data', (c: Buffer) => chunks.push(c));
 		req.on('end', async () => {
@@ -189,6 +218,7 @@ const creds = (patch: Partial<ProxmoxCredentials> = {}): ProxmoxCredentials => (
 	tokenId: TOKEN,
 	tokenSecret: SECRET,
 	fingerprint,
+	caCertificate,
 	template: 9000,
 	monthlyCost: 73,
 	...patch
@@ -282,17 +312,56 @@ describe('the Proxmox adapter', () => {
 		);
 	});
 
+	it('rejects container templates before attempting a QEMU clone', async () => {
+		vms.find((vm) => vm.vmid === 9000)!.type = 'lxc' as never;
+		await expect(adapter.createNode(creds(), spec())).rejects.toThrow('not a QEMU template');
+		expect(requests.some((request) => request.endsWith('/clone'))).toBe(false);
+	});
+
 	it('pins the certificate: a wrong fingerprint fails before the token is sent', async () => {
 		const wrong = fingerprint.replace(/^../, fingerprint.startsWith('00') ? '11' : '00');
 		const before = requests.length;
 		await expect(adapter.validate(creds({ fingerprint: wrong }))).rejects.toThrow(
-			`certificate doesn't match the fingerprint; it is ${fingerprint}`
+			"certificate doesn't match the fingerprint"
 		);
 		expect(requests.length).toBe(before);
-		// without a pin, a self-signed certificate isn't trusted
-		await expect(adapter.validate(creds({ fingerprint: undefined }))).rejects.toThrow(
+		// A pin alone never bypasses normal certificate validation.
+		await expect(adapter.validate(creds({ caCertificate: undefined }))).rejects.toThrow(
 			"Couldn't reach 127.0.0.1"
 		);
+	});
+
+	it('rejects a trusted, pinned certificate with the wrong hostname before sending the token', async () => {
+		server.setSecureContext(wrongHostContext);
+		try {
+			await expect(
+				adapter.validate(
+					creds({
+						caCertificate: wrongHostCertificate,
+						fingerprint: new X509Certificate(wrongHostCertificate).fingerprint256
+					})
+				)
+			).rejects.toThrow('not in the cert');
+			expect(requests).toHaveLength(0);
+		} finally {
+			server.setSecureContext(validContext);
+		}
+	});
+
+	it('rejects paths that could leak API credentials', async () => {
+		const before = requests.length;
+		await expect(
+			adapter.validate(creds({ fingerprint: undefined, caCertificate: undefined }))
+		).rejects.toThrow();
+		const api = new ProxmoxClient(creds());
+		for (const path of [
+			'https://example.com/api2/json/version',
+			'//example.com/version',
+			'../version'
+		]) {
+			await expect(api.get(path)).rejects.toThrow('must stay within');
+		}
+		expect(requests).toHaveLength(before);
 	});
 
 	it('explains rejected tokens, other errors, and unreachable hosts', async () => {
@@ -316,6 +385,7 @@ describe('the Proxmox adapter', () => {
 			['tokenId', true, false],
 			['tokenSecret', true, true],
 			['fingerprint', false, false],
+			['caCertificate', false, false],
 			['template', true, false],
 			['storage', false, false],
 			['pool', false, false],
@@ -351,6 +421,7 @@ describe('VMs and tasks', () => {
 		await expect(adapter.createNode(creds(), spec())).rejects.toThrow(
 			'A Proxmox task failed: clone failed: out of space'
 		);
+		expect(vms.some((v) => v.vmid === 101)).toBe(false);
 		taskStatus = { status: 'running' };
 		const impatient = proxmoxAdapter({ pollMs: 1, taskTimeoutMs: 5 });
 		await expect(impatient.createNode(creds(), spec())).rejects.toThrow('took too long');
@@ -375,6 +446,7 @@ describe.skipIf(!process.env.TRAMLINE_PROXMOX_URL)('against a real Proxmox', () 
 					tokenId: process.env.TRAMLINE_PROXMOX_TOKEN_ID!,
 					tokenSecret: process.env.TRAMLINE_PROXMOX_TOKEN_SECRET!,
 					fingerprint: process.env.TRAMLINE_PROXMOX_FINGERPRINT || undefined,
+					caCertificate: process.env.TRAMLINE_PROXMOX_CA_CERTIFICATE || undefined,
 					template: Number(process.env.TRAMLINE_PROXMOX_TEMPLATE),
 					storage: process.env.TRAMLINE_PROXMOX_STORAGE || undefined,
 					monthlyCost: 0
