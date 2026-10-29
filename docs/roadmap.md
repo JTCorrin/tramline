@@ -591,7 +591,7 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **GPUs at hello:** agents report the NVIDIA GPUs their kernel driver describes, and the Nodes page shows them.
 - **Tests:** `TRAMLINE_FAKE_ADAPTER=1` offers the fake adapter, and the e2e suite connects an account, tests it and creates a machine with it.
 
-**6c.2: Proxmox ✅** (unit-tested against a fake Proxmox API over real HTTPS; not yet run against a real cluster)
+**6c.2: Proxmox ✅** (unit-tested against a fake Proxmox API over real HTTPS; conformance suite and exit run against a real Proxmox VE 9.1 host)
 
 - **The `proxmox` adapter:** clones a cloud-init template (across hosts too), sets CPUs and memory per size, tags the VM `tramline` and starts it. Removing the node stops and deletes the VM with its disks. It only ever destroys VMs with that tag, and removes a clone it couldn't set up.
 - **Enrolling without uploads:** Proxmox's API can't upload user data, so each VM's SMBIOS serial points cloud-init at its seed on Tramline (`ds=nocloud;s=…/api/agent/v1/seed/<id>/`). The seed is random, stored encrypted, and works only until the VM enrolls or its token expires.
@@ -599,7 +599,8 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **TLS:** certificate chain, expiry and hostname validation always run; private hosts use a supplied CA certificate, with optional fingerprint pinning before the API token is sent.
 - **The guide:** `docs/adapters/proxmox.md` covers the template, a least-privilege API token and connecting the account. The conformance suite runs against a real cluster when `TRAMLINE_PROXMOX_*` is set.
 - **Also:** a machine that enrolls before its adapter has answered is still linked to its machine, so removing it destroys the VM.
-- **Later:** the VM's address from the guest agent, GPU passthrough sizes, and creating the template from a cloud image in Tramline.
+- **Guest agent:** new VMs install and start `qemu-guest-agent` (best effort), so Proxmox shows their address and can shut them down cleanly.
+- **Later:** using the guest agent's address in Tramline, GPU passthrough sizes, and creating the template from a cloud image in Tramline.
 
 **6c.3: metrics ✅** (unit-tested; e2e in CI)
 
@@ -608,8 +609,9 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **Charts:** a service's Metrics tab shows CPU, memory (against its limit) and network, summed over replicas, from 1 hour to 30 days. Each node gets CPU and memory charts and a disk meter. Charts have a crosshair tooltip, move through time with the arrow keys (an ARIA slider), and show the same numbers as a table.
 - **Alerts:** built in, checked every minute: a node that stops reporting for 2 minutes, a node's disk or memory at 90%, and a service at 90% of its memory limit. Memory is averaged over 5 minutes, and alerts clear below 85%, so nothing flaps. They show on the Nodes page and in the service's Metrics tab, and post to `TRAMLINE_ALERT_WEBHOOK_URL` (Slack or Discord) when they open and resolve.
 - **Later:** alert rules people define, per-organization notification channels, and disk usage per volume.
+- **Agent updates:** nodes run the agent image they were installed with. Updating one means re-running the install command; an update action on the Nodes page comes later.
 
-**Exit (6c):** add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
+**Exit (6c) ✅** (run on 2026-10-29 against a Proxmox VE 9.1 host, with two Proxmox VMs as nodes): add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 
 ### Phase 7: Cloud adapters, GPU nodes and node pools
 
