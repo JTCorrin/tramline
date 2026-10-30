@@ -8,6 +8,7 @@ import { AppError } from '../api/errors';
 import { adapterAccount, build, container, deployment, joinToken, node } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
+import { onNode, replicaNode } from './placement';
 import { recordVolumes } from './volumes';
 import { recordJobReports } from '../domain/backups';
 
@@ -27,13 +28,6 @@ export function isOnline(row: NodeRow, now = Date.now()) {
 		!row.error &&
 		row.info?.docker
 	);
-}
-
-/** Memory a deployment reserves on its node: its limit times its replicas, 0 without a limit. */
-export function requestedMemory(config: {
-	deploy: { memoryMb?: number | null; replicas: number };
-}) {
-	return (config.deploy.memoryMb ?? 0) * config.deploy.replicas;
 }
 
 export function nodeStatus(row: NodeRow, now = Date.now()) {
@@ -184,19 +178,24 @@ export function nextMeshAddress(db: DbOrTx) {
 /** Replaces the node's container rows with what the agent just observed. */
 export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInput) {
 	db.transaction((tx) => {
-		// a node speaks only for deployments placed on it: a report about another node's
+		// a node speaks only for the replicas placed on it: a report about another node's
 		// deployment (a stolen node token, or a stale one) is ignored
-		const assigned = new Set(
+		const placed = new Map(
 			tx
-				.select({ id: deployment.id })
+				.select({
+					id: deployment.id,
+					nodeId: deployment.nodeId,
+					replicaNodes: deployment.replicaNodes
+				})
 				.from(deployment)
-				.where(eq(deployment.nodeId, nodeId))
+				.where(onNode(nodeId))
 				.all()
-				.map((row) => row.id)
+				.map((row) => [row.id, row])
 		);
 		tx.delete(container).where(eq(container.nodeId, nodeId)).run();
 		for (const c of report.containers) {
-			if (!assigned.has(c.deploymentId)) continue;
+			const dep = placed.get(c.deploymentId);
+			if (!dep || replicaNode(dep, c.replica) !== nodeId) continue;
 			tx.insert(container)
 				.values({
 					name: c.name,
@@ -221,7 +220,8 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 		});
 		tx.delete(build).where(eq(build.nodeId, nodeId)).run();
 		for (const b of report.builds ?? []) {
-			if (!assigned.has(b.deploymentId)) continue;
+			// builds and scans run on the deployment's own node
+			if (placed.get(b.deploymentId)?.nodeId !== nodeId) continue;
 			tx.insert(build)
 				.values({
 					deploymentId: b.deploymentId,

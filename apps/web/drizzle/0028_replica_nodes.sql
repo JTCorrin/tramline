@@ -1,0 +1,1 @@
+ALTER TABLE `deployment` ADD `replica_nodes` text;

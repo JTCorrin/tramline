@@ -489,9 +489,9 @@ Phase 6 is split in three: nodes and scheduling (6a), the mesh (6b), then adapte
 - **Enrollment:** an install admin creates a one-time **join token** under Nodes → Add node, optionally starting the node cordoned. The command it shows (`curl … /install.sh | sudo sh -s -- --url … --token …`) checks Docker and runs the agent as a container. The agent trades the join token for its own node token, saved with mode 600. Join tokens are stored as hashes, expire after an hour and work once.
 - **The agent container** has no capabilities, no privilege escalation, a read-only filesystem and a PID limit. It still holds the Docker socket, so it is as powerful as root on the node, which is why nodes are managed only by install admins and never by API tokens. (Admins became an explicit grant in the hardening pass below.) The image is built for amd64 and arm64 and published to GHCR with signed build provenance.
 - **Scheduling:**
-  - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room.
+  - **Hard rules:** a service with a volume runs where its data is; a service pinned to a node (Settings → Run on) runs only there; cordoned nodes take nothing else; a memory limit needs that much room (CPU and memory requests since 7a).
   - **Preferences:** the node that built the image (anywhere else rebuilds the same commit), then the node already running the environment (its services share one Docker network until the mesh lands), then the least loaded node.
-- **Nodes page:** status, CPUs, memory reserved by limits, deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
+- **Nodes page:** status, CPUs, memory reserved by limits (and requests, since 7a), deployment count, and Cordon, Drain and Remove. **Drain** cordons the node and redeploys its stateless deployments elsewhere with no downtime. Services with data or a pin stay, and the drain says which. **Remove** refuses while anything runs there or keeps its data there, and revokes the node token.
 - **Still to come:** CPU requests, metrics and node hardening checks. (Cross-node networking and edge nodes arrived in 6b; the scheduler still prefers to keep an environment together, which saves a hop.)
 
 **6b: mesh ✅** (verified on Docker with a Docker-in-Docker node; e2e in CI)
@@ -615,16 +615,42 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 
 ### Phase 7: Cloud adapters, GPU nodes and node pools
 
-- Further adapters on the same contract, in order: **Hetzner**, **AWS EC2**, **GCP Compute**, **Azure VMs**. Each one is a package that passes the conformance suite, with no changes to core.
-- **GPU nodes:**
-  - **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
-  - **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
-  - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
-  - **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
-  - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
-- **Requests and spreading:** services get CPU and memory requests (defaults per template), the scheduler packs by them, and a service's replicas spread across nodes.
-- Node pools per environment (adapter account + region + size, min/max) and auto-provisioning when the scheduler can't fit a workload. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
-- **Exit:** add a Hetzner/AWS account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
+Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node pools (7c), then GPU nodes (7d). 7a needs no cloud account, and pools depend on it.
+
+**7a: requests and spreading ✅** (unit-tested; e2e in CI)
+
+- **Requests:** Settings → Deploy has a memory request and a CPU request (cores, e.g. 0.5) per replica, beside the memory limit. With no memory request, the limit is what's reserved. The database templates come with requests: Postgres and MongoDB 256 MB and 0.25 CPU, MySQL 512 MB and 0.25 CPU, Redis 64 MB and 0.1 CPU.
+- **Packing:** every replica needs room for its requests on its node, and "least loaded" means the larger of the node's reserved memory and CPU shares. The Nodes page shows both.
+- **Spreading:** replicas of a registry image spread over the nodes that can take them, fewest replicas first, and a deployment records the node of each replica. Each node runs only its own replicas and reports only for them; reports, logs and metrics about another node's replica are ignored. Draining a node moves the whole deployment onto the rest.
+- **Staying together:** a built image is only on the node that built it, so source deployments keep their replicas on one node. So do services with a volume or a pin.
+- **Traffic:**
+  - **Private names:** a consumer on a node with a replica reaches that node's replicas.
+  - **Other nodes:** a consumer elsewhere, or an edge, goes through the mesh, whose forward takes turns between the service's nodes and skips one that refuses a connection.
+  - **Public domains:** each node with a replica serves the service's domain itself.
+  - **Older agents:** they don't know the list of nodes and use only the first.
+- **Later:**
+  - Spreading built images, which needs the image on more than one node: a registry, or node-to-node copies over the mesh.
+  - Spreading by zone or provider.
+  - CPU limits.
+
+**7b: cloud adapters**
+
+- Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **Hetzner** and **AWS EC2**. Each one is a package that passes the conformance suite, with no changes to core.
+
+**7c: node pools**
+
+- Node pools per environment (adapter account + region + size, min/max), and auto-provisioning when the scheduler can't fit a workload's requests. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
+- **Agent updates:** a node's agent can be updated from the Nodes page, so pools don't run old agents.
+
+**7d: GPU nodes**
+
+- **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
+- **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
+- **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
+- **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
+- **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
+
+**Exit (7):** add a GCP/Azure account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
 
 ### Phase 8: Price engine and placement
 

@@ -13,7 +13,8 @@ import { adapterAccount, deployment, joinToken, node, service, volume } from '..
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { meshMembers, routes } from '../nodes/mesh';
-import { hashToken, nodeStatus, requestedMemory } from '../nodes/registry';
+import { nodesOf, onNode, reservedOn } from '../nodes/placement';
+import { hashToken, nodeStatus } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { destroyMachine } from './adapters';
@@ -27,14 +28,15 @@ const LIVE = ['building', 'deploying', 'active', 'crashed'] as const;
 
 /** Nodes are shared by every organization on the install. */
 export function list(ctx: Ctx): NodeSummary[] {
-	const placed = Map.groupBy(
-		ctx.db
-			.select({ nodeId: deployment.nodeId, config: deployment.config })
-			.from(deployment)
-			.where(inArray(deployment.status, [...LIVE]))
-			.all(),
-		(row) => row.nodeId
-	);
+	const placed = ctx.db
+		.select({
+			nodeId: deployment.nodeId,
+			replicaNodes: deployment.replicaNodes,
+			config: deployment.config
+		})
+		.from(deployment)
+		.where(inArray(deployment.status, [...LIVE]))
+		.all();
 	const members = meshMembers(ctx.db);
 	const accounts = new Map(
 		ctx.db
@@ -49,7 +51,8 @@ export function list(ctx: Ctx): NodeSummary[] {
 		.orderBy(asc(node.createdAt))
 		.all()
 		.map((row) => {
-			const here = placed.get(row.id) ?? [];
+			const here = placed.filter((d) => nodesOf(d).includes(row.id));
+			const reserved = here.map((d) => reservedOn(d, row.id));
 			const me = members.find((m) => m.id === row.id);
 			const reach = me && members.length > 1 ? routes(members, me) : null;
 			return {
@@ -65,7 +68,8 @@ export function list(ctx: Ctx): NodeSummary[] {
 				cpus: row.info?.cpus ?? null,
 				memoryMb: row.info?.memoryMb ?? null,
 				gpus: row.info?.gpus ?? [],
-				allocatedMemoryMb: here.reduce((sum, d) => sum + requestedMemory(d.config), 0),
+				allocatedMemoryMb: reserved.reduce((sum, r) => sum + r.memoryMb, 0),
+				allocatedCpus: Math.round(reserved.reduce((sum, r) => sum + r.cpus, 0) * 100) / 100,
 				deployments: here.length,
 				cordoned: row.cordoned,
 				draining: row.draining,
@@ -185,7 +189,7 @@ export function drain(ctx: Ctx, id: string): DrainResult {
 			.select({ deployment, service: service.name })
 			.from(deployment)
 			.innerJoin(service, eq(service.id, deployment.serviceId))
-			.where(and(eq(deployment.nodeId, id), inArray(deployment.status, [...LIVE])))
+			.where(and(onNode(id), inArray(deployment.status, [...LIVE])))
 			.all();
 		const kept: DrainResult['kept'] = [];
 		let moved = 0;
@@ -229,7 +233,7 @@ export async function remove(ctx: Ctx, id: string) {
 	const placed = ctx.db
 		.select({ id: deployment.id })
 		.from(deployment)
-		.where(and(eq(deployment.nodeId, id), inArray(deployment.status, [...LIVE, 'queued'])))
+		.where(and(onNode(id), inArray(deployment.status, [...LIVE, 'queued'])))
 		.all();
 	if (placed.length) {
 		throw new AppError(

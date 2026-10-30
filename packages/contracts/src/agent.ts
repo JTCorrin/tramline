@@ -224,8 +224,13 @@ export const MeshForward = z.discriminatedUnion('to', [
 	z.object({
 		to: z.literal('remote'),
 		port: z.number().int(),
-		/** The mesh address of the node running the service. */
-		address: z.string()
+		/** The mesh address of a node running the service (the first of `addresses`). */
+		address: z.string(),
+		/**
+		 * Every node running the service, when its replicas are spread. Connections
+		 * take turns between them and skip one that refuses. Older agents use `address`.
+		 */
+		addresses: z.array(z.string()).optional()
 	}),
 	z.object({
 		to: z.literal('local'),
@@ -411,8 +416,10 @@ export const NodeSummary = z.object({
 	cpus: z.number().int().nullable(),
 	memoryMb: z.number().int().nullable(),
 	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),
-	/** Memory promised to the deployments placed here (their limits). */
+	/** Memory reserved by the replicas placed here (their requests, or else their limits). */
 	allocatedMemoryMb: z.number().int(),
+	/** CPU cores reserved by the replicas placed here. */
+	allocatedCpus: z.number(),
 	/** Live deployments placed on the node. */
 	deployments: z.number().int(),
 	/** Takes no new deployments. */

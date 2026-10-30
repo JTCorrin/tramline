@@ -125,8 +125,9 @@
 	}
 
 	const STATUS_DOT = { online: 'bg-emerald-400', offline: 'bg-zinc-500', error: 'bg-red-500' };
-	const percent = (n: NodeSummary) =>
-		n.memoryMb ? Math.min(100, Math.round((n.allocatedMemoryMb / n.memoryMb) * 100)) : 0;
+	const percent = (used: number, total: number | null) =>
+		total ? Math.min(100, Math.round((used / total) * 100)) : 0;
+	const cores = (n: number) => `${Math.round(n * 100) / 100} CPU${n === 1 ? '' : 's'}`;
 	const gb = (mb: number) => `${(mb / 1024).toFixed(mb < 10_240 ? 1 : 0)} GB`;
 </script>
 
@@ -256,14 +257,34 @@
 						</p>
 					{/if}
 				{/if}
-				{#if node.memoryMb}
-					<div class="mt-3 space-y-1">
-						<div class="h-1.5 overflow-hidden rounded-full bg-muted">
-							<div class="h-full bg-foreground/60" style="width: {percent(node)}%"></div>
-						</div>
-						<div class="text-xs text-muted-foreground">
-							{gb(node.allocatedMemoryMb)} of {gb(node.memoryMb)} reserved by memory limits
-						</div>
+				{#if node.memoryMb || node.cpus}
+					<div class="mt-3 grid gap-3 sm:grid-cols-2" data-testid="node-reserved">
+						{#if node.memoryMb}
+							<div class="space-y-1">
+								<div class="h-1.5 overflow-hidden rounded-full bg-muted">
+									<div
+										class="h-full bg-foreground/60"
+										style="width: {percent(node.allocatedMemoryMb, node.memoryMb)}%"
+									></div>
+								</div>
+								<div class="text-xs text-muted-foreground">
+									Memory: {gb(node.allocatedMemoryMb)} of {gb(node.memoryMb)} reserved
+								</div>
+							</div>
+						{/if}
+						{#if node.cpus}
+							<div class="space-y-1">
+								<div class="h-1.5 overflow-hidden rounded-full bg-muted">
+									<div
+										class="h-full bg-foreground/60"
+										style="width: {percent(node.allocatedCpus, node.cpus)}%"
+									></div>
+								</div>
+								<div class="text-xs text-muted-foreground">
+									CPU: {cores(node.allocatedCpus)} of {cores(node.cpus)} reserved
+								</div>
+							</div>
+						{/if}
 					</div>
 				{/if}
 				<div class="mt-3">

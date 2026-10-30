@@ -4,10 +4,11 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { deployment, node } from '../db/schema';
+import { container, deployment, node } from '../db/schema';
+import { buildDesiredState } from '../nodes/desired';
 import { reconcile } from '../nodes/reconciler';
 import { authenticate, ensureLocalNode, join, recordHello, recordReport } from '../nodes/registry';
-import { grantInstallAdmin, seedCtx } from '../testing';
+import { grantInstallAdmin, seedCtx, testSecrets } from '../testing';
 import * as changes from './changes';
 import type { Ctx } from './context';
 import * as environments from './environments';
@@ -260,6 +261,146 @@ describe('scheduling', () => {
 			status: 'building',
 			image: null,
 			commit: 'abc'
+		});
+	});
+});
+
+describe('requests and spreading', () => {
+	it('packs by CPU and memory requests, with a limit standing in for a missing request', () => {
+		const { ctx, project, env, local } = setup();
+		nodes.update(ctx, local.id, { cordoned: true });
+		const box = enroll(ctx, 'box', { memoryMb: 4096 });
+		const a = addService(ctx, project.id, env.id, {
+			deploy: { cpuRequest: 3, memoryRequestMb: 1024, memoryMb: 3072 }
+		});
+		expect(deployAll(ctx, env.id)[a.id]!.nodeId).toBe(box.id);
+		expect(nodes.list(ctx).find((n) => n.id === box.id)).toMatchObject({
+			allocatedCpus: 3,
+			allocatedMemoryMb: 1024
+		});
+
+		// the box has 4 CPUs, 3 of them reserved
+		const b = addService(ctx, project.id, env.id, { deploy: { cpuRequest: 1.5 } });
+		expect(deployAll(ctx, env.id)[b.id]!.message).toBe('Waiting for a node with 1.5 CPU free');
+		// with no request, the limit is what's reserved
+		const c = addService(ctx, project.id, env.id, { deploy: { memoryMb: 3500 } });
+		expect(deployAll(ctx, env.id)[c.id]!.message).toBe(
+			'Waiting for a node with 3500 MB of memory free'
+		);
+		const d = addService(ctx, project.id, env.id, { deploy: { cpuRequest: 1, memoryMb: 3000 } });
+		expect(deployAll(ctx, env.id)[d.id]!.nodeId).toBe(box.id);
+	});
+
+	it("spreads a registry image's replicas over nodes, each running only its own", () => {
+		const { ctx, project, env, local } = setup();
+		const other = enroll(ctx, 'other');
+		const web = addService(ctx, project.id, env.id, {
+			deploy: { replicas: 3, memoryRequestMb: 512 },
+			networking: { port: 80 }
+		});
+		const dep = deployAll(ctx, env.id)[web.id]!;
+		expect(dep.nodeId).toBe(local.id);
+		expect(dep.replicaNodes).toEqual([local.id, other.id, local.id]);
+		const replicas = (nodeId: string) =>
+			buildDesiredState(ctx.db, testSecrets, ctx.settings, nodeId).containers.map((c) => c.replica);
+		expect(replicas(local.id)).toEqual([0, 2]);
+		expect(replicas(other.id)).toEqual([1]);
+		const listed = nodes.list(ctx);
+		expect(listed.find((n) => n.id === local.id)).toMatchObject({
+			allocatedMemoryMb: 1024,
+			deployments: 1
+		});
+		expect(listed.find((n) => n.id === other.id)).toMatchObject({
+			allocatedMemoryMb: 512,
+			deployments: 1
+		});
+
+		// each node reports only its own replicas; a claim about another node's is ignored
+		const report = (nodeId: string, ...replicas: number[]) =>
+			recordReport(ctx.db, nodeId, {
+				revision: null,
+				containers: replicas.map((replica) => ({
+					name: `tl-${dep.id}-${replica}`,
+					deploymentId: dep.id,
+					replica,
+					state: 'running' as const,
+					healthy: null,
+					exitCode: null,
+					restartCount: 0,
+					error: null,
+					startedAt: new Date(0).toISOString()
+				}))
+			});
+		report(local.id, 0, 2);
+		report(other.id, 1, 2);
+		expect(
+			ctx.db
+				.select()
+				.from(container)
+				.all()
+				.map((c) => [c.nodeId, c.replica])
+				.sort()
+		).toEqual(
+			[
+				[local.id, 0],
+				[local.id, 2],
+				[other.id, 1]
+			].sort()
+		);
+		reconcile(ctx.db, ctx.settings);
+		expect(ctx.db.select().from(deployment).where(eq(deployment.id, dep.id)).get()).toMatchObject({
+			status: 'active'
+		});
+
+		// draining one node moves the whole deployment onto the rest
+		expect(nodes.drain(ctx, other.id)).toEqual({ moved: 1, kept: [] });
+		reconcile(ctx.db, ctx.settings);
+		const moved = ctx.db
+			.select()
+			.from(deployment)
+			.where(eq(deployment.serviceId, web.id))
+			.all()
+			.find((d) => d.id !== dep.id)!;
+		expect(moved).toMatchObject({ nodeId: local.id, replicaNodes: null });
+	});
+
+	it('keeps replicas together when a build, a volume or a pin ties them to one node', () => {
+		const { ctx, project, env, local } = setup();
+		const other = enroll(ctx, 'other');
+		const pinned = addService(ctx, project.id, env.id, {
+			deploy: { replicas: 2, node: other.id }
+		});
+		const repo = services.create(ctx, {
+			projectId: project.id,
+			kind: 'repo',
+			source: {
+				type: 'repo',
+				repo: 'https://github.com/acme/app',
+				branch: 'main',
+				rootDirectory: '/'
+			}
+		});
+		services.stageConfig(ctx, repo.id, env.id, { deploy: { replicas: 2 } });
+		const placed = deployAll(ctx, env.id);
+		expect(placed[pinned.id]).toMatchObject({ nodeId: other.id, replicaNodes: null });
+		expect(placed[repo.id]!.replicaNodes).toBeNull();
+		// one node is no reason to record a spread
+		nodes.update(ctx, other.id, { cordoned: true });
+		const solo = addService(ctx, project.id, env.id, { deploy: { replicas: 2 } });
+		expect(deployAll(ctx, env.id)[solo.id]).toMatchObject({ nodeId: local.id, replicaNodes: null });
+	});
+
+	it('waits until every replica has room', () => {
+		const { ctx, project, env, local } = setup();
+		nodes.update(ctx, local.id, { cordoned: true });
+		enroll(ctx, 'a', { memoryMb: 1024 });
+		enroll(ctx, 'b', { memoryMb: 1024 });
+		const web = addService(ctx, project.id, env.id, {
+			deploy: { replicas: 3, memoryRequestMb: 768 }
+		});
+		expect(deployAll(ctx, env.id)[web.id]).toMatchObject({
+			status: 'queued',
+			message: 'Waiting for room for 3 replicas with 768 MB of memory each'
 		});
 	});
 });

@@ -272,6 +272,55 @@ test('enroll a second node, reach it over the mesh, then move off it and remove 
 	await expect.poll(async () => (await onNode2()).status, { timeout: 300_000 }).toBe(404);
 	await expect.poll(async () => (await onLocal()).status, { timeout: 30_000 }).toBe(200);
 
+	// back in service, the second node takes one of two replicas: a registry image spreads
+	const second = nodes.find((n) => n.name === 'dind')!;
+	expect(
+		(await page.request.patch(`/api/v1/nodes/${second.id}`, { data: { cordoned: false } })).ok()
+	).toBe(true);
+	await page.getByTestId('service-node').filter({ hasText: 'whoami' }).click();
+	await panel.getByRole('tab', { name: 'Settings' }).click();
+	await page.getByLabel('Replicas').fill('2');
+	await page.getByLabel('Replicas').press('Enter');
+	await page.getByTestId('changes-bar').getByRole('button', { name: 'Deploy' }).click();
+	// other tests run whoami too, so count only this service's containers
+	const projectId = new URL(page.url()).pathname.split('/')[2];
+	const listed = (await (
+		await page.request.get(`/api/v1/services?projectId=${projectId}`)
+	).json()) as { id: string; name: string }[];
+	const whoami = listed.find((s) => s.name === 'whoami')!;
+	const environments = (await (
+		await page.request.get(`/api/v1/environments?projectId=${projectId}`)
+	).json()) as { id: string }[];
+	const workloads = async (on: (...args: string[]) => string) => {
+		const deployments = (await (
+			await page.request.get(
+				`/api/v1/deployments?serviceId=${whoami.id}&environmentId=${environments[0]!.id}`
+			)
+		).json()) as { id: string }[];
+		const ids = new Set(deployments.map((d) => d.id));
+		return on(
+			'ps',
+			'--filter',
+			'label=tramline.role=workload',
+			'--format',
+			'{{.Label "tramline.deployment"}}'
+		)
+			.split('\n')
+			.filter((id) => ids.has(id)).length;
+	};
+	const onHere = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8' });
+	await expect.poll(() => workloads(inNode), { timeout: 300_000 }).toBe(1);
+	await expect.poll(() => workloads(onHere), { timeout: 60_000 }).toBe(1);
+	// each node's ingress serves its own replica
+	await expect.poll(async () => (await onNode2()).status, { timeout: 60_000 }).toBe(200);
+	await expect.poll(async () => (await onLocal()).status, { timeout: 30_000 }).toBe(200);
+	await page.goto('/nodes');
+	await expect(row).toContainText('1 deployment');
+	await row.getByRole('button', { name: 'Drain' }).click();
+	await expect(row).toContainText('Draining');
+	await expect.poll(() => workloads(inNode), { timeout: 300_000 }).toBe(0);
+	await expect.poll(async () => (await onLocal()).status, { timeout: 30_000 }).toBe(200);
+
 	// an empty node can be removed, and its agent is shut out
 	await page.goto('/nodes');
 	await expect(row).toContainText('0 deployments', { timeout: 30_000 });

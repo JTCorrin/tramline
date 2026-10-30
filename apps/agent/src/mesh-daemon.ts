@@ -97,15 +97,16 @@ export class Forwarder {
 	async apply(config: MeshConfig) {
 		const wanted = new Map(
 			config.forwards.map((f) => {
-				const [host, port] =
+				const [hosts, port] =
 					f.to === 'local'
 						? [
-								f.target.slice(0, f.target.lastIndexOf(':')),
+								[f.target.slice(0, f.target.lastIndexOf(':'))],
 								f.target.slice(f.target.lastIndexOf(':') + 1)
 							]
-						: [f.address, String(f.port)];
+						: [f.addresses?.length ? f.addresses : [f.address], String(f.port)];
 				const bind = f.to === 'local' ? config.address : config.transitAddress;
-				return [f.port, { bind, host, port: Number(port), key: `${bind}>${host}:${port}` }];
+				const key = `${bind}>${hosts.join(',')}:${port}`;
+				return [f.port, { bind, hosts, port: Number(port), key }];
 			})
 		);
 		for (const [port, listener] of this.#listeners) {
@@ -116,15 +117,34 @@ export class Forwarder {
 		}
 		for (const [port, f] of wanted) {
 			if (this.#listeners.has(port)) continue;
+			let next = 0;
 			const server = net.createServer((client) => {
-				const upstream = net.connect(f.port, f.host);
-				client.pipe(upstream).pipe(client);
-				const close = () => {
-					client.destroy();
-					upstream.destroy();
+				client.pause();
+				client.on('error', () => client.destroy());
+				// a service spread over nodes: connections take turns, and skip a node that refuses
+				const start = next++ % f.hosts.length;
+				const attempt = (tried: number) => {
+					const upstream = net.connect(f.port, f.hosts[(start + tried) % f.hosts.length]!);
+					upstream.once('connect', () => {
+						upstream.removeAllListeners('error');
+						client.pipe(upstream).pipe(client);
+						client.resume();
+						const close = () => {
+							client.destroy();
+							upstream.destroy();
+						};
+						client.on('error', close);
+						client.on('close', close);
+						upstream.on('error', close);
+						upstream.on('close', close);
+					});
+					upstream.once('error', () => {
+						upstream.destroy();
+						if (tried + 1 < f.hosts.length && !client.destroyed) attempt(tried + 1);
+						else client.destroy();
+					});
 				};
-				client.on('error', close);
-				upstream.on('error', close);
+				attempt(0);
 			});
 			// a port that can't be bound is reported and tried again with the next config
 			const listening = await new Promise<boolean>((resolve) => {

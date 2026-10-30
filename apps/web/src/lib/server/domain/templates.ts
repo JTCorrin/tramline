@@ -12,16 +12,20 @@ export interface DatabaseTemplate {
 	variables: () => Record<string, string>;
 }
 
-/** A database image whose data lives on a volume at `mountPath`. */
+/**
+ * A database image whose data lives on a volume at `mountPath`, reserving
+ * what it needs at rest so the scheduler doesn't crowd it.
+ */
 const image = (
 	name: string,
 	port: number,
 	mountPath: string,
+	requests: { memoryRequestMb: number; cpuRequest: number },
 	startCommand: string | null = null
 ): ServiceConfig => ({
 	...DEFAULT_SERVICE_CONFIG,
 	source: { type: 'image', image: name },
-	deploy: { ...DEFAULT_SERVICE_CONFIG.deploy, startCommand, restartPolicy: 'always' },
+	deploy: { ...DEFAULT_SERVICE_CONFIG.deploy, ...requests, startCommand, restartPolicy: 'always' },
 	networking: { ...DEFAULT_SERVICE_CONFIG.networking, port },
 	volume: { mountPath }
 });
@@ -31,7 +35,10 @@ const HOST = '${{TRAMLINE_PRIVATE_DOMAIN}}';
 export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	postgres: {
 		name: 'Postgres',
-		config: image('postgres:17', 5432, '/var/lib/postgresql/data'),
+		config: image('postgres:17', 5432, '/var/lib/postgresql/data', {
+			memoryRequestMb: 256,
+			cpuRequest: 0.25
+		}),
 		variables: () => ({
 			PGUSER: 'postgres',
 			POSTGRES_USER: '${{PGUSER}}',
@@ -46,7 +53,7 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	},
 	mysql: {
 		name: 'MySQL',
-		config: image('mysql:8.4', 3306, '/var/lib/mysql'),
+		config: image('mysql:8.4', 3306, '/var/lib/mysql', { memoryRequestMb: 512, cpuRequest: 0.25 }),
 		variables: () => ({
 			MYSQL_ROOT_PASSWORD: randomSecret(),
 			MYSQL_DATABASE: 'app',
@@ -61,6 +68,7 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 			'redis:7',
 			6379,
 			'/data',
+			{ memoryRequestMb: 64, cpuRequest: 0.1 },
 			// append-only, so every write survives a restart
 			'redis-server --requirepass $REDIS_PASSWORD --appendonly yes'
 		),
@@ -73,7 +81,7 @@ export const DATABASE_TEMPLATES: Record<DatabaseEngine, DatabaseTemplate> = {
 	},
 	mongo: {
 		name: 'MongoDB',
-		config: image('mongo:8', 27017, '/data/db'),
+		config: image('mongo:8', 27017, '/data/db', { memoryRequestMb: 256, cpuRequest: 0.25 }),
 		variables: () => ({
 			MONGO_INITDB_ROOT_USERNAME: 'mongo',
 			MONGO_INITDB_ROOT_PASSWORD: randomSecret(),

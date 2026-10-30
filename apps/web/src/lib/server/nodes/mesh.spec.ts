@@ -103,7 +103,7 @@ describe('planMesh', () => {
 	const db = {
 		serviceId: 'svc_db',
 		environmentId: 'env_1',
-		nodeId: 'node_b',
+		nodeIds: ['node_b'],
 		port: 5432,
 		alias: 'postgres.production.tramline.internal',
 		target: 'dep_db.tramline.internal',
@@ -113,7 +113,7 @@ describe('planMesh', () => {
 	const web = {
 		serviceId: 'svc_web',
 		environmentId: 'env_2',
-		nodeId: 'node_b',
+		nodeIds: ['node_b'],
 		port: 3000,
 		alias: 'web.production.tramline.internal',
 		target: 'dep_web.tramline.internal',
@@ -180,6 +180,36 @@ describe('planMesh', () => {
 			{ to: 'remote', port: ports.get('env_2:svc_web')!, address: '10.231.0.2' }
 		]);
 		expect(edge.links).toEqual([]);
+	});
+
+	it('spreads connections over every node a service runs on', () => {
+		const c = member('node_c', '198.51.100.3:51820', 3);
+		const spread = { ...web, nodeIds: ['node_b', 'node_c'] };
+		const port = ports.get('env_2:svc_web')!;
+		const consumer = planMesh([a, b, c], [spread], {
+			id: 'node_a',
+			edge: false,
+			networks: [networkName('env_2')]
+		})!;
+		expect(consumer.forwards).toEqual([
+			{ to: 'remote', port, address: '10.231.0.2', addresses: ['10.231.0.2', '10.231.0.3'] }
+		]);
+		expect(consumer.links).toHaveLength(1);
+		// a node with a replica serves it itself, with no link in the way of its own name
+		const host = planMesh([a, b, c], [spread], {
+			id: 'node_c',
+			edge: true,
+			networks: [networkName('env_2')]
+		})!;
+		expect(host.forwards).toEqual([
+			{
+				to: 'local',
+				port,
+				target: 'dep_web.tramline.internal:3000',
+				network: networkName('env_2')
+			}
+		]);
+		expect(host.links).toEqual([]);
 	});
 
 	it('skips services on nodes it cannot reach', () => {
@@ -271,10 +301,10 @@ describe('mesh in the desired state', () => {
 		deploy(ctx, env.id);
 
 		const exports = meshExports(ctx.db, testSecrets);
-		expect(exports.map((e) => [e.serviceId, e.nodeId]).sort()).toEqual(
+		expect(exports.map((e) => [e.serviceId, e.nodeIds]).sort()).toEqual(
 			[
-				[pg.id, remote],
-				[app.id, remote]
+				[pg.id, [remote]],
+				[app.id, [remote]]
 			].sort()
 		);
 		const ports = meshPorts(exports);

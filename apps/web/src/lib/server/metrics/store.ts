@@ -9,6 +9,7 @@ import type {
 import { and, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client';
 import { containerMetric, deployment, nodeMetric } from '../db/schema';
+import { nodesOf, replicaNode } from '../nodes/placement';
 
 export const MINUTE = 60;
 export const HOUR = 3600;
@@ -71,6 +72,7 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 			.select({
 				id: deployment.id,
 				nodeId: deployment.nodeId,
+				replicaNodes: deployment.replicaNodes,
 				serviceId: deployment.serviceId,
 				environmentId: deployment.environmentId,
 				config: deployment.config,
@@ -79,7 +81,7 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 			.from(deployment)
 			.where(inArray(deployment.id, ids))
 			.all()
-			.filter((d) => d.nodeId === nodeId)
+			.filter((d) => nodesOf(d).includes(nodeId))
 			.map((d) => [d.id, d])
 	);
 	for (const s of batch.containers) {
@@ -88,6 +90,8 @@ export function recordMetrics(db: DbOrTx, nodeId: string, batch: MetricsBatch, n
 		// The agent may only create series for replicas the control plane assigned.
 		const replicas = owner.config.deploy.cronSchedule ? 1 : owner.config.deploy.replicas;
 		if (!Number.isInteger(s.replica) || s.replica < 0 || s.replica >= replicas) continue;
+		// and only for its own replicas when they are spread
+		if (replicaNode(owner, s.replica) !== nodeId) continue;
 		db.insert(containerMetric)
 			.values({
 				step: MINUTE,

@@ -14,6 +14,7 @@ import type { DbOrTx } from '../db/client';
 import { deployment, node, serviceInstance } from '../db/schema';
 import { verifiedHostnames } from '../domain/domains';
 import { deploymentAlias, networkName, RUNNING_STATUSES } from './names';
+import { nodesOf } from './placement';
 import { isOnline, MESH_CIDR, type NodeRow } from './registry';
 
 /**
@@ -46,7 +47,8 @@ export const linkName = (environmentId: string, serviceId: string) =>
 export interface MeshExport {
 	serviceId: string;
 	environmentId: string;
-	nodeId: string;
+	/** The nodes its chosen deployment has replicas on. */
+	nodeIds: string[];
 	port: number;
 	/** e.g. `postgres.production.tramline.internal`, as the service's deployment saw it. */
 	alias: string;
@@ -132,8 +134,8 @@ export function meshMembers(db: DbOrTx, now = Date.now()): Member[] {
 }
 
 /**
- * Services with a port, and the node each runs on. While a service moves
- * between nodes its live deployment's node wins, so traffic only switches
+ * Services with a port, and the nodes each runs on. While a service moves
+ * between nodes its live deployment's nodes win, so traffic only switches
  * once the new one is healthy.
  */
 export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
@@ -181,7 +183,7 @@ export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
 			{
 				serviceId: dep.serviceId,
 				environmentId: dep.environmentId,
-				nodeId: dep.nodeId!,
+				nodeIds: nodesOf(dep),
 				port: config.networking.port,
 				alias: env.TRAMLINE_PRIVATE_DOMAIN,
 				target: deploymentAlias(dep.id),
@@ -229,15 +231,21 @@ export function planMesh(
 	for (const e of exports) {
 		const port = ports.get(`${e.environmentId}:${e.serviceId}`)!;
 		const network = networkName(e.environmentId);
-		if (e.nodeId === self.id) {
+		// replicas here answer to the service's name themselves, and take traffic from other nodes
+		if (e.nodeIds.includes(self.id)) {
 			forwards.push({ to: 'local', port, target: `${e.target}:${e.port}`, network });
 			continue;
 		}
-		const host = members.find((m) => m.id === e.nodeId);
-		if (!host || !reachable.has(host.id)) continue;
+		const hosts = members.filter((m) => e.nodeIds.includes(m.id) && reachable.has(m.id));
+		if (!hosts.length) continue;
 		const consumed = networks.has(network);
 		if (!consumed && !(self.edge && (e.hosts.length || e.tcp))) continue;
-		forwards.push({ to: 'remote', port, address: host.address });
+		forwards.push({
+			to: 'remote',
+			port,
+			address: hosts[0]!.address,
+			...(hosts.length > 1 ? { addresses: hosts.map((h) => h.address) } : {})
+		});
 		if (consumed) {
 			links.push({
 				name: linkName(e.environmentId, e.serviceId),
@@ -285,7 +293,7 @@ export function planTcpProxies(
 			protocol: 'postgres' as const,
 			allow: e.tcp.allow
 		};
-		if (e.nodeId === self.id) {
+		if (e.nodeIds.includes(self.id)) {
 			return [{ ...base, target: `${e.target}:${e.port}`, network: networkName(e.environmentId) }];
 		}
 		const meshPort = ports.get(`${e.environmentId}:${e.serviceId}`)!;
