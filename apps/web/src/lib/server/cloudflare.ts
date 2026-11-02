@@ -36,7 +36,9 @@ export interface CloudflareClient {
 /** Cloudflare's own message, e.g. "Authentication error", as a Tramline error. */
 function failure(status: number, body: Envelope<unknown> | null, what: string) {
 	const message = body?.errors?.map((e) => e.message).join('; ') || `HTTP ${status}`;
-	if (status === 401 || status === 403 || body?.errors?.some((e) => e.code === 10000)) {
+	// 6003: a malformed Authorization header; 9109: an unknown or revoked token
+	const tokenCodes = [6003, 9109, 10000];
+	if (status === 401 || status === 403 || body?.errors?.some((e) => tokenCodes.includes(e.code))) {
 		return new AppError(
 			'validation_failed',
 			`Cloudflare refused the API token while trying to ${what}: ${message}`

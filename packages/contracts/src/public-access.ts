@@ -37,7 +37,23 @@ export const PublicAccess = z.object({
 });
 export type PublicAccess = z.infer<typeof PublicAccess>;
 
-const ApiToken = z.string().trim().min(20, 'Paste the whole API token').max(200);
+/**
+ * Copied tokens pick up line breaks, and Cloudflare's "test this token" curl
+ * command has it after `Bearer `; take the token out of either.
+ */
+const ApiToken = z
+	.string()
+	.transform((value) => {
+		const bearer = value.match(/Bearer\s+([A-Za-z0-9_-]+)/);
+		return (bearer ? bearer[1]! : value).replace(/\s+/g, '');
+	})
+	.pipe(
+		z
+			.string()
+			.min(20, 'Paste the whole API token')
+			.max(200)
+			.regex(/^[A-Za-z0-9_-]+$/, 'An API token is only letters, digits, - and _')
+	);
 
 export const ListCloudflareZones = z.object({ apiToken: ApiToken });
 export type ListCloudflareZones = z.infer<typeof ListCloudflareZones>;

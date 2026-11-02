@@ -1,4 +1,4 @@
-import type { AgentHello } from '@tramline/contracts';
+import { ListCloudflareZones, type AgentHello } from '@tramline/contracts';
 import { describe, expect, it } from 'vitest';
 import { publicTunnel } from '../db/schema';
 import { buildDesiredState } from '../nodes/desired';
@@ -122,6 +122,18 @@ const desired = (ctx: Ctx, nodeId: string) =>
 	buildDesiredState(ctx.db, ctx.secrets, ctx.settings, nodeId);
 
 describe('public access', () => {
+	it('takes the token out of what people paste', () => {
+		const parse = (apiToken: string) => ListCloudflareZones.safeParse({ apiToken });
+		expect(parse(` ${TOKEN}\n`).data?.apiToken).toBe(TOKEN);
+		expect(parse(`cf-api-token-\n0123456789abcdef`).data?.apiToken).toBe(TOKEN);
+		expect(
+			parse(
+				`curl "https://api.cloudflare.com/client/v4/user/tokens/verify" \\\n -H "Authorization: Bearer ${TOKEN}"`
+			).data?.apiToken
+		).toBe(TOKEN);
+		expect(parse('not a token at all, really!').success).toBe(false);
+	});
+
 	it('lists the domains a token can manage, and explains a refused token', async () => {
 		const { ctx } = setup();
 		const { fetcher } = fakeCloudflare();
