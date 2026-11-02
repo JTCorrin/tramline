@@ -483,6 +483,12 @@ describe('GCP adapter', () => {
 		expect(instanceName('GPU_Box.1')).toBe('gpu-box-1');
 		expect(instanceName('1st')).toBe('tl-1st');
 		expect(instanceName('a'.repeat(70) + '-b')).toHaveLength(63);
+		expect(instanceName('--a--b--')).toBe('a-b');
+		expect(instanceName('a'.repeat(62) + '-b')).toBe('a'.repeat(62));
+		// hyphen runs that once made trimming quadratic
+		const started = performance.now();
+		expect(instanceName(`a${'-'.repeat(100_000)}b`)).toBe('a-b');
+		expect(performance.now() - started).toBeLessThan(100);
 	});
 });
 

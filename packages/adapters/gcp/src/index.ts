@@ -143,11 +143,13 @@ const regionOf = (zone: string) => zone.replace(/-[a-z]$/, '');
 
 /** GCE names: lowercase letters, digits and hyphens, starting with a letter, at most 63. */
 export function instanceName(node: string) {
-	const name = node
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return (/^[a-z]/.test(name) ? name : `tl-${name}`).slice(0, 63).replace(/-+$/, '');
+	// every run of other characters (hyphens included) becomes one hyphen, so trimming is linear
+	const trim = (value: string) => {
+		const start = value.startsWith('-') ? 1 : 0;
+		return value.slice(start, value.endsWith('-') ? -1 : undefined);
+	};
+	const name = trim(node.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+	return trim((/^[a-z]/.test(name) ? name : `tl-${name}`).slice(0, 63));
 }
 
 function toNode(vm: Instance): ProviderNode {
