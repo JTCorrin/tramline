@@ -17,6 +17,8 @@ export const CredentialField = z.object({
 	required: z.boolean(),
 	/** Never shown again once saved; left blank, the saved value stays. */
 	secret: z.boolean(),
+	/** Several lines, e.g. a PEM certificate or a JSON key. */
+	multiline: z.boolean(),
 	placeholder: z.string().nullable(),
 	default: z.union([z.string(), z.number(), z.boolean()]).nullable()
 });

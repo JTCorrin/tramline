@@ -51,12 +51,27 @@
 						{/each}
 					</Select.Content>
 				</Select.Root>
-			{:else if field.key === 'caCertificate'}
+			{:else if field.multiline}
 				<Textarea
 					{id}
+					class="font-mono text-xs"
+					rows={field.secret ? 4 : 3}
+					spellcheck={false}
 					value={String(values[field.key] ?? '')}
 					oninput={(event) => (values[field.key] = event.currentTarget.value)}
-					placeholder="-----BEGIN CERTIFICATE-----"
+					placeholder={field.secret && editing
+						? 'Saved; leave blank to keep it'
+						: (field.placeholder ?? '')}
+					required={field.required && !(field.secret && editing)}
+				/>
+				<input
+					type="file"
+					class="text-xs text-muted-foreground"
+					aria-label={`Load ${field.label} from a file`}
+					onchange={async (event) => {
+						const file = event.currentTarget.files?.[0];
+						if (file) values[field.key] = await file.text();
+					}}
 				/>
 			{:else}
 				<Input
