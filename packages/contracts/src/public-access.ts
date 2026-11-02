@@ -80,9 +80,15 @@ export const CreatePublicTunnel = z.object({
 		.string()
 		.trim()
 		.toLowerCase()
-		.regex(/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$|^$/, {
-			message: 'Use letters, digits, hyphens and dots'
-		}),
+		// a hostname's length cap, checked before the pattern ever runs
+		.max(200, 'That name is too long')
+		.pipe(
+			z
+				.string()
+				.regex(/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$|^$/, {
+					message: 'Use letters, digits, hyphens and dots'
+				})
+		),
 	originUrl: OriginUrl,
 	nodeId: z.string().nullable()
 });
