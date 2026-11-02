@@ -67,6 +67,39 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['nodes.drain', (c) => c.nodes.drain('node_1'), 'POST /nodes/node_1/drain'],
 	['nodes.remove', (c) => c.nodes.remove('node_1'), 'DELETE /nodes/node_1'],
 	['adapters.getAll', (c) => c.adapters.getAll(), 'GET /adapters'],
+	['publicAccess.get', (c) => c.publicAccess.get(), 'GET /public-access'],
+	[
+		'publicAccess.cloudflareZones',
+		(c) => c.publicAccess.cloudflareZones({ apiToken: 't' }),
+		'POST /public-access/cloudflare/zones'
+	],
+	[
+		'publicAccess.createTunnel',
+		(c) =>
+			c.publicAccess.createTunnel({
+				apiToken: 't',
+				zoneId: 'z',
+				subdomain: 'tramline',
+				originUrl: 'http://localhost:3000',
+				nodeId: null
+			}),
+		'POST /public-access/tunnel'
+	],
+	[
+		'publicAccess.updateTunnel',
+		(c) => c.publicAccess.updateTunnel({ nodeId: 'n' }),
+		'PATCH /public-access/tunnel'
+	],
+	[
+		'publicAccess.removeTunnel',
+		(c) => c.publicAccess.removeTunnel({ force: true }),
+		'DELETE /public-access/tunnel?force=true'
+	],
+	[
+		'publicAccess.connector',
+		(c) => c.publicAccess.connector(),
+		'POST /public-access/tunnel/connector'
+	],
 	['adapters.accounts', (c) => c.adapters.accounts(), 'GET /adapter-accounts'],
 	[
 		'adapters.connect',

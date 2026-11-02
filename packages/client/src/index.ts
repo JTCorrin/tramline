@@ -12,6 +12,7 @@ import { metrics } from './resources/metrics';
 import { nodes } from './resources/nodes';
 import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
+import { publicAccess } from './resources/public-access';
 import { services } from './resources/services';
 import { tokens } from './resources/tokens';
 import { variables } from './resources/variables';
@@ -32,6 +33,7 @@ export function createClient(options: ClientOptions) {
 		nodes: nodes(http),
 		metrics: metrics(http),
 		adapters: adapters(http),
+		publicAccess: publicAccess(http),
 		github: github(http),
 		backups: backups(http),
 		domains: domains(http),

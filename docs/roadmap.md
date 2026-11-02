@@ -636,6 +636,12 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 **7b: cloud adapters**
 
 - Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **Hetzner** and **AWS EC2**. Each one is a package that passes the conformance suite, with no changes to core.
+- **Public access** (done first, so cloud machines can reach an install at home): the Nodes page shows where new nodes connect, and can set up a **Cloudflare tunnel** from an API token (Cloudflare Tunnel: Edit, DNS: Edit on one domain).
+  - **What it creates:** a tunnel, its routes and a proxied DNS name, all through Cloudflare's API; anything that fails part-way is removed again. Removing it deletes both in Cloudflare (or forgets them, if Cloudflare can't be reached).
+  - **What it carries:** only `/api/agent/` and `/install.sh`, so the dashboard stays private. Everything else on that hostname is a 404.
+  - **The connector:** `cloudflared` runs on a chosen node, on the host's network, or by hand with a command shown once on request. The API token and tunnel token are stored encrypted.
+  - **Order:** new nodes join through the tunnel, then `TRAMLINE_AGENT_URL` (new), then `TRAMLINE_URL`. Nodes that joined earlier keep the address they joined with.
+  - **Not the default:** Cloudflare terminates TLS, so it sees the agent traffic. An install with a public address can use its own HTTPS instead.
 
 **7c: node pools**
 

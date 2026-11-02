@@ -21,7 +21,8 @@ export const ID_PREFIXES = {
 	invite: 'inv',
 	adapterAccount: 'acct',
 	join: 'jtk',
-	alert: 'alr'
+	alert: 'alr',
+	tunnel: 'tun'
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;

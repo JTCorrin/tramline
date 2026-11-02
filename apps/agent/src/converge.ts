@@ -218,6 +218,11 @@ export class Converger {
 		} catch (error) {
 			log(`a TCP proxy failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		try {
+			await this.#ensureTunnel(desired, existing);
+		} catch (error) {
+			log(`the tunnel connector failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
 		await this.#publishRoutes(desired);
 
@@ -524,6 +529,53 @@ export class Converger {
 			// links reach the mesh container over the mesh network
 			await this.runtime.connect(linkName, network);
 		}
+	}
+
+	/**
+	 * The install's tunnel connector, when this node was chosen to run it. It
+	 * uses the host's network, so it reaches the control plane at the same
+	 * address as a browser on this machine would.
+	 */
+	async #ensureTunnel(desired: DesiredState, existing: ManagedContainer[]) {
+		const log = this.options.log ?? quiet;
+		const tunnel = desired.tunnel ?? null;
+		const spec: RunSpec | null = tunnel && {
+			name: tunnel.name,
+			image: tunnel.image,
+			cmd: ['tunnel', '--no-autoupdate', 'run'],
+			// cloudflared reads it from the environment, which keeps it out of the process list
+			env: { TUNNEL_TOKEN: tunnel.token },
+			network: 'host',
+			aliases: [],
+			restart: { name: 'always', maxRetries: 0 },
+			security: {
+				capabilities: [],
+				pidsLimit: 256,
+				memoryMb: 256,
+				readOnlyRootFilesystem: true
+			},
+			labels: {
+				[LABELS.managed]: 'true',
+				[LABELS.node]: this.#node(),
+				[LABELS.role]: 'tunnel',
+				[LABELS.spec]: hash(tunnel)
+			}
+		};
+		for (const container of existing.filter((c) => c.labels[LABELS.role] === 'tunnel')) {
+			if (
+				spec &&
+				container.name === spec.name &&
+				container.labels[LABELS.spec] === spec.labels[LABELS.spec]
+			) {
+				return;
+			}
+			log(`removing ${container.name}`);
+			await this.runtime.remove(container.name);
+		}
+		if (!spec) return;
+		if (!(await this.runtime.hasImage(spec.image))) await this.runtime.pull(spec.image);
+		await this.runtime.run(spec);
+		log(`started the tunnel connector ${spec.name}`);
 	}
 
 	async #ensureIngress(desired: DesiredState, existing: ManagedContainer[]) {

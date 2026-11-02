@@ -10,6 +10,7 @@ export * from './github';
 export * from './ids';
 export * from './metrics';
 export * from './projects';
+export * from './public-access';
 export * from './scan';
 export * from './services';
 export * from './tokens';
