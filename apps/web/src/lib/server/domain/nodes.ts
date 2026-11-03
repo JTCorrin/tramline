@@ -19,6 +19,7 @@ import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { destroyMachine } from './adapters';
 import { copyDeployment } from './deployments';
+import { agentUrl } from './public-access';
 
 /** How long a join token can be used for. */
 export const JOIN_TOKEN_TTL_MS = 60 * 60_000;
@@ -98,7 +99,8 @@ function nameTaken(db: DbOrTx, name: string, now: Date) {
 
 /**
  * A one-time token for enrolling a machine; the response holds the only copy.
- * `origin` is where the new node reaches this install when TRAMLINE_URL isn't set.
+ * `origin` is where the new node reaches this install when no tunnel,
+ * TRAMLINE_AGENT_URL or TRAMLINE_URL says otherwise.
  */
 export function createJoinToken(
 	ctx: Ctx,
@@ -137,7 +139,7 @@ export function issueJoinToken(
 			...adapter
 		})
 		.run();
-	const url = (ctx.settings.publicUrl ?? origin).replace(/\/$/, '');
+	const url = agentUrl(ctx.db, ctx.settings) ?? origin.replace(/\/$/, '');
 	return {
 		id,
 		url,

@@ -316,6 +316,36 @@ describe('Converger', () => {
 		await converger.run(desiredState(undefined, [route]));
 		expect(logs).toContain('updating the ingress failed: no such container');
 	});
+	it('runs the tunnel connector on the host network, and replaces or removes it', async () => {
+		const { runtime, converger } = setup();
+		const tunnel = {
+			name: 'tramline-tunnel-node_1',
+			image: 'cloudflare/cloudflared:2026.10.0',
+			token: 'eyJ-token'
+		};
+		await converger.run({ ...desiredState(), tunnel });
+		const container = runtime.containers.get(tunnel.name)!;
+		expect(container.labels[LABELS.role]).toBe('tunnel');
+		expect(container.spec).toMatchObject({
+			image: tunnel.image,
+			cmd: ['tunnel', '--no-autoupdate', 'run'],
+			env: { TUNNEL_TOKEN: 'eyJ-token' },
+			network: 'host',
+			security: { capabilities: [], readOnlyRootFilesystem: true }
+		});
+		expect(container.spec.cmd!.join(' ')).not.toContain('eyJ-token');
+
+		// unchanged, it's left running; a new token replaces it
+		const started = container;
+		await converger.run({ ...desiredState(), tunnel });
+		expect(runtime.containers.get(tunnel.name)).toBe(started);
+		await converger.run({ ...desiredState(), tunnel: { ...tunnel, token: 'eyJ-new' } });
+		expect(runtime.containers.get(tunnel.name)!.spec.env.TUNNEL_TOKEN).toBe('eyJ-new');
+
+		// moved to another node, it stops here
+		await converger.run({ ...desiredState(), tunnel: null });
+		expect(runtime.containers.has(tunnel.name)).toBe(false);
+	});
 });
 
 describe('Converger retries', () => {

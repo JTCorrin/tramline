@@ -132,3 +132,28 @@ export const installAdmin = sqliteTable('install_admin', {
 		.notNull()
 		.$defaultFn(() => new Date())
 });
+
+/**
+ * The install's tunnel, which gives nodes elsewhere a public address for
+ * this install without opening a port. There is at most one row. Tramline
+ * created the tunnel and its DNS record with `apiToken`, and removes them
+ * with it; `tunnelToken` is what the connector runs with. Both are encrypted.
+ */
+export const publicTunnel = sqliteTable('public_tunnel', {
+	id: text('id').primaryKey(),
+	provider: text('provider').$type<'cloudflare'>().notNull(),
+	hostname: text('hostname').notNull(),
+	apiToken: text('api_token').notNull(),
+	accountId: text('account_id').notNull(),
+	zoneId: text('zone_id').notNull(),
+	zoneName: text('zone_name').notNull(),
+	tunnelId: text('tunnel_id').notNull(),
+	dnsRecordId: text('dns_record_id').notNull(),
+	tunnelToken: text('tunnel_token').notNull(),
+	/** Where the connector reaches this install, e.g. http://localhost:3000. */
+	originUrl: text('origin_url').notNull(),
+	/** The node that runs the connector; null when it's run by hand. */
+	nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
+	...timestamps
+});

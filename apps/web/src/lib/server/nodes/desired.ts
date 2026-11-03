@@ -43,6 +43,7 @@ import {
 } from './names';
 import { backupJobs } from '../domain/backups';
 import { verifiedHostnames } from '../domain/domains';
+import { desiredTunnel } from '../domain/public-access';
 
 /**
  * Everything one node should be running. Deterministic: the same database
@@ -283,6 +284,7 @@ export function buildDesiredState(
 		queries: pendingQueries(nodeId),
 		mesh,
 		tcpProxies: planTcpProxies(exports, { id: nodeId, edge: self?.edge ?? false }, mesh),
+		tunnel: desiredTunnel(db, secrets, nodeId),
 		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);

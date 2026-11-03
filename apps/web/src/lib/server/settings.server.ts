@@ -3,7 +3,8 @@ import {
 	TRAMLINE_BASE_DOMAIN,
 	TRAMLINE_DATA_DIR,
 	TRAMLINE_INGRESS_PORT,
-	TRAMLINE_URL
+	TRAMLINE_URL,
+	TRAMLINE_AGENT_URL
 } from '$app/env/private';
 import type { PlatformSettings } from './settings';
 
@@ -12,5 +13,6 @@ export const settings: PlatformSettings = {
 	ingressPort: TRAMLINE_INGRESS_PORT,
 	dataDir: TRAMLINE_DATA_DIR,
 	publicUrl: TRAMLINE_URL ?? null,
+	agentUrl: TRAMLINE_AGENT_URL ?? null,
 	signup: TRAMLINE_SIGNUP
 };

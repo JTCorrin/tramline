@@ -6,6 +6,7 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import AddNode from '#lib/components/nodes/add-node.svelte';
 	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
+	import PublicAccess from '#lib/components/nodes/public-access.svelte';
 	import AlertList from '#lib/components/metrics/alert-list.svelte';
 	import NodeMetrics from '#lib/components/metrics/node-metrics.svelte';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -26,6 +27,8 @@
 	let computeAccounts = $state(data.accounts);
 	// svelte-ignore state_referenced_locally
 	let provisioning = $state(data.provisioning);
+	// svelte-ignore state_referenced_locally
+	let publicAccess = $state(data.access);
 	let alerts = $state<Alert[]>([]);
 	/** Nodes whose charts are open. */
 	let charted = $state<Record<string, boolean>>({});
@@ -169,6 +172,9 @@
 	{#if data.canManage}
 		<AddNode accounts={computeAccounts} bind:provisioning />
 		<ComputeAccounts adapters={data.adapters} bind:accounts={computeAccounts} />
+		{#if publicAccess}
+			<PublicAccess bind:access={publicAccess} nodes={data.nodes} />
+		{/if}
 	{/if}
 
 	{#if data.canManage}
