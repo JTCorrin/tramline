@@ -635,7 +635,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 **7b: cloud adapters**
 
-- Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **Hetzner** and **AWS EC2**. Each one is a package that passes the conformance suite, with no changes to core.
+- Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **AWS EC2** and **Hetzner**. Each one is a package that passes the conformance suite, with no changes to core.
 
 **7c: node pools**
 
@@ -651,6 +651,33 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
 
 **Exit (7):** add a GCP/Azure account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
+
+### Phase 7.5: Containment, access logs and a hostile-tenant test
+
+What a hostile workload tries, from a published account of one on another platform: it took credentials from inside its own container and asked the platform for every secret, tried the cloud metadata endpoint, asked what the stolen credentials could do, guessed internal names of databases and caches, and port-scanned the internal network (all 65,536 addresses, twice). That was about 24 scripted commands in 15 minutes; the app itself never ran. Tramline should block each step, and record it so the owner can see it happened.
+
+- **Containment (blocks every step above):**
+  - **Metadata endpoint:** the agent drops traffic from service containers to `169.254.169.254` (and `fd00:ec2::254`), in `DOCKER-USER`. Today a GCP node has no service account, so there are no cloud credentials to steal. The cloud-init user data does carry the join token, but that token is single-use, expires, and is spent at boot. The block makes this safe by design rather than by luck.
+  - **No platform credentials in a workload:** service containers never get an agent token, the Docker socket or a Tramline API token unless the user adds one as a variable, and no route on the agent or the web app trusts a request just because it comes from a container or mesh address.
+  - **Egress policy:** by default, a container reaches its own environment's network, the internet and the services it references. It can't reach the node's LAN, the mesh range, other environments or the host's ports. Private ranges can be opened per service.
+  - **Names:** only names in the service's own environment resolve to anything. Guessing another environment's `postgres` gets nothing, and the guesses are logged.
+- **Detection (per service and per node, with alerts from 6c.3):**
+  - Blocked connections (metadata, LAN, mesh, other environments), counted per container from firewall log rules.
+  - Scans: one container reaching many distinct addresses or ports in a minute.
+  - Name guessing: a burst of failed lookups for private names.
+  - Docker or agent API attempts from a workload.
+  - Each shows the service, deployment and node, and can stop the deployment.
+- **Access logs (for traffic coming in):**
+  - **HTTP:** Caddy's JSON access log on every ingress (time, host, method, path, status, duration, client IP, user agent), shipped by the agent like deployment logs.
+  - **TCP:** the TCP proxy logs connections (source, port, duration, bytes).
+  - **Who:** each IP is looked up in an offline IP-to-ASN database, so each request shows the network it came from, e.g. "Google Cloud" or a hosting provider, and no lookup leaves the install.
+  - **Real client IPs** behind the Cloudflare tunnel or another proxy, from trusted proxies only.
+  - **Traffic tab** per service: requests, filters, top IPs and networks, and a status breakdown.
+  - **Alerts:** a burst of 401, 403 or 404 responses from one source, scanner paths (`/.env`, `/.git/config`, `/wp-admin`…), and a new network on a private service.
+  - **Node events:** failed SSH logins from the node's journal.
+  - **Retention and privacy:** configurable retention (14 days by default), size caps, sampling of successful requests on busy services, admin-only access, and an option to anonymise IPs.
+- **Hostile-tenant test (a pen test in CI):** an e2e test deploys a container that runs the same steps: environment and file credential hunting, metadata requests, the Tramline and agent APIs with what it found, Docker socket probes, guesses at other environments' names, and a scan of the node, mesh and LAN ranges. It asserts that each step is blocked and that each shows up as an event. It also runs against real GCP, Azure and AWS nodes in the opt-in cloud tests.
+- **Exit:** the hostile-tenant container gets nothing, its owner sees each attempt on the service's security events with an alert, and a scan from the internet shows on the Traffic tab with its network's name.
 
 ### Phase 8: Price engine and placement
 
