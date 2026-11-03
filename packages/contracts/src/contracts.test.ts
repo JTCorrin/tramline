@@ -5,11 +5,14 @@ import {
 	SaveBackupStorage,
 	VolumeConfig,
 	CreateProject,
+	CreatePublicTunnel,
 	CreateService,
 	DEFAULT_SERVICE_CONFIG,
+	ListCloudflareZones,
 	ServiceConfigPatch,
 	StageVariables,
 	UpdateProject,
+	UpdatePublicTunnel,
 	Variable,
 	mergeConfig,
 	parseReferences,
@@ -192,4 +195,43 @@ describe('TCP allowlist addresses', () => {
 			expect(CIDR.parse(` ${value} `)).toBe(value);
 		}
 	);
+});
+
+describe('public access', () => {
+	const TOKEN = 'cf-api-token-0123456789abcdef';
+	const tunnel = (fields: Record<string, unknown>) =>
+		CreatePublicTunnel.safeParse({
+			apiToken: TOKEN,
+			zoneId: 'zone_1',
+			subdomain: 'tramline',
+			originUrl: 'http://localhost:3000',
+			nodeId: null,
+			...fields
+		});
+
+	it('takes the token out of a pasted Bearer line, and rejects what isn’t one', () => {
+		const parse = (apiToken: string) => ListCloudflareZones.safeParse({ apiToken });
+		expect(parse(`-H "Authorization: Bearer ${TOKEN}"`).data?.apiToken).toBe(TOKEN);
+		expect(parse(` cf-api-token-\n0123456789abcdef `).data?.apiToken).toBe(TOKEN);
+		expect(parse('too-short').success).toBe(false);
+		expect(parse('not a token at all, really!').success).toBe(false);
+	});
+
+	it('takes a subdomain, the zone itself, or rejects a malformed or long name', () => {
+		expect(tunnel({ subdomain: ' Nodes.Home ' }).data?.subdomain).toBe('nodes.home');
+		expect(tunnel({ subdomain: '' }).success).toBe(true);
+		expect(tunnel({ subdomain: '-bad' }).success).toBe(false);
+		expect(tunnel({ subdomain: 'a..b' }).success).toBe(false);
+		expect(tunnel({ subdomain: 'a'.repeat(201) }).success).toBe(false);
+	});
+
+	it('takes an http(s) origin without its trailing slash', () => {
+		expect(tunnel({ originUrl: ' http://10.0.0.5:3000/ ' }).data?.originUrl).toBe(
+			'http://10.0.0.5:3000'
+		);
+		expect(tunnel({ originUrl: 'ftp://10.0.0.5' }).success).toBe(false);
+		expect(UpdatePublicTunnel.parse({ originUrl: 'https://x.test/' })).toEqual({
+			originUrl: 'https://x.test'
+		});
+	});
 });
