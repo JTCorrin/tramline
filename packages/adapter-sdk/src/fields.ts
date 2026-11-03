@@ -16,6 +16,8 @@ export interface CredentialField {
 	required: boolean;
 	/** Stored encrypted and never sent back; leave it blank to keep the saved value. */
 	secret: boolean;
+	/** Several lines, e.g. a PEM certificate or a JSON key. */
+	multiline: boolean;
 	placeholder: string | null;
 	default: string | number | boolean | null;
 }
@@ -26,6 +28,7 @@ interface JsonProperty {
 	title?: string;
 	description?: string;
 	secret?: boolean;
+	multiline?: boolean;
 	placeholder?: string;
 	default?: unknown;
 }
@@ -57,6 +60,7 @@ export function credentialFields(schema: z.ZodType): CredentialField[] {
 			options: prop.enum ? prop.enum.map(String) : null,
 			required: (json.required ?? []).includes(key) && fallback === undefined,
 			secret: prop.secret === true,
+			multiline: prop.multiline === true,
 			placeholder: prop.placeholder ?? null,
 			default:
 				typeof fallback === 'string' ||
