@@ -643,6 +643,12 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Mesh:** a firewall rule for UDP 51820, and each VM offers the public address from the metadata server as its mesh endpoint.
   - **Safety:** it only lists and deletes labelled VMs.
   - **Forms:** credential fields can be multi-line, with a file picker.
+- **Azure** (`@tramline/adapter-azure`, guide in `docs/adapters/azure.md`):
+  - **Account:** an app registration's client secret (tenant, client and subscription IDs), with Contributor on the subscription or the resource group. The token exchange is done in-house, with no Azure SDK.
+  - **Machines:** Ubuntu 24.04 Trusted Launch VMs in one resource group (created if missing), with a throwaway SSH key and no password, so nobody can sign in. Sizes: B, D and E v4 to v6, and F v2 x86 sizes up to 16 vCPUs.
+  - **The address first:** a static public IP is made before the VM, so cloud-init offers it as the mesh endpoint without a metadata lookup. Cloud-init comes in `customData`, which the metadata service never returns, so a container on the node can't read the join token.
+  - **Network:** one virtual network and security group per region, with a rule for UDP 51820. An existing group keeps its rules.
+  - **Safety:** everything carries the `tramline` tag, only tagged resources are listed or deleted, and a failed create removes what it made.
 - **Public access** (done first, so cloud machines can reach an install at home): the Nodes page shows where new nodes connect, and can set up a **Cloudflare tunnel** from an API token (Cloudflare Tunnel: Edit, DNS: Edit on one domain).
   - **What it creates:** a tunnel, its routes and a proxied DNS name, all through Cloudflare's API; anything that fails part-way is removed again. Removing it deletes both in Cloudflare (or forgets them, if Cloudflare can't be reached).
   - **What it carries:** only `/api/agent/` and `/install.sh`, so the dashboard stays private. Everything else on that hostname is a 404.
