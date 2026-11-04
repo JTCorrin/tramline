@@ -635,7 +635,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 **7b: cloud adapters**
 
-- Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **Hetzner** and **AWS EC2**. Each one is a package that passes the conformance suite, with no changes to core.
+- Further adapters on the same contract: **GCP Compute** first, then **Azure VMs**, **AWS EC2** and **Hetzner**. Each one is a package that passes the conformance suite, with no changes to core.
 - **GCP** (`@tramline/adapter-gcp`, guide in `docs/adapters/gcp.md`):
   - **Account:** a service account JSON key, pasted or loaded from the file. The token exchange is done in-house (a signed JWT), with no Google SDK.
   - **Machines:** Ubuntu 24.04 VMs with cloud-init user data, a public address, no service account, the `tramline` label and network tag. Sizes: e2, n2, n2d, n4, c3 and c4 general-purpose types up to 16 vCPUs.
@@ -678,6 +678,33 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 **Exit (7):** add a GCP/Azure account → deploy a service with no capacity available → a VM is provisioned, the service runs on it, and removing the pool cleans up the VM. A service asking for one GPU lands on a Lambda (or other GPU) node and sees the GPU with `nvidia-smi`.
 
+### Phase 7.5: Containment, access logs and a hostile-tenant test
+
+What a hostile workload tries, from a published account of one on another platform: it took credentials from inside its own container and asked the platform for every secret, tried the cloud metadata endpoint, asked what the stolen credentials could do, guessed internal names of databases and caches, and port-scanned the internal network (all 65,536 addresses, twice). That was about 24 scripted commands in 15 minutes; the app itself never ran. Tramline should block each step, and record it so the owner can see it happened.
+
+- **Containment (blocks every step above):**
+  - **Metadata endpoint:** the agent drops traffic from service containers to `169.254.169.254` (and `fd00:ec2::254`), in `DOCKER-USER`. Today a GCP node has no service account, so there are no cloud credentials to steal. The cloud-init user data does carry the join token, but that token is single-use, expires, and is spent at boot. The block makes this safe by design rather than by luck.
+  - **No platform credentials in a workload:** service containers never get an agent token, the Docker socket or a Tramline API token unless the user adds one as a variable, and no route on the agent or the web app trusts a request just because it comes from a container or mesh address.
+  - **Egress policy:** by default, a container reaches its own environment's network, the internet and the services it references. It can't reach the node's LAN, the mesh range, other environments or the host's ports. Private ranges can be opened per service.
+  - **Names:** only names in the service's own environment resolve to anything. Guessing another environment's `postgres` gets nothing, and the guesses are logged.
+- **Detection (per service and per node, with alerts from 6c.3):**
+  - Blocked connections (metadata, LAN, mesh, other environments), counted per container from firewall log rules.
+  - Scans: one container reaching many distinct addresses or ports in a minute.
+  - Name guessing: a burst of failed lookups for private names.
+  - Docker or agent API attempts from a workload.
+  - Each shows the service, deployment and node, and can stop the deployment.
+- **Access logs (for traffic coming in):**
+  - **HTTP:** Caddy's JSON access log on every ingress (time, host, method, path, status, duration, client IP, user agent), shipped by the agent like deployment logs.
+  - **TCP:** the TCP proxy logs connections (source, port, duration, bytes).
+  - **Who:** each IP is looked up in an offline IP-to-ASN database, so each request shows the network it came from, e.g. "Google Cloud" or a hosting provider, and no lookup leaves the install.
+  - **Real client IPs** behind the Cloudflare tunnel or another proxy, from trusted proxies only.
+  - **Traffic tab** per service: requests, filters, top IPs and networks, and a status breakdown.
+  - **Alerts:** a burst of 401, 403 or 404 responses from one source, scanner paths (`/.env`, `/.git/config`, `/wp-admin`…), and a new network on a private service.
+  - **Node events:** failed SSH logins from the node's journal.
+  - **Retention and privacy:** configurable retention (14 days by default), size caps, sampling of successful requests on busy services, admin-only access, and an option to anonymise IPs.
+- **Hostile-tenant test (a pen test in CI):** an e2e test deploys a container that runs the same steps: environment and file credential hunting, metadata requests, the Tramline and agent APIs with what it found, Docker socket probes, guesses at other environments' names, and a scan of the node, mesh and LAN ranges. It asserts that each step is blocked and that each shows up as an event. It also runs against real GCP, Azure and AWS nodes in the opt-in cloud tests.
+- **Exit:** the hostile-tenant container gets nothing, its owner sees each attempt on the service's security events with an alert, and a scan from the internet shows on the Traffic tab with its network's name.
+
 ### Phase 8: Price engine and placement
 
 - Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
@@ -699,12 +726,34 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
   - **Reaching it:** one public domain on the gateway, and Postgres through the TLS-only TCP proxy for outside tools.
   - **Security:** Studio has no login of its own, so it is never given a public domain. It stays private, reachable through Tramline itself (a sign-in-gated route, or a port-forward from the CLI).
   - **Backups:** the Postgres volume is backed up like any database.
+- **Mailcow second:** a full mail server ([mailcow-dockerized](https://github.com/mailcow/mailcow-dockerized)). It needs things no other template does, so it shows what the format and the nodes are missing:
+  - **The stack:** Postfix, Dovecot, Rspamd, SOGo webmail, MariaDB, Redis, Unbound, ClamAV (optional, it wants about 1.5 GB of memory), and the admin UI behind Tramline's ingress.
+  - **Raw ports:** SMTP (25, 465, 587), IMAP (993) and ManageSieve (4190) published straight from the node with real client IPs, because Rspamd and Postfix judge senders by address. This builds on 7.5's real client IPs, and adds a general TCP/TLS port type beside the Postgres proxy.
+  - **One address, pinned:** mail is tied to an IP's reputation and its reverse DNS, so the stack is pinned to one node with a static public IP. The template checks the node can send on port 25 before it installs, since GCP blocks it, and AWS, Azure and most home ISPs do too unless asked. Otherwise it offers a relay (SMTP smarthost) question.
+  - **DNS:** after install it shows the records to add: MX, A and AAAA, SPF, the generated DKIM key, DMARC, autodiscover and autoconfig, and the PTR to request from the provider. It checks each one until they resolve.
+  - **Certificates:** Tramline's ACME issues the mail hostname's certificate, and Postfix and Dovecot get it as a mounted secret, reloaded on renewal. Mailcow's own ACME container is left out.
+  - **Security:**
+    - Mailcow's netfilter container needs `NET_ADMIN` on the host, which templates can't ask for. It is replaced by 7.5's detection and blocking for failed SMTP and IMAP logins.
+    - The admin UI and SOGo get public domains, and the admin UI requires 2FA on first sign-in.
+  - **Backups:** the mail volume as an archive, and MariaDB as a dump.
+- **AI sandbox third:** small, short-lived, isolated machines for running code an AI agent wrote (code interpreters, agent tools, evals). It's a node runtime and an API more than a stack, and it builds on 7.5's containment, since every sandbox is a hostile tenant by design:
+  - **Isolation:** gVisor (`runsc`) as a second container runtime, which the agent installs on nodes marked for sandboxes. Each sandbox gets its own user-space kernel. By default it has no network; an egress allowlist is opt-in. It never reaches the mesh, the LAN or the metadata service, and has CPU, memory, disk and wall-clock limits.
+  - **Fast to start:**
+    - A warm pool of paused sandboxes per image, kept on sandbox nodes with the image already pulled. Claiming one is an unpause, aiming for under a second from request to first command.
+    - Small base images (Python, Node, a shell), and custom images from any build.
+    - **Later:** Firecracker microVMs with snapshot restore, on nodes with KVM (bare metal, or Proxmox with nested virtualisation), for a hardware boundary.
+  - **Driven by API, not the canvas:**
+    - Create, run a command (output streamed), read and write files, and destroy, with a time-to-live that destroys it anyway.
+    - API tokens with a sandbox scope, and MCP tools, so an agent can run code in one directly.
+    - Each project's canvas shows its pool, not each sandbox.
+  - **GPUs optional:** CPU by default, since most agent code doesn't need a GPU and a warm pool on GPU nodes is expensive. A sandbox can ask for a GPU and lands on a 7d GPU node, where gVisor's `nvproxy` passes the NVIDIA device through. Sharing one GPU between sandboxes (MIG or time-slicing) comes later.
+  - **Spending:** the pool size, the time-to-live and 7d's idle shutdown are the guardrails, and every sandbox's runtime is metered per project.
 - **Then:** more stacks on the same format (e.g. Plausible, n8n, Metabase, Grafana with Prometheus), plus organization-private templates, and exporting an environment as a template.
 - **Security for all templates:**
   - Images are pinned by digest and scanned like any other.
   - Generated secrets are sealed by default.
   - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
-- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy.
+- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set. An AI sandbox runs its first command within a second of being asked for, the 7.5 hostile-tenant suite run inside one is blocked at every step, and a GPU sandbox sees its GPU with `nvidia-smi`.
 
 ### Phase 9: Production readiness and ecosystem
 
