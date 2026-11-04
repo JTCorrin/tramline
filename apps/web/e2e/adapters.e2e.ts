@@ -65,7 +65,7 @@ test('the Proxmox form asks for what a cloud-init template clone needs', async (
 		'CA certificate',
 		'Template VM ID'
 	]) {
-		await expect(accounts.getByLabel(label)).toBeVisible();
+		await expect(accounts.getByLabel(label, { exact: true })).toBeVisible();
 	}
 	await expect(accounts.getByLabel('API token secret')).toHaveAttribute('type', 'password');
 	await accounts.getByRole('button', { name: 'Cancel' }).click();
