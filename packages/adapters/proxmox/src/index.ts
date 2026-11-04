@@ -44,6 +44,8 @@ const credentials = z.object({
 		}),
 	caCertificate: z.string().min(1).optional().meta({
 		title: 'CA certificate',
+		multiline: true,
+		placeholder: '-----BEGIN CERTIFICATE-----',
 		description: 'PEM-encoded Proxmox CA certificate for private or self-signed hosts'
 	}),
 	template: z.coerce.number().int().positive().meta({

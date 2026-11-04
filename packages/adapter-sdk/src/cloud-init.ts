@@ -5,8 +5,12 @@
  * A VM with a QEMU guest agent channel (Proxmox's "QEMU Guest Agent" option)
  * also gets the agent, so its host can see its addresses and shut it down
  * cleanly; that part is best-effort and never stops enrollment.
+ *
+ * `publicAddress` is a shell command that prints the machine's public
+ * address, e.g. from a cloud's metadata server. When it prints one, the node
+ * offers `<address>:51820` as its mesh endpoint, so other nodes can reach it.
  */
-export function cloudInit(install: { url: string; token: string }) {
+export function cloudInit(install: { url: string; token: string; publicAddress?: string }) {
 	const quote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
 	const script = [
 		'set -eu',
@@ -23,7 +27,13 @@ export function cloudInit(install: { url: string; token: string }) {
 		'    fi',
 		'    systemctl start qemu-guest-agent; } || echo "tramline: could not set up the QEMU guest agent" >&2',
 		'fi',
-		`curl -fsSL ${quote(`${install.url}/install.sh`)} | sh -s -- --url ${quote(install.url)} --token ${quote(install.token)}`
+		...(install.publicAddress
+			? [
+					`ADDRESS=$(${install.publicAddress} || true)`,
+					'ENDPOINT=""; [ -n "$ADDRESS" ] && ENDPOINT="--endpoint $ADDRESS:51820"'
+				]
+			: []),
+		`curl -fsSL ${quote(`${install.url}/install.sh`)} | sh -s -- --url ${quote(install.url)} --token ${quote(install.token)}${install.publicAddress ? ' $ENDPOINT' : ''}`
 	].join('\n');
 	return [
 		'#cloud-config',

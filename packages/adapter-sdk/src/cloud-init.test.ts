@@ -45,3 +45,43 @@ describe('guest agent setup', () => {
 		}
 	);
 });
+
+describe('mesh endpoint', () => {
+	function enroll(publicAddress: string) {
+		const dir = mkdtempSync(path.join(tmpdir(), 'tramline-endpoint-'));
+		try {
+			const log = path.join(dir, 'calls');
+			const command = (name: string, body: string) =>
+				writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+			command('docker', 'exit 0');
+			command('systemctl', 'exit 0');
+			command('curl', 'exit 0');
+			command('metadata', 'echo 203.0.113.9');
+			command('broken', 'exit 7');
+			// what the install script is run with
+			command('sh', 'echo "$*" >> "$CALLS"');
+			const script = cloudInit({ url: 'https://tramline.test', token: 'jt', publicAddress })
+				.split('\n')
+				.filter((line) => line.startsWith('      '))
+				.map((line) => line.slice(6))
+				.join('\n');
+			execFileSync('/bin/sh', ['-c', script], {
+				env: { PATH: dir, CALLS: log },
+				stdio: 'pipe'
+			});
+			return readFileSync(log, 'utf8').trim();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('offers the address the command prints as the mesh endpoint', () => {
+		expect(enroll('metadata')).toBe(
+			'-s -- --url https://tramline.test --token jt --endpoint 203.0.113.9:51820'
+		);
+	});
+
+	it('still enrolls without an endpoint when the command fails', () => {
+		expect(enroll('broken')).toBe('-s -- --url https://tramline.test --token jt');
+	});
+});
