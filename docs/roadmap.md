@@ -700,12 +700,22 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
   - **Reaching it:** one public domain on the gateway, and Postgres through the TLS-only TCP proxy for outside tools.
   - **Security:** Studio has no login of its own, so it is never given a public domain. It stays private, reachable through Tramline itself (a sign-in-gated route, or a port-forward from the CLI).
   - **Backups:** the Postgres volume is backed up like any database.
+- **Mailcow second:** a full mail server ([mailcow-dockerized](https://github.com/mailcow/mailcow-dockerized)). It needs things no other template does, so it shows what the format and the nodes are missing:
+  - **The stack:** Postfix, Dovecot, Rspamd, SOGo webmail, MariaDB, Redis, Unbound, ClamAV (optional, it wants about 1.5 GB of memory), and the admin UI behind Tramline's ingress.
+  - **Raw ports:** SMTP (25, 465, 587), IMAP (993) and ManageSieve (4190) published straight from the node with real client IPs, because Rspamd and Postfix judge senders by address. This builds on 7.5's real client IPs, and adds a general TCP/TLS port type beside the Postgres proxy.
+  - **One address, pinned:** mail is tied to an IP's reputation and its reverse DNS, so the stack is pinned to one node with a static public IP. The template checks the node can send on port 25 before it installs, since GCP blocks it, and AWS, Azure and most home ISPs do too unless asked. Otherwise it offers a relay (SMTP smarthost) question.
+  - **DNS:** after install it shows the records to add: MX, A and AAAA, SPF, the generated DKIM key, DMARC, autodiscover and autoconfig, and the PTR to request from the provider. It checks each one until they resolve.
+  - **Certificates:** Tramline's ACME issues the mail hostname's certificate, and Postfix and Dovecot get it as a mounted secret, reloaded on renewal. Mailcow's own ACME container is left out.
+  - **Security:**
+    - Mailcow's netfilter container needs `NET_ADMIN` on the host, which templates can't ask for. It is replaced by 7.5's detection and blocking for failed SMTP and IMAP logins.
+    - The admin UI and SOGo get public domains, and the admin UI requires 2FA on first sign-in.
+  - **Backups:** the mail volume as an archive, and MariaDB as a dump.
 - **Then:** more stacks on the same format (e.g. Plausible, n8n, Metabase, Grafana with Prometheus), plus organization-private templates, and exporting an environment as a template.
 - **Security for all templates:**
   - Images are pinned by digest and scanned like any other.
   - Generated secrets are sealed by default.
   - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
-- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy.
+- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set.
 
 ### Phase 9: Production readiness and ecosystem
 
