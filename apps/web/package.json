@@ -42,8 +42,8 @@
 		"@tramline/client": "workspace:*",
 		"@types/better-sqlite3": "^9.6.0",
 		"@types/node": "^22",
-		"@vitest/browser-playwright": "^4.1.8",
-		"@vitest/coverage-v8": "^4.1.12",
+		"@vitest/browser-playwright": "^5.0.5",
+		"@vitest/coverage-v8": "^5.0.5",
 		"bits-ui": "^2.20.2",
 		"cn": "^0.5.1",
 		"drizzle-kit": "^0.31.11",
@@ -62,7 +62,7 @@
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.72.1",
 		"vite": "^8.3.0",
-		"vitest": "^4.1.12",
+		"vitest": "^5.0.5",
 		"vitest-browser-svelte": "^3.1.0"
 	},
 	"imports": {

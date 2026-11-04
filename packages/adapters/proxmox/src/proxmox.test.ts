@@ -389,7 +389,9 @@ describe('the Proxmox adapter', () => {
 		await expect(adapter.validate(creds({ url: 'https://127.0.0.1:1' }))).rejects.toThrow(
 			"Couldn't reach 127.0.0.1:1"
 		);
-		expect(() => adapter.validate(creds({ url: 'http://pve.test' }))).rejects.toThrow('https://');
+		await expect(() => adapter.validate(creds({ url: 'http://pve.test' }))).rejects.toThrow(
+			'https://'
+		);
 		vms = vms.filter((v) => v.vmid !== 9000);
 		await expect(adapter.createNode(creds(), spec())).rejects.toThrow('There is no VM 9000');
 	});
