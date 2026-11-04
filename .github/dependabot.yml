@@ -5,7 +5,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # types follow the oldest Node we support (engines), not the newest
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # svelte-check supports TypeScript 5 and 6 only
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     groups:
+      # vitest's packages pin each other's versions, so they move together
+      vitest:
+        patterns: ['vitest', '@vitest/*', 'vitest-browser-*']
       minor-and-patch:
         update-types: [minor, patch]
   - package-ecosystem: github-actions

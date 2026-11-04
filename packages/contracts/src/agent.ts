@@ -291,6 +291,16 @@ export const TcpProxy = z.object({
 
 export type TcpProxy = z.infer<typeof TcpProxy>;
 
+/** The connector for the install's tunnel (`cloudflared`), on the node chosen to run it. */
+export const DesiredTunnel = z.object({
+	/** Container name, e.g. `tramline-tunnel-node_1`. */
+	name: z.string(),
+	image: z.string(),
+	token: z.string()
+});
+
+export type DesiredTunnel = z.infer<typeof DesiredTunnel>;
+
 export const DesiredState = z.object({
 	/** Hash of the document; the agent echoes it to long-poll for changes. */
 	revision: z.string(),
@@ -307,6 +317,7 @@ export const DesiredState = z.object({
 	/** null on a single-node install, or before the node has a mesh key. */
 	mesh: DesiredMesh.nullable().default(null),
 	tcpProxies: z.array(TcpProxy).default([]),
+	tunnel: DesiredTunnel.nullable().default(null),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */

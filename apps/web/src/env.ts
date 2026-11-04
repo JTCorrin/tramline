@@ -50,6 +50,11 @@ export const variables = defineEnvVars({
 		description: 'Public URL of this Tramline install, e.g. https://tramline.example.com.',
 		schema: optional
 	},
+	TRAMLINE_AGENT_URL: {
+		description:
+			'Where nodes on other machines reach this install, when that isn’t TRAMLINE_URL: e.g. an address that only exposes the agent API. A tunnel set up in Settings takes precedence.',
+		schema: optional
+	},
 	TRAMLINE_SIGNUP: {
 		description:
 			'Who can create an account: `invite` (default; an invite link from an organization, or anyone while the install has no admin yet) or `open` (anyone who can reach the sign-up page).',

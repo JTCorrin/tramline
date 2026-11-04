@@ -645,7 +645,8 @@ describe('build tokens', () => {
 			drills: [],
 			queries: [],
 			mesh: null,
-			tcpProxies: []
+			tcpProxies: [],
+			tunnel: null
 		};
 		const fetcher = github({ 'POST /app/installations/99/access_tokens': tokenRoute });
 		const withTokens = await attachBuildTokens(ctx.db, testSecrets, desired, fetcher);
@@ -786,6 +787,7 @@ describe('installation tokens never cross organizations or leave GitHub', () => 
 				queries: [],
 				mesh: null,
 				tcpProxies: [],
+				tunnel: null,
 				ingress: { httpPort: 80, tls: false, routes: [] }
 			},
 			fetcher

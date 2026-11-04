@@ -204,6 +204,13 @@
       "when": 1793286185240,
       "tag": "0028_replica_nodes",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1793611351994,
+      "tag": "0029_public_tunnel",
+      "breakpoints": true
     }
   ]
 }
