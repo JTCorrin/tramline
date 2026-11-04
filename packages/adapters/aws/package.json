@@ -1,0 +1,25 @@
+{
+	"name": "@tramline/adapter-aws",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"description": "Creates AWS EC2 instances that enroll themselves",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"check": "tsc --noEmit",
+		"lint": "tsc --noEmit",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage"
+	},
+	"dependencies": {
+		"@tramline/adapter-sdk": "workspace:*",
+		"zod": "^4.1.12"
+	},
+	"devDependencies": {
+		"@types/node": "^22.20.5",
+		"@vitest/coverage-v8": "^4.1.12",
+		"vitest": "^4.1.12"
+	}
+}
