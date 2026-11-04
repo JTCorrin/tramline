@@ -729,12 +729,24 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
     - Mailcow's netfilter container needs `NET_ADMIN` on the host, which templates can't ask for. It is replaced by 7.5's detection and blocking for failed SMTP and IMAP logins.
     - The admin UI and SOGo get public domains, and the admin UI requires 2FA on first sign-in.
   - **Backups:** the mail volume as an archive, and MariaDB as a dump.
+- **AI sandbox third:** small, short-lived, isolated machines for running code an AI agent wrote (code interpreters, agent tools, evals). It's a node runtime and an API more than a stack, and it builds on 7.5's containment, since every sandbox is a hostile tenant by design:
+  - **Isolation:** gVisor (`runsc`) as a second container runtime, which the agent installs on nodes marked for sandboxes. Each sandbox gets its own user-space kernel. By default it has no network; an egress allowlist is opt-in. It never reaches the mesh, the LAN or the metadata service, and has CPU, memory, disk and wall-clock limits.
+  - **Fast to start:**
+    - A warm pool of paused sandboxes per image, kept on sandbox nodes with the image already pulled. Claiming one is an unpause, aiming for under a second from request to first command.
+    - Small base images (Python, Node, a shell), and custom images from any build.
+    - **Later:** Firecracker microVMs with snapshot restore, on nodes with KVM (bare metal, or Proxmox with nested virtualisation), for a hardware boundary.
+  - **Driven by API, not the canvas:**
+    - Create, run a command (output streamed), read and write files, and destroy, with a time-to-live that destroys it anyway.
+    - API tokens with a sandbox scope, and MCP tools, so an agent can run code in one directly.
+    - Each project's canvas shows its pool, not each sandbox.
+  - **GPUs optional:** CPU by default, since most agent code doesn't need a GPU and a warm pool on GPU nodes is expensive. A sandbox can ask for a GPU and lands on a 7d GPU node, where gVisor's `nvproxy` passes the NVIDIA device through. Sharing one GPU between sandboxes (MIG or time-slicing) comes later.
+  - **Spending:** the pool size, the time-to-live and 7d's idle shutdown are the guardrails, and every sandbox's runtime is metered per project.
 - **Then:** more stacks on the same format (e.g. Plausible, n8n, Metabase, Grafana with Prometheus), plus organization-private templates, and exporting an environment as a template.
 - **Security for all templates:**
   - Images are pinned by digest and scanned like any other.
   - Generated secrets are sealed by default.
   - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
-- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set.
+- **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set. An AI sandbox runs its first command within a second of being asked for, the 7.5 hostile-tenant suite run inside one is blocked at every step, and a GPU sandbox sees its GPU with `nvidia-smi`.
 
 ### Phase 9: Production readiness and ecosystem
 
