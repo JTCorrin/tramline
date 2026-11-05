@@ -1,4 +1,5 @@
 import {
+	AGENT_FEATURES,
 	AGENT_PROTOCOL_VERSION,
 	type AgentHello,
 	type BuildReport,
@@ -241,6 +242,7 @@ export class Agent {
 		return {
 			protocol: AGENT_PROTOCOL_VERSION,
 			agentVersion: this.options.version,
+			features: [...AGENT_FEATURES],
 			hostname: os.hostname(),
 			os: os.platform(),
 			arch: os.arch(),

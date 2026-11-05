@@ -64,6 +64,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
 				hostname: row.info?.hostname ?? null,
 				dockerVersion: row.info?.docker?.version ?? null,
+				features: row.info?.features ?? [],
 				adapter: row.adapter,
 				account: (row.adapterAccountId && accounts.get(row.adapterAccountId)) || null,
 				cpus: row.info?.cpus ?? null,

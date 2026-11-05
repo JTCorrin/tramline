@@ -24,6 +24,8 @@ export const PublicTunnel = z.object({
 	nodeName: z.string().nullable(),
 	/** Cloudflare's view: `inactive` until a connector has connected. */
 	status: TunnelStatus,
+	/** Why the chosen node won't run the connector (its agent is too old, or it's offline). */
+	connectorProblem: z.string().nullable(),
 	createdAt: z.string()
 });
 export type PublicTunnel = z.infer<typeof PublicTunnel>;

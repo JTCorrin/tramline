@@ -17,6 +17,7 @@ import type { DbOrTx } from '../db/client';
 import { node, publicTunnel } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
+import { nodeStatus } from '../nodes/registry';
 import type { PlatformSettings } from '../settings';
 import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
@@ -58,9 +59,32 @@ const ingressRules = (hostname: string, originUrl: string) => [
 	{ service: 'http_status:404' }
 ];
 
+/** Why a node can't run the connector, or null when it can. */
+function connectorProblem(db: DbOrTx, nodeId: string) {
+	const row = db.select().from(node).where(eq(node.id, nodeId)).get();
+	if (!row) return 'The node chosen to run the connector no longer exists.';
+	if (!row.info?.features?.includes('tunnel')) {
+		return `${row.name}'s agent is too old to run the connector. Reinstall the agent on it, or choose another node.`;
+	}
+	if (nodeStatus(row) === 'offline') {
+		return `${row.name} is offline, so the connector isn't running.`;
+	}
+	return null;
+}
+
 function requireNodeId(db: DbOrTx, nodeId: string | null) {
-	if (nodeId && !db.select({ id: node.id }).from(node).where(eq(node.id, nodeId)).get()) {
-		throw notFound('Node');
+	if (!nodeId) return;
+	const row = db
+		.select({ name: node.name, info: node.info })
+		.from(node)
+		.where(eq(node.id, nodeId))
+		.get();
+	if (!row) throw notFound('Node');
+	if (!row.info?.features?.includes('tunnel')) {
+		throw new AppError(
+			'conflict',
+			`${row.name}'s agent is too old to run the connector. Reinstall the agent on it, choose another node, or run the connector yourself.`
+		);
 	}
 }
 
@@ -100,6 +124,7 @@ export async function get(ctx: Ctx, fetcher?: typeof fetch): Promise<PublicAcces
 			nodeId: row.nodeId,
 			nodeName,
 			status,
+			connectorProblem: row.nodeId ? connectorProblem(ctx.db, row.nodeId) : null,
 			createdAt: row.createdAt.toISOString()
 		}
 	};
