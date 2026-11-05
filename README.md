@@ -366,6 +366,16 @@ More: [docs/adapters/aws.md](docs/adapters/aws.md)
 
 </details>
 
+## Update a node's agent
+
+On **Nodes**, click **Update agent**. The agent pulls the latest image and, if there's a newer one, restarts on it. Deployments keep running, and the node shows how it went.
+
+Agents installed before November 2026 can't update themselves yet. Run this once on the machine, and the button works from then on:
+
+```sh
+curl -fsSL <your Tramline URL>/install.sh | sudo sh -s -- --update
+```
+
 ## Make a service public
 
 With a Cloudflare tunnel set up under **Nodes → Public access**, and its connector running on a node:

@@ -7,6 +7,7 @@ import type {
 } from '@tramline/contracts';
 import { and, asc, eq, gt, inArray, isNull } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
+import { ulid } from 'ulid';
 import { AppError, notFound } from '../api/errors';
 import type { DbOrTx } from '../db/client';
 import { adapterAccount, deployment, joinToken, node, service, volume } from '../db/schema';
@@ -14,7 +15,7 @@ import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { meshMembers, routes } from '../nodes/mesh';
 import { nodesOf, onNode, reservedOn } from '../nodes/placement';
-import { hashToken, nodeStatus } from '../nodes/registry';
+import { agentUpdateState, hashToken, nodeStatus } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { getAdapter } from '../adapters/registry';
@@ -67,6 +68,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				hostname: row.info?.hostname ?? null,
 				dockerVersion: row.info?.docker?.version ?? null,
 				features: row.info?.features ?? [],
+				agent: agentSummary(row),
 				adapter: row.adapter,
 				account: account && { id: account.id, name: account.name },
 				cpus: row.info?.cpus ?? null,
@@ -93,6 +95,22 @@ export function list(ctx: Ctx): NodeSummary[] {
 				createdAt: row.createdAt.toISOString()
 			};
 		});
+}
+
+function agentSummary(row: typeof node.$inferSelect): NodeSummary['agent'] {
+	const update = agentUpdateState(row.agentUpdate);
+	return {
+		version: row.info?.agentVersion ?? null,
+		image: row.info?.image ? row.info.image.id.replace(/^sha256:/, '').slice(0, 12) : null,
+		canUpdate: !!row.info?.features?.includes('self-update'),
+		update: update && {
+			state: update.state,
+			detail: update.detail,
+			error: update.error,
+			requestedAt: update.requestedAt,
+			finishedAt: update.finishedAt
+		}
+	};
 }
 
 function nameTaken(db: DbOrTx, name: string, now: Date) {
@@ -186,6 +204,45 @@ export async function update(ctx: Ctx, id: string, input: UpdateNode) {
 		ctx.db.update(node).set(changes).where(eq(node.id, id)).run();
 	}
 	notifyNodes();
+	return list(ctx).find((n) => n.id === id)!;
+}
+
+/**
+ * Asks a node's agent to update itself: it pulls its image again and, if
+ * there's a newer one, restarts on it, keeping its identity, volume and
+ * settings. Asking while an update is under way changes nothing.
+ */
+export function updateAgent(ctx: Ctx, id: string) {
+	requireInstallAdmin(ctx, 'update agents');
+	const row = requireNode(ctx, id);
+	if (!row.info?.features?.includes('self-update')) {
+		throw new AppError(
+			'conflict',
+			`${row.name}'s agent can't update itself: it's from before that was possible, or it doesn't run in a container. Update it once on the machine with install.sh --update.`
+		);
+	}
+	if (nodeStatus(row) === 'offline') {
+		throw new AppError('conflict', `${row.name} is offline, so its agent can't be updated now`);
+	}
+	const current = agentUpdateState(row.agentUpdate);
+	if (!current || current.finishedAt) {
+		ctx.db
+			.update(node)
+			.set({
+				agentUpdate: {
+					id: `aup_${ulid().toLowerCase()}`,
+					state: 'requested',
+					detail: null,
+					error: null,
+					requestedBy: ctx.userId,
+					requestedAt: new Date().toISOString(),
+					finishedAt: null
+				}
+			})
+			.where(eq(node.id, id))
+			.run();
+		notifyNodes();
+	}
 	return list(ctx).find((n) => n.id === id)!;
 }
 

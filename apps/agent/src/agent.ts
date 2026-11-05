@@ -21,6 +21,7 @@ import { HealthChecker } from './health';
 import { LogShipper } from './logs';
 import { MetricsSampler } from './metrics';
 import type { ContainerRuntime, ManagedContainer } from './runtime';
+import type { SelfUpdater } from './self-update';
 import { observe } from './state';
 
 export interface AgentOptions {
@@ -56,6 +57,8 @@ export interface AgentOptions {
 	 * pair is created in the state directory.
 	 */
 	mesh?: { image: string; endpoint: string | null };
+	/** Updates the agent when the control plane asks; absent where it can't (outside a container). */
+	selfUpdate?: SelfUpdater;
 }
 
 /** How long a build may run (the control plane gives up after 30 minutes too). */
@@ -242,7 +245,10 @@ export class Agent {
 		return {
 			protocol: AGENT_PROTOCOL_VERSION,
 			agentVersion: this.options.version,
-			features: [...AGENT_FEATURES],
+			// only an agent that knows its own container can replace it
+			features: AGENT_FEATURES.filter(
+				(f) => f !== 'self-update' || !!this.options.selfUpdate?.image
+			),
 			hostname: os.hostname(),
 			os: os.platform(),
 			arch: os.arch(),
@@ -250,6 +256,12 @@ export class Agent {
 			memoryMb: Math.round(os.totalmem() / 1024 / 1024),
 			docker,
 			dockerError: this.dockerError,
+			image: this.options.selfUpdate?.image
+				? {
+						reference: this.options.selfUpdate.image.reference,
+						id: this.options.selfUpdate.image.id
+					}
+				: null,
 			gpus: await detectGpus(this.options.gpuDir),
 			mesh: this.#meshPublicKey
 				? { publicKey: this.#meshPublicKey, endpoint: this.options.mesh?.endpoint ?? null }
@@ -265,6 +277,7 @@ export class Agent {
 		);
 		if (!next) return;
 		this.desired = next;
+		this.options.selfUpdate?.want(next.agentUpdate);
 		if (!this.dockerError) {
 			this.#startBuilds(next);
 			this.#answerQueries(next);
@@ -465,6 +478,7 @@ export class Agent {
 			backups: [...this.jobs.backup.values()],
 			restores: [...this.jobs.restore.values()],
 			drills: [...this.jobs.drill.values()],
+			agentUpdate: this.options.selfUpdate?.report ?? null,
 			volumes,
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError

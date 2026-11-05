@@ -14,6 +14,7 @@
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
 	import { cn } from '#lib/utils.js';
+	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import ServerIcon from '@lucide/svelte/icons/server';
 	import type { Alert, NodeSummary, UpdateNode } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
@@ -91,6 +92,43 @@
 		} catch (error) {
 			reportError(error);
 			return false;
+		}
+	}
+
+	/** Nodes whose agent predates updates from here, showing the command that updates them once. */
+	let manualUpdate = $state<Record<string, boolean>>({});
+
+	/** A commit SHA reads better short. */
+	const agentVersion = (version: string) =>
+		/^[0-9a-f]{40}$/.test(version) ? version.slice(0, 7) : version;
+
+	const updating = (node: NodeSummary) =>
+		node.agent.update?.state === 'requested' || node.agent.update?.state === 'running';
+
+	/** Only fresh outcomes are worth a line; old ones would sit there forever. */
+	const recentlyFinished = (node: NodeSummary) =>
+		!!node.agent.update?.finishedAt &&
+		Date.now() - Date.parse(node.agent.update.finishedAt) < 3600_000;
+
+	const updateCommand = () =>
+		`curl -fsSL ${publicAccess?.agentUrl ?? location.origin}/install.sh | sudo sh -s -- --update`;
+
+	async function updateAgent(node: NodeSummary) {
+		if (!node.agent.canUpdate) {
+			manualUpdate[node.id] = !manualUpdate[node.id];
+			return;
+		}
+		if (
+			!confirm(
+				`Update ${node.name}'s agent to the latest image? If there's a newer one, the agent restarts on it. Its deployments keep running; the mesh and TCP proxies on it restart, which takes a few seconds.`
+			)
+		)
+			return;
+		try {
+			const updated = await api().nodes.updateAgent(node.id);
+			nodes = nodes.map((n) => (n.id === node.id ? updated : n));
+		} catch (error) {
+			reportError(error);
 		}
 	}
 
@@ -259,12 +297,30 @@
 					{#if node.memoryMb}· {gb(node.memoryMb)}{/if}
 					{#if node.gpus.length}· {node.gpus.length}× {node.gpus[0]!.model}{/if}
 					{#if node.dockerVersion}· Docker {node.dockerVersion}{/if}
+					{#if node.agent.version}· agent {agentVersion(node.agent.version)}{/if}
 					{#if node.account}· on {node.account.name}{/if}
 					{#if node.lastSeenAt && node.status !== 'online'}· last seen {timeAgo(
 							node.lastSeenAt
 						)}{/if}
 				</div>
 				{#if node.error}<p class="mt-1 text-xs text-red-400">{node.error}</p>{/if}
+				{#if updating(node)}
+					<p
+						class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+						data-testid="agent-update"
+					>
+						<Loader2Icon class="size-3 animate-spin" />
+						Updating the agent{node.agent.update?.detail ? `: ${node.agent.update.detail}` : '…'}
+					</p>
+				{:else if recentlyFinished(node) && node.agent.update?.state === 'failed'}
+					<p class="mt-1 text-xs text-red-400" data-testid="agent-update">
+						Agent update failed: {node.agent.update.error}
+					</p>
+				{:else if recentlyFinished(node) && node.agent.update?.state === 'succeeded'}
+					<p class="mt-1 text-xs text-muted-foreground" data-testid="agent-update">
+						Agent: {node.agent.update.detail ?? 'updated'}
+					</p>
+				{/if}
 				{#if node.mesh}
 					<div class="mt-1 text-xs text-muted-foreground" data-testid="node-mesh">
 						Mesh {node.mesh.address} ·
@@ -333,10 +389,40 @@
 						{#if !node.draining}
 							<Button size="sm" variant="outline" onclick={() => act(node, 'drain')}>Drain</Button>
 						{/if}
+						{#if node.agent.version && node.status !== 'offline' && (node.agent.canUpdate || node.name !== 'local')}
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={updating(node)}
+								onclick={() => updateAgent(node)}>Update agent</Button
+							>
+						{/if}
 						{#if node.name !== 'local'}
 							<Button size="sm" variant="ghost" onclick={() => act(node, 'remove')}>Remove</Button>
 						{/if}
 					</div>
+					{#if manualUpdate[node.id] && !node.agent.canUpdate}
+						<div class="mt-3 space-y-2 rounded-lg border p-3 text-xs" data-testid="manual-update">
+							<p>
+								This agent is from before updates from here (or doesn't run in a container). Run
+								this once on {node.name}; it keeps the node's identity and settings, and later
+								updates work from this page.
+							</p>
+							<div class="flex items-center gap-2">
+								<code class="flex-1 overflow-x-auto rounded bg-muted px-2 py-1.5 font-mono"
+									>{updateCommand()}</code
+								>
+								<Button
+									size="sm"
+									variant="outline"
+									onclick={() =>
+										navigator.clipboard
+											.writeText(updateCommand())
+											.then(() => toast.success('Copied'))}>Copy</Button
+								>
+							</div>
+						</div>
+					{/if}
 					<div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
 						<label class="flex items-center gap-2">
 							{#key edgeSwitch[node.id]}

@@ -101,6 +101,8 @@ export interface RunSpec {
 	/** Written into the container before it starts (absolute paths), e.g. a TLS key. */
 	files?: ContainerFile[];
 	binds?: string[];
+	/** Docker removes the container once it exits. */
+	autoRemove?: boolean;
 	/** Named Docker volumes. */
 	volumes?: { name: string; target: string; readOnly?: boolean }[];
 	security: SecurityOptions;

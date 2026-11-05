@@ -16,7 +16,7 @@ export const AGENT_PROTOCOL_VERSION = 1;
  * control plane can tell an old agent from a new one. Agents installed
  * before features were reported send none.
  */
-export const AGENT_FEATURES = ['tunnel', 'tunnel-routes'] as const;
+export const AGENT_FEATURES = ['tunnel', 'tunnel-routes', 'self-update'] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 
 /** Sent when an agent starts, and whenever its environment changes. */
@@ -33,6 +33,15 @@ export const AgentHello = z.object({
 	/** null when the Docker daemon is unreachable. */
 	docker: z.object({ version: z.string() }).nullable(),
 	dockerError: z.string().nullable().optional(),
+	/**
+	 * The image the agent's container runs: the reference it was started from
+	 * (e.g. `ghcr.io/jtcorrin/tramline-agent:latest`) and its image ID. null
+	 * when the agent isn't running in a container, e.g. in development.
+	 */
+	image: z
+		.object({ reference: z.string().max(512), id: z.string().max(128) })
+		.nullable()
+		.optional(),
 	/** NVIDIA GPUs the node has, from its driver; VRAM when known. */
 	gpus: z
 		.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() }))
@@ -328,6 +337,12 @@ export const DesiredState = z.object({
 	mesh: DesiredMesh.nullable().default(null),
 	tcpProxies: z.array(TcpProxy).default([]),
 	tunnel: DesiredTunnel.nullable().default(null),
+	/**
+	 * Update the agent itself: pull its image again and, if it changed, restart
+	 * on the new one. Each request has its own ID, which the agent remembers,
+	 * so it never runs one twice.
+	 */
+	agentUpdate: z.object({ id: z.string() }).nullable().default(null),
 	ingress: z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
@@ -406,6 +421,8 @@ export const AgentReport = z.object({
 	backups: z.array(JobReport).default([]),
 	restores: z.array(JobReport).default([]),
 	drills: z.array(JobReport).default([]),
+	/** How the latest agent update went; `detail` says what changed. */
+	agentUpdate: JobReport.nullable().optional(),
 	/** Volumes this node's agent manages that exist on the node; absent when Docker can't be asked. */
 	volumes: z.array(z.string()).optional(),
 	/** The desired revision the agent last converged to. */
@@ -441,6 +458,24 @@ export const NodeSummary = z.object({
 	dockerVersion: z.string().nullable(),
 	/** What its agent can do (`AGENT_FEATURES`); empty for agents from before they were reported. */
 	features: z.array(z.string()),
+	agent: z.object({
+		/** e.g. a commit SHA for published images, or `0.1.0`. */
+		version: z.string().nullable(),
+		/** Short image ID, e.g. `3f2a9c1b7e04`, when it runs in a container. */
+		image: z.string().nullable(),
+		/** It can update itself; older agents need `install.sh --update` once. */
+		canUpdate: z.boolean(),
+		/** The latest update asked for, and how it went. */
+		update: z
+			.object({
+				state: z.enum(['requested', 'running', 'succeeded', 'failed']),
+				detail: z.string().nullable(),
+				error: z.string().nullable(),
+				requestedAt: z.iso.datetime(),
+				finishedAt: z.iso.datetime().nullable()
+			})
+			.nullable()
+	}),
 	/** Which compute adapter manages it; `manual` for machines enrolled by hand. */
 	adapter: z.string(),
 	/** The adapter account that created it, which destroys it when it's removed. */

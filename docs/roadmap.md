@@ -609,7 +609,7 @@ An outside review found 11 issues (1 critical, 7 high, 3 medium). They are fixed
 - **Charts:** a service's Metrics tab shows CPU, memory (against its limit) and network, summed over replicas, from 1 hour to 30 days. Each node gets CPU and memory charts and a disk meter. Charts have a crosshair tooltip, move through time with the arrow keys (an ARIA slider), and show the same numbers as a table.
 - **Alerts:** built in, checked every minute: a node that stops reporting for 2 minutes, a node's disk or memory at 90%, and a service at 90% of its memory limit. Memory is averaged over 5 minutes, and alerts clear below 85%, so nothing flaps. They show on the Nodes page and in the service's Metrics tab, and post to `TRAMLINE_ALERT_WEBHOOK_URL` (Slack or Discord) when they open and resolve.
 - **Later:** alert rules people define, per-organization notification channels, and disk usage per volume.
-- **Agent updates:** nodes run the agent image they were installed with. Updating one means re-running the install command; an update action on the Nodes page comes later.
+- **Agent updates:** moved to 7c, where they're done.
 
 **Exit (6c) ✅** (run on 2026-10-29 against a Proxmox VE 9.1 host, with two Proxmox VMs as nodes): add a Proxmox account → "Add node" provisions a VM that enrolls itself. Two nodes (local + Proxmox VM): a service on node A reaches Postgres on node B by its private name, and draining a node reschedules stateless services. Proxmox passes the conformance suite.
 
@@ -670,7 +670,12 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 **7c: node pools**
 
 - Node pools per environment (adapter account + region + size, min/max), and auto-provisioning when the scheduler can't fit a workload's requests. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
-- **Agent updates:** a node's agent can be updated from the Nodes page, so pools don't run old agents.
+- **Agent updates ✅** (unit-tested): **Update agent** on the Nodes page, so nodes (and later pools) don't run old agents.
+  - **How:** the agent pulls its own image again. If it's newer, it starts a short-lived helper from the new image, with only the Docker socket and no network. The helper renames and stops the old agent, starts a new one under its name with the same settings and state volume, and removes the old one once the new one has stayed up for 15 seconds. Otherwise it puts the old one back.
+  - **Outcome:** kept in the state volume, so whichever agent runs afterwards reports it: up to date, updated from one image to another, or failed and why. One that doesn't finish within 15 minutes counts as failed.
+  - **Moving with it:** the mesh container and TCP proxies run the agent's exact image ID, so they restart on the new image too. The spent join token is dropped from the new container.
+  - **Versions:** published images carry their commit, which the Nodes page shows.
+  - **Older agents** (and ones not in a container) can't replace themselves. `install.sh --update` updates one once on the machine, keeping its identity and settings, and the Nodes page shows that command for them.
 
 **7d: GPU nodes**
 

@@ -10,6 +10,7 @@ import { Agent } from './agent';
 import { encrypt } from './backups';
 import { ControlPlane, ControlPlaneError } from './client';
 import { RAILPACK } from './pins';
+import { HELPER_NAME, SelfUpdater } from './self-update';
 import { desiredState, FakeRuntime, fakeTools, stateDirWithTools } from './testing';
 
 function fakeClient(desired: (DesiredState | null)[] = []) {
@@ -133,6 +134,56 @@ describe('Agent', () => {
 		expect(agent.stopped).toBe(false);
 		agent.stop();
 		expect(agent.stopped).toBe(true);
+	});
+});
+
+describe('Agent self-update', () => {
+	const image = {
+		containerId: 'c'.repeat(64),
+		reference: 'ghcr.io/jtcorrin/tramline-agent:latest',
+		id: 'sha256:old',
+		socketBind: '/var/run/docker.sock:/var/run/docker.sock'
+	};
+
+	it('says it can update only when it knows its own container, and which image it runs', async () => {
+		const runtime = new FakeRuntime();
+		const { client, calls } = fakeClient();
+		await agentWith(runtime, client).hello();
+		expect(calls.hellos[0]!.features).not.toContain('self-update');
+		expect(calls.hellos[0]!.image).toBeNull();
+
+		const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
+		const agent = new Agent({
+			runtime,
+			client,
+			stateDir,
+			version: 'test',
+			log: () => {},
+			selfUpdate: new SelfUpdater(runtime, { stateDir, image, log: () => {} })
+		});
+		await agent.hello();
+		expect(calls.hellos[1]!.features).toContain('self-update');
+		expect(calls.hellos[1]!.image).toEqual({ reference: image.reference, id: 'sha256:old' });
+	});
+
+	it('runs the update the desired state asks for and reports how it went', async () => {
+		const runtime = new FakeRuntime();
+		runtime.images.set(image.reference, { id: 'sha256:new', created: 1 });
+		const { client, calls } = fakeClient([{ ...desiredState(), agentUpdate: { id: 'aup_1' } }]);
+		const stateDir = mkdtempSync(path.join(tmpdir(), 'tramline-agent-'));
+		const agent = new Agent({
+			runtime,
+			client,
+			stateDir,
+			version: 'test',
+			log: () => {},
+			selfUpdate: new SelfUpdater(runtime, { stateDir, image, log: () => {} })
+		});
+		await agent.hello();
+		await agent.sync();
+		await vi.waitFor(() => expect(runtime.containers.has(HELPER_NAME)).toBe(true));
+		await agent.tick();
+		expect(calls.reports.at(-1)!.agentUpdate).toMatchObject({ id: 'aup_1', state: 'running' });
 	});
 });
 

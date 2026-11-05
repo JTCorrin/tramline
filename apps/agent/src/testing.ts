@@ -213,6 +213,7 @@ export function desiredState(
 		mesh: null,
 		tcpProxies: [],
 		tunnel: null,
+		agentUpdate: null,
 		ingress: { httpPort: 8080, tls: false, routes }
 	};
 }

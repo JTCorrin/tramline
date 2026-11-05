@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { DbOrTx } from '../db/client';
 import { AppError } from '../api/errors';
 import { adapterAccount, build, container, deployment, joinToken, node } from '../db/schema';
+import type { AgentUpdate } from '../db/schema/nodes';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
 import { onNode, replicaNode } from './placement';
@@ -238,5 +239,47 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 			.set({ lastSeenAt: new Date(), revision: report.revision, error: report.dockerError ?? null })
 			.where(eq(node.id, nodeId))
 			.run();
+		if (report.agentUpdate) recordAgentUpdate(tx, nodeId, report.agentUpdate);
 	});
+}
+
+/** How long an agent update may take before the Nodes page calls it failed. */
+export const AGENT_UPDATE_TIMEOUT_MS = 15 * 60_000;
+
+/** The update as it stands; one the agent never finished counts as failed after the timeout. */
+export function agentUpdateState(update: AgentUpdate | null, now = Date.now()): AgentUpdate | null {
+	if (!update || update.finishedAt) return update;
+	if (now - Date.parse(update.requestedAt) < AGENT_UPDATE_TIMEOUT_MS) return update;
+	return {
+		...update,
+		state: 'failed',
+		error: update.error ?? "The agent didn't finish updating within 15 minutes",
+		finishedAt: new Date(Date.parse(update.requestedAt) + AGENT_UPDATE_TIMEOUT_MS).toISOString()
+	};
+}
+
+/** Progress the agent reports on the update it was asked for; reports about any other are ignored. */
+function recordAgentUpdate(
+	db: DbOrTx,
+	nodeId: string,
+	report: NonNullable<AgentReportInput['agentUpdate']>
+) {
+	const row = db
+		.select({ agentUpdate: node.agentUpdate })
+		.from(node)
+		.where(eq(node.id, nodeId))
+		.get();
+	const current = row?.agentUpdate;
+	if (!current || current.id !== report.id || current.finishedAt) return;
+	const done = report.state !== 'running';
+	const next: AgentUpdate = {
+		...current,
+		state: report.state,
+		detail: report.detail ?? null,
+		error: report.error ?? null,
+		finishedAt: done ? new Date().toISOString() : null
+	};
+	if (JSON.stringify(next) === JSON.stringify(current)) return;
+	db.update(node).set({ agentUpdate: next }).where(eq(node.id, nodeId)).run();
+	if (done) notifyNodes();
 }
