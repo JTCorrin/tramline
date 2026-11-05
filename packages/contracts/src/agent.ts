@@ -11,10 +11,20 @@ import { ScanMode, ScanResult } from './scan';
 
 export const AGENT_PROTOCOL_VERSION = 1;
 
+/**
+ * What this build of the agent can do beyond the protocol's basics, so the
+ * control plane can tell an old agent from a new one. Agents installed
+ * before features were reported send none.
+ */
+export const AGENT_FEATURES = ['tunnel'] as const;
+export type AgentFeature = (typeof AGENT_FEATURES)[number];
+
 /** Sent when an agent starts, and whenever its environment changes. */
 export const AgentHello = z.object({
 	protocol: z.literal(AGENT_PROTOCOL_VERSION),
 	agentVersion: z.string(),
+	/** From `AGENT_FEATURES`; strings, so a newer agent's features don't fail validation. */
+	features: z.array(z.string().max(64)).max(32).optional(),
 	hostname: z.string(),
 	os: z.string(),
 	arch: z.string(),
@@ -420,6 +430,8 @@ export const NodeSummary = z.object({
 	lastSeenAt: z.iso.datetime().nullable(),
 	hostname: z.string().nullable(),
 	dockerVersion: z.string().nullable(),
+	/** What its agent can do (`AGENT_FEATURES`); empty for agents from before they were reported. */
+	features: z.array(z.string()),
 	/** Which compute adapter manages it; `manual` for machines enrolled by hand. */
 	adapter: z.string(),
 	/** The adapter account that created it, which destroys it when it's removed. */

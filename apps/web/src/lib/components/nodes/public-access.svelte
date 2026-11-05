@@ -18,6 +18,8 @@
 	let { access = $bindable(), nodes }: { access: PublicAccess; nodes: NodeSummary[] } = $props();
 
 	const HAND = 'hand';
+	/** Agents installed before the tunnel feature can't run its connector. */
+	const canRun = (n: NodeSummary) => n.features.includes('tunnel');
 	const nodeLabel = (id: string) =>
 		id === HAND ? 'I’ll run it myself' : (nodes.find((n) => n.id === id)?.name ?? id);
 
@@ -38,8 +40,10 @@
 		zones = null;
 		originUrl = page.url.origin;
 		nodeId =
-			(nodes.find((n) => n.name === 'local') ?? nodes.find((n) => n.status === 'online'))?.id ??
-			HAND;
+			(
+				nodes.find((n) => n.name === 'local' && n.status === 'online' && canRun(n)) ??
+				nodes.find((n) => n.status === 'online' && canRun(n))
+			)?.id ?? HAND;
 	}
 
 	async function findZones(event: SubmitEvent) {
@@ -189,12 +193,22 @@
 						</Select.Trigger>
 						<Select.Content>
 							{#each nodes as n (n.id)}
-								<Select.Item value={n.id}>{n.name}</Select.Item>
+								<Select.Item value={n.id} disabled={!canRun(n)}
+									>{n.name}{canRun(n) ? '' : ' (agent too old)'}</Select.Item
+								>
 							{/each}
 							<Select.Item value={HAND}>{nodeLabel(HAND)}</Select.Item>
 						</Select.Content>
 					</Select.Root>
 				</div>
+				{#if tunnel.connectorProblem}
+					<p
+						class="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3"
+						data-testid="connector-problem"
+					>
+						{tunnel.connectorProblem}
+					</p>
+				{/if}
 				<form class="flex flex-wrap items-center gap-2" onsubmit={saveOrigin}>
 					<label for="tunnel-origin" class="text-muted-foreground">It reaches Tramline at</label>
 					<Input
@@ -284,7 +298,9 @@
 							>
 							<Select.Content>
 								{#each nodes as n (n.id)}
-									<Select.Item value={n.id}>{n.name}</Select.Item>
+									<Select.Item value={n.id} disabled={!canRun(n)}
+										>{n.name}{canRun(n) ? '' : ' (agent too old)'}</Select.Item
+									>
 								{/each}
 								<Select.Item value={HAND}>{nodeLabel(HAND)}</Select.Item>
 							</Select.Content>

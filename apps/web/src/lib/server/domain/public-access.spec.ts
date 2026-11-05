@@ -1,6 +1,7 @@
 import { ListCloudflareZones, type AgentHello } from '@tramline/contracts';
 import { describe, expect, it } from 'vitest';
-import { publicTunnel } from '../db/schema';
+import { eq } from 'drizzle-orm';
+import { node, publicTunnel } from '../db/schema';
 import { buildDesiredState } from '../nodes/desired';
 import { join } from '../nodes/registry';
 import { grantInstallAdmin, seedCtx } from '../testing';
@@ -13,6 +14,7 @@ const TOKEN = 'cf-api-token-0123456789abcdef';
 const hello: AgentHello = {
 	protocol: 1,
 	agentVersion: 'test',
+	features: ['tunnel'],
 	hostname: 'box',
 	os: 'linux',
 	arch: 'amd64',
@@ -241,6 +243,43 @@ describe('public access', () => {
 		const { command, token } = publicAccess.connector(ctx);
 		expect(token).toMatch(/^eyJ-/);
 		expect(command).toContain(`tunnel --no-autoupdate run --token ${token}`);
+	});
+
+	it('won’t give the connector to a node that can’t run it, and says why it isn’t running', async () => {
+		const { ctx, home, other } = setup();
+		const { fetcher } = fakeCloudflare();
+		const setInfo = (id: string, info: AgentHello) =>
+			ctx.db.update(node).set({ info }).where(eq(node.id, id)).run();
+		// an agent from before features were reported
+		const old: AgentHello = { ...hello, features: undefined };
+		setInfo(other, { ...old, hostname: 'other' });
+
+		await expect(create(ctx, fetcher, other)).rejects.toMatchObject({
+			code: 'conflict',
+			message: expect.stringContaining("other's agent is too old")
+		});
+		await create(ctx, fetcher, home);
+		expect((await publicAccess.get(ctx, fetcher)).tunnel?.connectorProblem).toBeNull();
+		await expect(publicAccess.update(ctx, { nodeId: other }, fetcher)).rejects.toMatchObject({
+			code: 'conflict'
+		});
+
+		// the chosen node's agent is replaced by an old one
+		setInfo(home, { ...old, hostname: 'home' });
+		expect((await publicAccess.get(ctx, fetcher)).tunnel?.connectorProblem).toContain(
+			"home's agent is too old"
+		);
+
+		// or it stops reporting in
+		setInfo(home, { ...hello, hostname: 'home' });
+		ctx.db
+			.update(node)
+			.set({ lastSeenAt: new Date(Date.now() - 10 * 60_000) })
+			.where(eq(node.id, home))
+			.run();
+		expect((await publicAccess.get(ctx, fetcher)).tunnel?.connectorProblem).toBe(
+			"home is offline, so the connector isn't running."
+		);
 	});
 
 	it('deletes the tunnel and its DNS record, or forgets them when Cloudflare can’t', async () => {
