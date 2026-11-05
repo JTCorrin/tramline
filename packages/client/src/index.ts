@@ -10,6 +10,7 @@ import { adapters } from './resources/adapters';
 import { invites } from './resources/invites';
 import { metrics } from './resources/metrics';
 import { nodes } from './resources/nodes';
+import { pools } from './resources/pools';
 import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
 import { publicAccess } from './resources/public-access';
@@ -31,6 +32,7 @@ export function createClient(options: ClientOptions) {
 		variables: variables(http),
 		deployments: deployments(http),
 		nodes: nodes(http),
+		pools: pools(http),
 		metrics: metrics(http),
 		adapters: adapters(http),
 		publicAccess: publicAccess(http),

@@ -366,6 +366,10 @@ More: [docs/adapters/aws.md](docs/adapters/aws.md)
 
 </details>
 
+## Grow and shrink automatically
+
+On **Nodes → Node pools**, click **New pool** and pick a compute account, a region and a size, with a minimum and a maximum. When a deployment has nowhere to run, the pool creates a machine for it; once a machine has run nothing for 15 minutes, it's destroyed. A pool can serve every environment or just one, and a monthly cap keeps it from growing past what you want to spend. Tramline shows the cost and asks before a pool can grow.
+
 ## Update a node's agent
 
 On **Nodes**, click **Update agent**. The agent pulls the latest image and, if there's a newer one, restarts on it. Deployments keep running, and the node shows how it went.

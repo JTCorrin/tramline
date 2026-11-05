@@ -15,6 +15,7 @@ import { pollRepositories } from '#lib/server/github/poll.js';
 import { runBackupSchedules } from '#lib/server/domain/backups.js';
 import { recheckDomains } from '#lib/server/domain/domains.js';
 import { reconcileTunnel } from '#lib/server/domain/public-access.js';
+import { autoscale } from '#lib/server/domain/pools.js';
 import { pruneAuditLog } from '#lib/server/domain/tokens.js';
 import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
 import { pruneLogs } from '#lib/server/nodes/logs.js';
@@ -32,6 +33,7 @@ import { createInitialModeExpression } from 'mode-watcher';
 const RECONCILE_INTERVAL_MS = 2_000;
 const BACKUP_SCHEDULE_INTERVAL_MS = 60_000;
 const METRICS_INTERVAL_MS = 60_000;
+const AUTOSCALE_INTERVAL_MS = 30_000;
 const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
@@ -96,7 +98,18 @@ export const init: ServerInit = () => {
 			.finally(() => (measuring = false));
 	}, METRICS_INTERVAL_MS);
 
+	// node pools: add machines for waiting work, remove idle ones
+	let scaling = false;
+	const scaler = setInterval(async () => {
+		if (scaling) return;
+		scaling = true;
+		await autoscale(db, secrets, settings)
+			.catch((error) => console.error('[pools]', error))
+			.finally(() => (scaling = false));
+	}, AUTOSCALE_INTERVAL_MS);
+
 	g.__tramlineReconciler = () => {
+		clearInterval(scaler);
 		clearInterval(timer);
 		clearInterval(poll);
 		clearInterval(schedules);

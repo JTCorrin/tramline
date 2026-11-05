@@ -225,6 +225,13 @@
       "when": 1793880840444,
       "tag": "0031_agent_update",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1793882007487,
+      "tag": "0032_node_pools",
+      "breakpoints": true
     }
   ]
 }

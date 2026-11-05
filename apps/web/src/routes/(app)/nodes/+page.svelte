@@ -6,6 +6,7 @@
 	import * as Card from '#lib/components/ui/card/index.js';
 	import AddNode from '#lib/components/nodes/add-node.svelte';
 	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
+	import NodePools from '#lib/components/nodes/node-pools.svelte';
 	import PublicAccess from '#lib/components/nodes/public-access.svelte';
 	import AlertList from '#lib/components/metrics/alert-list.svelte';
 	import NodeMetrics from '#lib/components/metrics/node-metrics.svelte';
@@ -30,6 +31,8 @@
 	let provisioning = $state(data.provisioning);
 	// svelte-ignore state_referenced_locally
 	let publicAccess = $state(data.access);
+	// svelte-ignore state_referenced_locally
+	let nodePools = $state(data.pools);
 	let alerts = $state<Alert[]>([]);
 	/** Nodes whose charts are open. */
 	let charted = $state<Record<string, boolean>>({});
@@ -224,6 +227,7 @@
 
 	{#if data.canManage}
 		<AddNode accounts={computeAccounts} bind:provisioning access={publicAccess} />
+		<NodePools accounts={computeAccounts} bind:pools={nodePools} />
 		<ComputeAccounts adapters={data.adapters} bind:accounts={computeAccounts} />
 		{#if publicAccess}
 			<PublicAccess bind:access={publicAccess} nodes={data.nodes} />
@@ -287,6 +291,7 @@
 						<Badge variant="secondary">Cordoned</Badge>
 					{/if}
 					{#if node.edge}<Badge variant="outline">Edge</Badge>{/if}
+					{#if node.pool}<Badge variant="outline">Pool {node.pool.name}</Badge>{/if}
 					<span class="ml-auto text-xs text-muted-foreground">
 						{node.deployments} deployment{node.deployments === 1 ? '' : 's'}
 					</span>

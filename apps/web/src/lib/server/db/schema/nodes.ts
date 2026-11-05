@@ -1,7 +1,9 @@
 import type { AgentHello, ScanResult } from '@tramline/contracts';
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { user } from './auth';
 import { timestamps } from './projects';
+import { environment } from './services';
 
 /**
  * A connection to a compute provider (Proxmox, a cloud) that creates
@@ -27,6 +29,10 @@ export const node = sqliteTable('node', {
 	adapterAccountId: text('adapter_account_id').references(() => adapterAccount.id),
 	/** The provider's ID for the machine. */
 	providerNodeId: text('provider_node_id'),
+	/** The pool that created it; the pool destroys it once it's idle. */
+	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
+	/** When a pool node was last seen running nothing; null while it runs something. */
+	idleSince: integer('idle_since', { mode: 'timestamp_ms' }),
 	/** sha256 of the agent's bearer token. */
 	tokenHash: text('token_hash').notNull().unique(),
 	/** Last hello from the agent. */
@@ -79,6 +85,8 @@ export const joinToken = sqliteTable('join_token', {
 	providerNodeId: text('provider_node_id'),
 	region: text('region'),
 	offer: text('offer'),
+	/** The pool that asked for the machine. */
+	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
 	/**
 	 * sha256 of the ID in the machine's cloud-init seed URL, and the user data
 	 * it serves (encrypted; it holds the join token). Both go once it enrolls.
@@ -90,6 +98,41 @@ export const joinToken = sqliteTable('join_token', {
 	usedAt: integer('used_at', { mode: 'timestamp_ms' }),
 	/** The node it enrolled. */
 	nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+	...timestamps
+});
+
+/**
+ * Machines Tramline adds and removes by itself: an account, a region and a
+ * size, between a minimum and a maximum. The offer's size and price are
+ * kept from when the pool was made, to check what fits and what it costs.
+ */
+export const nodePool = sqliteTable('node_pool', {
+	id: text('id').primaryKey(),
+	name: text('name').notNull().unique(),
+	adapterAccountId: text('adapter_account_id')
+		.notNull()
+		.references(() => adapterAccount.id),
+	region: text('region').notNull(),
+	offer: text('offer').notNull(),
+	offerName: text('offer_name').notNull(),
+	vcpus: integer('vcpus').notNull(),
+	memoryMb: integer('memory_mb').notNull(),
+	hourly: real('hourly'),
+	/** The environment it serves; every environment when `forEnvironment` is false. */
+	forEnvironment: integer('for_environment', { mode: 'boolean' }).notNull().default(false),
+	environmentId: text('environment_id').references(() => environment.id, { onDelete: 'set null' }),
+	minNodes: integer('min_nodes').notNull().default(0),
+	maxNodes: integer('max_nodes').notNull(),
+	idleMinutes: integer('idle_minutes').notNull().default(15),
+	monthlyCap: real('monthly_cap'),
+	/** Where its machines reach this install, when no tunnel or setting says (the address it was made at). */
+	origin: text('origin').notNull(),
+	removing: integer('removing', { mode: 'boolean' }).notNull().default(false),
+	error: text('error'),
+	errorAt: integer('error_at', { mode: 'timestamp_ms' }),
+	activity: text('activity'),
+	activityAt: integer('activity_at', { mode: 'timestamp_ms' }),
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 	...timestamps
 });
 

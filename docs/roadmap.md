@@ -669,7 +669,15 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 **7c: node pools**
 
-- Node pools per environment (adapter account + region + size, min/max), and auto-provisioning when the scheduler can't fit a workload's requests. Idle nodes are destroyed, with a guardrail confirmation and a spend cap. Orphan detection via `listNodes`.
+- **Node pools ✅** (unit-tested against the fake adapter), on the Nodes page:
+  - **A pool** is an adapter account, a region and a size, with a minimum, a maximum, an idle time (15 minutes by default) and an optional monthly spend cap. It serves every environment, or just one. Its machines take no other environment's work, and a pool whose environment is deleted takes none and shrinks to nothing.
+  - **Growing:** every 30 seconds, a pool adds a machine when a deployment has been queued with nowhere to run, isn't tied to another node by its data or a pin, and fits the pool's size (90% of its memory, to leave room for the system). It adds one at a time, and waits for each to join and take the work. It never goes past its maximum or its cap (at 730 hours a month), and keeps its minimum.
+  - **Shrinking:** a machine that has run nothing for the idle time is removed like any node: cordoned, its machine destroyed, then forgotten. One holding a service's data, serving as an edge node or running the tunnel's connector stays.
+  - **Failures:** a provider error shows on the pool and backs off for 5 minutes. A machine that hasn't enrolled within an hour is destroyed.
+  - **Guardrails:** creating a pool, raising its maximum or loosening its cap asks first, saying what it can cost a month.
+  - **Removing a pool** drains its machines (deployments move to other nodes), destroys each once it's empty, and then the pool goes. It refuses while a machine holds a service's data.
+  - **Leftover machines:** **Find leftovers** on a compute account lists machines with Tramline's tag that no node or enrolling machine accounts for, from `listNodes`, each with a Destroy button.
+  - **Not yet:** spot machines, several sizes per pool, and GPU pools (7d).
 - **Agent updates ✅** (unit-tested): **Update agent** on the Nodes page, so nodes (and later pools) don't run old agents.
   - **How:** the agent pulls its own image again. If it's newer, it starts a short-lived helper from the new image, with only the Docker socket and no network. The helper renames and stops the old agent, starts a new one under its name with the same settings and state volume, and removes the old one once the new one has stayed up for 15 seconds. Otherwise it puts the old one back.
   - **Outcome:** kept in the state volume, so whichever agent runs afterwards reports it: up to date, updated from one image to another, or failed and why. One that doesn't finish within 15 minutes counts as failed.

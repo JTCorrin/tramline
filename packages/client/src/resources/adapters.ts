@@ -4,6 +4,7 @@ import type {
 	AdapterOffer,
 	AdapterRegion,
 	CreateAdapterAccount,
+	LeftoverMachine,
 	ProviderNodeCreated,
 	ProvisioningNode,
 	ProvisionNode,
@@ -29,6 +30,10 @@ export const adapters = (http: Http) => ({
 	/** Creates a machine with an account; it appears as a node once it enrolls. */
 	provision: (input: ProvisionNode) => http.post<ProviderNodeCreated>('/nodes/provision', input),
 	provisioning: () => http.get<ProvisioningNode[]>('/nodes/provisioning'),
+	/** Machines with Tramline's tag that no node accounts for. */
+	leftovers: (id: string) => http.get<LeftoverMachine[]>(`/adapter-accounts/${id}/leftovers`),
+	destroyLeftover: (id: string, machine: string) =>
+		http.delete<void>(`/adapter-accounts/${id}/leftovers/${encodeURIComponent(machine)}`),
 	/** Destroys a machine that hasn't enrolled. */
 	cancel: (id: string) => http.delete<void>(`/nodes/provisioning/${id}`)
 });

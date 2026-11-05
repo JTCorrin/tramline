@@ -480,6 +480,8 @@ export const NodeSummary = z.object({
 	adapter: z.string(),
 	/** The adapter account that created it, which destroys it when it's removed. */
 	account: z.object({ id: z.string(), name: z.string() }).nullable(),
+	/** The node pool that created it, and destroys it when it's idle. */
+	pool: z.object({ id: z.string(), name: z.string() }).nullable(),
 	cpus: z.number().int().nullable(),
 	memoryMb: z.number().int().nullable(),
 	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),
