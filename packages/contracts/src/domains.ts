@@ -21,12 +21,17 @@ export const Hostname = z
  * A domain of the user's that serves a service. Ownership is proven with a
  * TXT record before any traffic is routed to it.
  */
+export const CustomDomainRoute = z.enum(['direct', 'tunnel']);
+export type CustomDomainRoute = z.infer<typeof CustomDomainRoute>;
+
 export const CustomDomain = z.object({
 	id: z.string(),
 	serviceId: z.string(),
 	environmentId: z.string(),
 	hostname: z.string(),
 	status: z.enum(['pending', 'verified']),
+	/** `tunnel`: served through the install's Cloudflare tunnel, with DNS Tramline made. */
+	route: CustomDomainRoute,
 	/** The TXT record that proves ownership. */
 	verification: z.object({ name: z.string(), value: z.string() }),
 	/** Where the CNAME should point: the service's generated domain, once it has one. */
@@ -42,7 +47,8 @@ export type CustomDomain = z.infer<typeof CustomDomain>;
 export const AddCustomDomain = z.object({
 	serviceId: z.string(),
 	environmentId: z.string(),
-	hostname: Hostname
+	hostname: Hostname,
+	route: CustomDomainRoute.default('direct')
 });
 
 export type AddCustomDomain = z.input<typeof AddCustomDomain>;

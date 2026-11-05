@@ -16,7 +16,7 @@ export const AGENT_PROTOCOL_VERSION = 1;
  * control plane can tell an old agent from a new one. Agents installed
  * before features were reported send none.
  */
-export const AGENT_FEATURES = ['tunnel'] as const;
+export const AGENT_FEATURES = ['tunnel', 'tunnel-routes'] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 
 /** Sent when an agent starts, and whenever its environment changes. */
@@ -332,7 +332,16 @@ export const DesiredState = z.object({
 		httpPort: z.number().int(),
 		/** Serve HTTPS with automatic certificates (real domains only). */
 		tls: z.boolean(),
-		routes: z.array(IngressRoute)
+		routes: z.array(IngressRoute),
+		/**
+		 * Domains served through the Cloudflare tunnel, on the node running its
+		 * connector: plain HTTP on `127.0.0.1:<port>`, where the connector (on the
+		 * host's network) delivers them. Cloudflare terminates TLS.
+		 */
+		tunnel: z
+			.object({ port: z.number().int(), routes: z.array(IngressRoute) })
+			.nullable()
+			.optional()
 	})
 });
 

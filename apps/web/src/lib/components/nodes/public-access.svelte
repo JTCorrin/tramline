@@ -112,7 +112,7 @@
 		const host = access.tunnel?.hostname;
 		if (
 			!confirm(
-				`Remove the tunnel? ${host} stops working, and nodes that joined through it lose their connection.`
+				`Remove the tunnel? ${host} stops working, nodes that joined through it lose their connection, and services published through it are unpublished.`
 			)
 		)
 			return;

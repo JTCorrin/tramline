@@ -139,7 +139,7 @@ export class DockerRuntime implements ContainerRuntime {
 				PortBindings: Object.fromEntries(
 					ports.map((p) => [
 						`${p.container}/${p.protocol ?? 'tcp'}`,
-						[{ HostPort: String(p.host) }]
+						[{ HostPort: String(p.host), ...(p.hostIp ? { HostIp: p.hostIp } : {}) }]
 					])
 				),
 				...(spec.sysctls ? { Sysctls: spec.sysctls } : {}),

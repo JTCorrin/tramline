@@ -14,7 +14,7 @@ import { AppError, notFound } from '../api/errors';
 import { cloudflare } from '../cloudflare';
 import type { Secrets } from '../crypto';
 import type { DbOrTx } from '../db/client';
-import { node, publicTunnel } from '../db/schema';
+import { customDomain, node, publicTunnel } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { nodeStatus } from '../nodes/registry';
@@ -31,6 +31,8 @@ import type { Ctx } from './context';
 
 export const TUNNEL_IMAGE = 'cloudflare/cloudflared:2026.10.0';
 export const tunnelContainerName = (nodeId: string) => `tramline-tunnel-${nodeId}`;
+/** Where the connector's node takes tunnel domains: the ingress, on 127.0.0.1 only. */
+export const TUNNEL_INGRESS_PORT = 8780;
 
 type Row = typeof publicTunnel.$inferSelect;
 
@@ -54,10 +56,120 @@ export function desiredTunnel(db: DbOrTx, secrets: Secrets, nodeId: string) {
 	};
 }
 
-const ingressRules = (hostname: string, originUrl: string) => [
+/** Hostnames of services published through the tunnel. */
+export function tunnelHostnames(db: DbOrTx) {
+	return db
+		.select({ hostname: customDomain.hostname })
+		.from(customDomain)
+		.where(eq(customDomain.route, 'tunnel'))
+		.orderBy(customDomain.hostname)
+		.all()
+		.map((row) => row.hostname);
+}
+
+/** The node running the connector, when services can be published through it. */
+export function tunnelIngressNode(db: DbOrTx) {
+	return tunnelRow(db)?.nodeId ?? null;
+}
+
+const ingressRules = (hostname: string, originUrl: string, apps: string[] = []) => [
 	{ hostname, path: TUNNEL_PATHS, service: originUrl },
+	...apps.map((app) => ({ hostname: app, service: `http://127.0.0.1:${TUNNEL_INGRESS_PORT}` })),
 	{ service: 'http_status:404' }
 ];
+
+/**
+ * Checks a hostname can be published through the tunnel, and returns what
+ * publishing needs. Only install admins can: it creates DNS records with the
+ * token they gave, in their domain.
+ */
+export function requireTunnelFor(ctx: Ctx, hostname: string) {
+	requireInstallAdmin(ctx, 'publish services through the tunnel');
+	const row = tunnelRow(ctx.db);
+	if (!row) {
+		throw new AppError('conflict', 'Set up a Cloudflare tunnel under Nodes → Public access first');
+	}
+	if (hostname !== row.zoneName && !hostname.endsWith(`.${row.zoneName}`)) {
+		throw new AppError(
+			'validation_failed',
+			`Through the tunnel, a domain has to be ${row.zoneName} or a name under it`
+		);
+	}
+	if (hostname === row.hostname) {
+		throw new AppError('conflict', `${hostname} is the tunnel's own address, for nodes`);
+	}
+	if (!row.nodeId) {
+		throw new AppError(
+			'conflict',
+			'Services can only be published through the tunnel when a node runs its connector. Choose one under Nodes → Public access.'
+		);
+	}
+	const connectorNode = ctx.db.select().from(node).where(eq(node.id, row.nodeId)).get();
+	if (!connectorNode?.info?.features?.includes('tunnel-routes')) {
+		throw new AppError(
+			'conflict',
+			`${connectorNode?.name ?? 'The connector'}'s agent is too old to serve services through the tunnel. Reinstall the agent on it, or move the connector to another node.`
+		);
+	}
+	return row;
+}
+
+/**
+ * Creates the DNS record for a hostname being published through the tunnel,
+ * and remembers it. Refuses a name that already has a record.
+ */
+export async function addTunnelRecord(ctx: Ctx, hostname: string, fetcher?: typeof fetch) {
+	const row = requireTunnelFor(ctx, hostname);
+	const cf = cloudflare(ctx.secrets.decrypt(row.apiToken), fetcher);
+	if (await cf.dnsRecordExists(row.zoneId, hostname)) {
+		throw new AppError(
+			'conflict',
+			`${hostname} already has a DNS record. Choose another name, or remove the record in Cloudflare first.`
+		);
+	}
+	const record = await cf.createCname(row.zoneId, hostname, `${row.tunnelId}.cfargotunnel.com`);
+	ctx.db
+		.update(publicTunnel)
+		.set({ appRecords: { ...row.appRecords, [hostname]: record.id }, updatedAt: new Date() })
+		.where(eq(publicTunnel.id, row.id))
+		.run();
+}
+
+/**
+ * Brings Cloudflare in line with the services published through the tunnel:
+ * the tunnel's routes list exactly those hostnames, and DNS records Tramline
+ * made for hostnames that are gone (removed, or their service was deleted)
+ * are deleted. Runs after changes and on a timer.
+ */
+export async function reconcileTunnel(
+	db: DbOrTx,
+	secrets: Secrets,
+	{ fetcher, changed = false }: { fetcher?: typeof fetch; changed?: boolean } = {}
+) {
+	const row = tunnelRow(db);
+	if (!row) return;
+	const published = tunnelHostnames(db);
+	const records = { ...row.appRecords };
+	const stale = Object.keys(records).filter((hostname) => !published.includes(hostname));
+	// on the timer, only a domain that went away with its service needs Cloudflare
+	if (!changed && !stale.length) return;
+	const cf = cloudflare(secrets.decrypt(row.apiToken), fetcher);
+	await cf.configureTunnel(
+		row.accountId,
+		row.tunnelId,
+		ingressRules(row.hostname, row.originUrl, published)
+	);
+	for (const hostname of stale) {
+		await cf.deleteDnsRecord(row.zoneId, records[hostname]!);
+		delete records[hostname];
+	}
+	if (stale.length) {
+		db.update(publicTunnel)
+			.set({ appRecords: records, updatedAt: new Date() })
+			.where(eq(publicTunnel.id, row.id))
+			.run();
+	}
+}
 
 /** Why a node can't run the connector, or null when it can. */
 function connectorProblem(db: DbOrTx, nodeId: string) {
@@ -211,11 +323,27 @@ export async function update(ctx: Ctx, input: UpdatePublicTunnel, fetcher?: type
 	requireInstallAdmin(ctx, 'change public access');
 	const row = requireTunnel(ctx);
 	if (input.nodeId !== undefined) requireNodeId(ctx.db, input.nodeId);
+	const published = tunnelHostnames(ctx.db);
+	if (input.nodeId === null && published.length) {
+		throw new AppError(
+			'conflict',
+			`${published.join(', ')} ${published.length === 1 ? 'is' : 'are'} published through the tunnel, which needs a node to run its connector. Remove ${published.length === 1 ? 'it' : 'them'} first, or choose another node.`
+		);
+	}
+	if (input.nodeId && published.length) {
+		const target = ctx.db.select().from(node).where(eq(node.id, input.nodeId)).get();
+		if (!target?.info?.features?.includes('tunnel-routes')) {
+			throw new AppError(
+				'conflict',
+				`${target?.name ?? 'That node'}'s agent is too old to serve the services published through the tunnel. Reinstall the agent on it, or choose another node.`
+			);
+		}
+	}
 	if (input.originUrl !== undefined && input.originUrl !== row.originUrl) {
 		await cloudflare(ctx.secrets.decrypt(row.apiToken), fetcher).configureTunnel(
 			row.accountId,
 			row.tunnelId,
-			ingressRules(row.hostname, input.originUrl)
+			ingressRules(row.hostname, input.originUrl, published)
 		);
 	}
 	ctx.db
@@ -239,14 +367,21 @@ export async function update(ctx: Ctx, input: UpdatePublicTunnel, fetcher?: type
 export async function remove(ctx: Ctx, { force = false } = {}, fetcher?: typeof fetch) {
 	requireInstallAdmin(ctx, 'change public access');
 	const row = requireTunnel(ctx);
+	// services published through it can't be reached without it
 	try {
 		const cf = cloudflare(ctx.secrets.decrypt(row.apiToken), fetcher);
+		for (const record of Object.values(row.appRecords ?? {})) {
+			await cf.deleteDnsRecord(row.zoneId, record);
+		}
 		await cf.deleteDnsRecord(row.zoneId, row.dnsRecordId);
 		await cf.deleteTunnel(row.accountId, row.tunnelId);
 	} catch (error) {
 		if (!force) throw error;
 	}
-	ctx.db.delete(publicTunnel).where(eq(publicTunnel.id, row.id)).run();
+	ctx.db.transaction((tx) => {
+		tx.delete(customDomain).where(eq(customDomain.route, 'tunnel')).run();
+		tx.delete(publicTunnel).where(eq(publicTunnel.id, row.id)).run();
+	});
 	notifyNodes();
 }
 

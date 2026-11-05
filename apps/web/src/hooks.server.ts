@@ -14,6 +14,7 @@ import { secrets } from '#lib/server/api/handler.js';
 import { pollRepositories } from '#lib/server/github/poll.js';
 import { runBackupSchedules } from '#lib/server/domain/backups.js';
 import { recheckDomains } from '#lib/server/domain/domains.js';
+import { reconcileTunnel } from '#lib/server/domain/public-access.js';
 import { pruneAuditLog } from '#lib/server/domain/tokens.js';
 import { pruneExpiredTokens } from '#lib/server/domain/oidc.js';
 import { pruneLogs } from '#lib/server/nodes/logs.js';
@@ -77,6 +78,7 @@ export const init: ServerInit = () => {
 		await runBackupSchedules(db, secrets)
 			.then(() => runControlPlaneBackups(db, controlPlaneBackups))
 			.then(() => recheckDomains(db))
+			.then(() => reconcileTunnel(db, secrets))
 			.then(() => pruneAuditLog(db))
 			.then(() => pruneExpiredTokens(db))
 			.then(() => pruneLogs(settings.dataDir))

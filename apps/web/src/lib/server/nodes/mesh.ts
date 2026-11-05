@@ -58,7 +58,7 @@ export interface MeshExport {
 	 */
 	target: string;
 	/** Public hostnames of its live deployment, which edge nodes serve. */
-	hosts: { host: string; custom: boolean }[];
+	hosts: { host: string; custom: boolean; tunnel?: boolean }[];
 	/** Its TCP proxy, which edge nodes publish: the edge port and who may connect. */
 	tcp: { port: number; allow: string[] } | null;
 }
@@ -175,7 +175,8 @@ export function meshExports(db: DbOrTx, secrets: Secrets): MeshExport[] {
 					...(domain && config.networking.publicDomain ? [{ host: domain, custom: false }] : []),
 					...(hostnames.get(`${dep.serviceId}:${dep.environmentId}`) ?? []).map((d) => ({
 						host: d.hostname,
-						custom: true
+						custom: true,
+						...(d.route === 'tunnel' ? { tunnel: true } : {})
 					}))
 				]
 			: [];

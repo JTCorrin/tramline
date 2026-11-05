@@ -366,6 +366,17 @@ More: [docs/adapters/aws.md](docs/adapters/aws.md)
 
 </details>
 
+## Make a service public
+
+With a Cloudflare tunnel set up under **Nodes → Public access**, and its connector running on a node:
+
+1. Open the service, then **Settings → Networking**, and make sure it has a **port**.
+2. Under **Custom domains**, leave **Through the tunnel** selected, enter a name under your domain (e.g. `api.example.com`), and click **Publish**.
+
+Tramline creates the DNS record and the tunnel route itself, and it's live at `https://api.example.com` within a minute. There are no ports to open, and Cloudflare provides the certificate. Only services you publish are reachable; databases and everything else stay private. Removing the domain unpublishes it again.
+
+Without a tunnel, choose **DNS I manage**: point a CNAME at Tramline's edge nodes and add the TXT record it shows, to prove the domain is yours.
+
 ## Roadmap
 
 Tramline is being built in phases. The [full roadmap](docs/roadmap.md) has the details.

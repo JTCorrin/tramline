@@ -24,6 +24,29 @@ function setup() {
 }
 
 describe('Converger', () => {
+	it('publishes the tunnel listener to this host only, and recreates just that ingress', async () => {
+		const { runtime, converger, routes } = setup();
+		await converger.run(desiredState());
+		const plain = runtime.containers.get(INGRESS_NAME)!.spec;
+
+		const state = desiredState();
+		const route = {
+			host: 'api.home.example',
+			upstreams: ['dep_1.tramline.internal:80'],
+			network: 'tl-env_1',
+			custom: true
+		};
+		state.ingress.tunnel = { port: 8780, routes: [route] };
+		await converger.run(state);
+		const ingress = runtime.containers.get(INGRESS_NAME)!.spec;
+		expect(ingress.ports).toEqual([
+			{ container: 80, host: 8080 },
+			{ container: 8780, host: 8780, hostIp: '127.0.0.1' }
+		]);
+		expect(ingress.labels[LABELS.spec]).not.toBe(plain.labels[LABELS.spec]);
+		expect(routes().apps.http.servers.tunnel.listen).toEqual([':8780']);
+	});
+
 	it('creates networks, pulls images and starts containers and the ingress', async () => {
 		const { runtime, converger, routes } = setup();
 		const route = {

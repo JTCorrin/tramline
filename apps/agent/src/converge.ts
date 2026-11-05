@@ -591,7 +591,17 @@ export class Converger {
 			restart: { name: 'always' as const, maxRetries: 0 },
 			ports: [
 				{ container: 80, host: desired.ingress.httpPort },
-				...(desired.ingress.tls ? [{ container: 443, host: 443 }] : [])
+				...(desired.ingress.tls ? [{ container: 443, host: 443 }] : []),
+				// tunnel traffic: only the connector, on this host's network, can reach it
+				...(desired.ingress.tunnel
+					? [
+							{
+								container: desired.ingress.tunnel.port,
+								host: desired.ingress.tunnel.port,
+								hostIp: '127.0.0.1'
+							}
+						]
+					: [])
 			],
 			// Caddy only needs to bind ports 80/443 inside its container
 			security: {
@@ -607,7 +617,9 @@ export class Converger {
 				[LABELS.spec]: hash({
 					port: desired.ingress.httpPort,
 					tls: desired.ingress.tls,
-					routes: 'pushed'
+					routes: 'pushed',
+					// the key is only there with a tunnel, so other nodes' ingresses aren't recreated
+					...(desired.ingress.tunnel ? { tunnelPort: desired.ingress.tunnel.port } : {})
 				})
 			}
 		};

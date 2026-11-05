@@ -9,7 +9,9 @@ import { publish } from '../events';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { requireInstance } from './access';
+import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
+import { addTunnelRecord, reconcileTunnel } from './public-access';
 
 type Row = typeof customDomain.$inferSelect;
 export type ResolveTxt = (name: string) => Promise<string[][]>;
@@ -31,6 +33,7 @@ function dto(row: Row, target: string | null): CustomDomain {
 		environmentId: row.environmentId,
 		hostname: row.hostname,
 		status: row.status,
+		route: row.route,
 		verification: { name: verificationName(row.hostname), value: verificationValue(row.token) },
 		target,
 		error: row.error,
@@ -68,13 +71,19 @@ export function list(ctx: Ctx, serviceId: string, environmentId: string): Custom
 		.map((row) => dto(row, target));
 }
 
-/** Adds a domain, pending until its TXT record is found. */
+/**
+ * Adds a domain. A direct one is pending until its TXT record is found. One
+ * through the tunnel is live at once: Tramline creates its DNS record in the
+ * tunnel's domain, which proves the install controls the name.
+ */
 export async function add(
 	ctx: Ctx,
 	input: AddCustomDomain,
-	resolveTxt: ResolveTxt = dnsResolveTxt
+	resolveTxt: ResolveTxt = dnsResolveTxt,
+	/** Cloudflare's API, for domains through the tunnel; replaced in tests. */
+	fetcher?: typeof fetch
 ): Promise<CustomDomain> {
-	const { serviceId, environmentId, hostname } = AddCustomDomain.parse(input);
+	const { serviceId, environmentId, hostname, route } = AddCustomDomain.parse(input);
 	const { service: svc } = requireInstance(ctx, serviceId, environmentId);
 	const base = ctx.settings.baseDomain;
 	// generated names belong to Tramline; letting a service claim one would let it take over another's
@@ -98,6 +107,37 @@ export async function add(
 		.where(eq(customDomain.hostname, hostname))
 		.get();
 	if (taken) throw new AppError('conflict', `${hostname} is already in use`);
+
+	if (route === 'tunnel') {
+		await addTunnelRecord(ctx, hostname, fetcher);
+		let row: Row | undefined;
+		try {
+			row = ctx.db
+				.insert(customDomain)
+				.values({
+					id: newId('domain'),
+					serviceId,
+					environmentId,
+					hostname,
+					token: randomBytes(16).toString('hex'),
+					status: 'verified',
+					route,
+					checkedAt: new Date(),
+					verifiedAt: new Date()
+				})
+				.returning()
+				.get();
+			await reconcileTunnel(ctx.db, ctx.secrets, { fetcher, changed: true });
+		} catch (error) {
+			// the record it made goes again with the next reconcile, if not now
+			if (row) ctx.db.delete(customDomain).where(eq(customDomain.id, row.id)).run();
+			await reconcileTunnel(ctx.db, ctx.secrets, { fetcher, changed: true }).catch(() => {});
+			throw error;
+		}
+		notifyNodes();
+		publish({ type: 'services', projectId: svc.projectId, serviceId });
+		return dto(row, generatedDomain(ctx.db, serviceId, environmentId));
+	}
 
 	const row = ctx.db
 		.insert(customDomain)
@@ -137,9 +177,19 @@ export async function verify(
 	return check(ctx.db, row, resolveTxt);
 }
 
-export function remove(ctx: Ctx, id: string) {
+/** Removes a domain; one through the tunnel loses its route and DNS record too. */
+export async function remove(ctx: Ctx, id: string, fetcher?: typeof fetch) {
 	const { customDomain: row, projectId } = requireDomain(ctx, id);
-	ctx.db.delete(customDomain).where(eq(customDomain.id, id)).run();
+	if (row.route === 'tunnel') {
+		requireInstallAdmin(ctx, 'unpublish services from the tunnel');
+		ctx.db.delete(customDomain).where(eq(customDomain.id, id)).run();
+		// if Cloudflare can't be reached now, the next scheduled reconcile finishes the job
+		await reconcileTunnel(ctx.db, ctx.secrets, { fetcher, changed: true }).catch((error: Error) =>
+			console.error('[tunnel]', error.message)
+		);
+	} else {
+		ctx.db.delete(customDomain).where(eq(customDomain.id, id)).run();
+	}
 	if (row.status === 'verified') notifyNodes();
 	publish({ type: 'services', projectId, serviceId: row.serviceId });
 }
@@ -151,7 +201,8 @@ async function check(
 	resolveTxt: ResolveTxt,
 	now = new Date()
 ): Promise<CustomDomain> {
-	let verified = row.status === 'verified';
+	// a tunnel domain is verified when it's added, and never re-checked
+	let verified = row.status === 'verified' || row.route === 'tunnel';
 	let error: string | null = null;
 	if (!verified) {
 		if (isLocal(row.hostname)) {

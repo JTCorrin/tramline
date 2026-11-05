@@ -223,6 +223,14 @@ export const customDomain = sqliteTable('custom_domain', {
 	/** Expected in the `_tramline.<hostname>` TXT record. */
 	token: text('token').notNull(),
 	status: text('status', { enum: ['pending', 'verified'] }).notNull(),
+	/**
+	 * `direct`: the user points DNS at the edge nodes and proves ownership with
+	 * a TXT record. `tunnel`: it's served through the install's Cloudflare
+	 * tunnel, and Tramline created its DNS record.
+	 */
+	route: text('route', { enum: ['direct', 'tunnel'] })
+		.notNull()
+		.default('direct'),
 	error: text('error'),
 	checkedAt: integer('checked_at', { mode: 'timestamp_ms' }),
 	verifiedAt: integer('verified_at', { mode: 'timestamp_ms' }),

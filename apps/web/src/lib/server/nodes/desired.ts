@@ -43,7 +43,7 @@ import {
 } from './names';
 import { backupJobs } from '../domain/backups';
 import { verifiedHostnames } from '../domain/domains';
-import { desiredTunnel } from '../domain/public-access';
+import { desiredTunnel, TUNNEL_INGRESS_PORT, tunnelIngressNode } from '../domain/public-access';
 
 /**
  * Everything one node should be running. Deterministic: the same database
@@ -102,6 +102,9 @@ export function buildDesiredState(
 	const builds: DesiredBuild[] = [];
 	const scans: DesiredScan[] = [];
 	const routes: IngressRoute[] = [];
+	// served through the Cloudflare tunnel, by the node that runs its connector
+	const tunnelRoutes: IngressRoute[] = [];
+	const servesTunnel = tunnelIngressNode(db) === nodeId;
 	const networks = new Set<string>();
 
 	for (const { deployment: dep, domain, icon, kind, organizationId } of rows) {
@@ -230,7 +233,8 @@ export function buildDesiredState(
 		// the user's own domains, once their ownership is proven
 		if (live && config.networking.port) {
 			for (const custom of hostnames.get(`${dep.serviceId}:${dep.environmentId}`) ?? []) {
-				routes.push({
+				if (custom.route === 'tunnel' && !servesTunnel) continue;
+				(custom.route === 'tunnel' ? tunnelRoutes : routes).push({
 					host: custom.hostname,
 					upstreams: [`${deploymentAlias(dep.id)}:${config.networking.port}`],
 					network,
@@ -250,9 +254,11 @@ export function buildDesiredState(
 		.limit(1)
 		.get();
 	const exports = members.length >= 2 || proxied ? meshExports(db, secrets) : [];
+	// the connector's node relays tunnel traffic to services elsewhere, as an edge does
+	const relays = (self?.edge ?? false) || servesTunnel;
 	const mesh = planMesh(members, exports, {
 		id: nodeId,
-		edge: self?.edge ?? false,
+		edge: relays,
 		networks: [...networks]
 	});
 	if (mesh) {
@@ -262,9 +268,11 @@ export function buildDesiredState(
 		const forwarded = new Set(mesh.forwards.filter((f) => f.to === 'remote').map((f) => f.port));
 		for (const e of exports) {
 			const port = ports.get(`${e.environmentId}:${e.serviceId}`)!;
-			if (!self?.edge || e.nodeIds.includes(nodeId) || !forwarded.has(port)) continue;
-			for (const { host, custom } of e.hosts) {
-				routes.push({
+			if (!relays || e.nodeIds.includes(nodeId) || !forwarded.has(port)) continue;
+			for (const { host, custom, tunnel } of e.hosts) {
+				// tunnel domains only ever go through the tunnel, and other domains never do
+				if (tunnel ? !servesTunnel : !self?.edge) continue;
+				(tunnel ? tunnelRoutes : routes).push({
 					host,
 					upstreams: [`${meshAlias(nodeId)}:${port}`],
 					network: meshNetworkName(nodeId),
@@ -285,7 +293,14 @@ export function buildDesiredState(
 		mesh,
 		tcpProxies: planTcpProxies(exports, { id: nodeId, edge: self?.edge ?? false }, mesh),
 		tunnel: desiredTunnel(db, secrets, nodeId),
-		ingress: { httpPort: settings.ingressPort, tls: usesTls(settings), routes }
+		ingress: {
+			httpPort: settings.ingressPort,
+			tls: usesTls(settings),
+			routes,
+			...(servesTunnel && tunnelRoutes.length
+				? { tunnel: { port: TUNNEL_INGRESS_PORT, routes: tunnelRoutes } }
+				: {})
+		}
 	};
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);
 	return { revision, ...document };
