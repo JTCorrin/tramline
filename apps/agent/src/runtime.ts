@@ -94,7 +94,8 @@ export interface RunSpec {
 	network: string;
 	aliases: string[];
 	restart: { name: 'no' | 'always' | 'on-failure'; maxRetries: number };
-	ports?: { container: number; host: number; protocol?: 'tcp' | 'udp' }[];
+	/** `hostIp` limits who can connect, e.g. `127.0.0.1` for this host only. */
+	ports?: { container: number; host: number; protocol?: 'tcp' | 'udp'; hostIp?: string }[];
 	/** Namespaced kernel settings, e.g. IP forwarding inside the mesh container. */
 	sysctls?: Record<string, string>;
 	/** Written into the container before it starts (absolute paths), e.g. a TLS key. */

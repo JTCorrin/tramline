@@ -154,6 +154,12 @@ export const publicTunnel = sqliteTable('public_tunnel', {
 	originUrl: text('origin_url').notNull(),
 	/** The node that runs the connector; null when it's run by hand. */
 	nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+	/**
+	 * DNS records Tramline made for services published through the tunnel, by
+	 * hostname. Kept here rather than with the domains, so a record whose domain
+	 * went away (its service or environment was deleted) is still found and removed.
+	 */
+	appRecords: text('app_records', { mode: 'json' }).$type<Record<string, string>>(),
 	createdBy: text('created_by').references(() => user.id, { onDelete: 'set null' }),
 	...timestamps
 });

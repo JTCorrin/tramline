@@ -90,6 +90,50 @@ describe('repositoryOf', () => {
 });
 
 describe('caddyConfig', () => {
+	it('serves tunnel domains on a plain-HTTP server of their own, as HTTPS to the app', () => {
+		const servers = caddyConfig({
+			httpPort: 80,
+			tls: true,
+			routes: [],
+			tunnel: {
+				port: 8780,
+				routes: [
+					{
+						host: 'api.home.example',
+						upstreams: ['dep_1.tramline.internal:8000'],
+						network: 'n',
+						custom: true
+					}
+				]
+			}
+		}).apps.http.servers as Record<string, Record<string, unknown>>;
+		const tunnel = servers.tunnel!;
+		expect(tunnel.listen).toEqual([':8780']);
+		// Cloudflare holds the certificate; this server must never redirect or ask for one
+		expect(tunnel.automatic_https).toEqual({ disable: true });
+		expect(tunnel).not.toHaveProperty('trusted_proxies');
+		const routes = tunnel.routes as { handle: Record<string, unknown>[] }[];
+		expect(routes[0]!.handle).toEqual([
+			{
+				handler: 'headers',
+				response: { set: { 'Strict-Transport-Security': ['max-age=31536000'] } }
+			},
+			{
+				handler: 'reverse_proxy',
+				upstreams: [{ dial: 'dep_1.tramline.internal:8000' }],
+				headers: { request: { set: { 'X-Forwarded-Proto': ['https'] } } }
+			}
+		]);
+		expect(routes.at(-1)!.handle).toMatchObject([{ handler: 'static_response', status_code: 404 }]);
+		// the main server is unchanged, and doesn't carry the tunnel's hostnames
+		expect(servers.tramline!.listen).toEqual([':443']);
+	});
+
+	it('has no tunnel server without tunnel domains', () => {
+		const servers = caddyConfig({ httpPort: 80, tls: false, routes: [] }).apps.http.servers;
+		expect(Object.keys(servers)).toEqual(['tramline']);
+	});
+
 	it('routes hosts to upstreams over plain HTTP with a 404 fallback', () => {
 		const config = caddyConfig({
 			httpPort: 80,

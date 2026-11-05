@@ -662,6 +662,10 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **The connector:** `cloudflared` runs on a chosen node, on the host's network, or by hand with a command shown once on request. The API token and tunnel token are stored encrypted.
   - **Order:** new nodes join through the tunnel, then `TRAMLINE_AGENT_URL` (new), then `TRAMLINE_URL`. Nodes that joined earlier keep the address they joined with.
   - **Not the default:** Cloudflare terminates TLS, so it sees the agent traffic. An install with a public address can use its own HTTPS instead.
+- **Services through the tunnel:** a custom domain can be published through the tunnel instead of pointing DNS at edge nodes. Tramline creates the CNAME to the tunnel and the tunnel's route for it, so it's live at once with no open ports and no TXT step; making the record in a zone the install's token controls proves ownership.
+  - **Serving:** the connector's node serves these on a plain-HTTP ingress listener bound to `127.0.0.1` (Cloudflare terminates TLS), relaying over the mesh to services on other nodes as an edge does. They never appear on the main listener, so no node asks for a certificate for them. Apps get `X-Forwarded-Proto: https`, and the visitor's address arrives in `CF-Connecting-IP`; forwarded headers aren't trusted, since service containers share networks with the ingress.
+  - **Rules:** names must be in the tunnel's zone; only install admins can publish (it uses their token); the connector must run on a node whose agent reports `tunnel-routes`, and can't be moved to by-hand while anything is published.
+  - **Cleanup:** the tunnel row remembers the records Tramline made, and a reconcile (after changes, and on the 5-minute schedule) deletes any whose domain is gone, e.g. with its service. Removing the tunnel unpublishes everything.
 
 **7c: node pools**
 
