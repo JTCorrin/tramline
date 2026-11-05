@@ -460,6 +460,12 @@ export const NodeSummary = z.object({
 	draining: z.boolean(),
 	/** Serves every public domain, forwarding to other nodes over the mesh. */
 	edge: z.boolean(),
+	/**
+	 * Who opens TCP 80 and 443 to it for that: `managed` when its adapter
+	 * does, in the provider's firewall, as the edge switch flips; `manual`
+	 * when the person does, on their router or firewall.
+	 */
+	edgePorts: z.enum(['managed', 'manual']),
 	mesh: z
 		.object({
 			address: z.string(),

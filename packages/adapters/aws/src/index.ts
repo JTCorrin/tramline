@@ -20,12 +20,16 @@ import { items, text, type XmlNode } from './xml';
  *
  * Instances and their volumes carry the `tramline` tag; the adapter only
  * ever terminates tagged instances. A security group opens the mesh port
- * (UDP 51820). See docs/adapters/aws.md for the IAM policy.
+ * (UDP 51820); an edge node also joins `tramline-edge`, which opens TCP 80
+ * and 443. See docs/adapters/aws.md for the IAM policy.
  */
 
 export const TAG = 'tramline';
 export const MESH_PORT = 51820;
 export const SECURITY_GROUP = 'tramline-mesh';
+/** The security group of instances that serve public domains, and its ports. */
+export const EDGE_GROUP = 'tramline-edge';
+export const EDGE_PORTS = [80, 443];
 /** Canonical's account, which publishes the official Ubuntu AMIs. */
 export const CANONICAL = '099720109477';
 const UBUNTU = 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*';
@@ -230,38 +234,61 @@ export function awsAdapter(options: ClientOptions = {}) {
 		return { vpcId, subnets: ids };
 	}
 
-	/** The mesh port's security group in the VPC, created the first time. */
-	async function ensureSecurityGroup(api: AwsClient, region: string, vpcId: string) {
+	async function findGroup(api: AwsClient, region: string, vpcId: string, name: string) {
 		const found = await api.call(
 			region,
 			'DescribeSecurityGroups',
-			filters({ 'group-name': [SECURITY_GROUP], 'vpc-id': [vpcId] })
+			filters({ 'group-name': [name], 'vpc-id': [vpcId] })
 		);
-		let groupId = text(items(found, 'securityGroupInfo')[0], 'groupId');
+		return text(items(found, 'securityGroupInfo')[0], 'groupId');
+	}
+
+	/** A security group in the VPC opening ports from anywhere, created the first time. */
+	async function ensureGroup(
+		api: AwsClient,
+		region: string,
+		vpcId: string,
+		group: { name: string; description: string; protocol: string; ports: number[] }
+	) {
+		let groupId = await findGroup(api, region, vpcId, group.name);
 		if (!groupId) {
 			const created = await api.call(region, 'CreateSecurityGroup', {
-				GroupName: SECURITY_GROUP,
-				GroupDescription: 'Tramline: nodes reach each other’s WireGuard mesh',
+				GroupName: group.name,
+				GroupDescription: group.description,
 				VpcId: vpcId,
 				'TagSpecification.1.ResourceType': 'security-group',
 				...tags('TagSpecification.1', { [TAG]: 'network' })
 			});
 			groupId = text(created, 'groupId')!;
 		}
-		try {
-			await api.call(region, 'AuthorizeSecurityGroupIngress', {
-				GroupId: groupId,
-				'IpPermissions.1.IpProtocol': 'udp',
-				'IpPermissions.1.FromPort': String(MESH_PORT),
-				'IpPermissions.1.ToPort': String(MESH_PORT),
-				'IpPermissions.1.IpRanges.1.CidrIp': '0.0.0.0/0',
-				'IpPermissions.1.Ipv6Ranges.1.CidrIpv6': '::/0'
-			});
-		} catch (error) {
-			if (!(error instanceof AwsError && error.code === 'InvalidPermission.Duplicate')) throw error;
+		// one rule a call, so one that's already there doesn't stop the others
+		for (const port of group.ports) {
+			try {
+				await api.call(region, 'AuthorizeSecurityGroupIngress', {
+					GroupId: groupId,
+					'IpPermissions.1.IpProtocol': group.protocol,
+					'IpPermissions.1.FromPort': String(port),
+					'IpPermissions.1.ToPort': String(port),
+					'IpPermissions.1.IpRanges.1.CidrIp': '0.0.0.0/0',
+					'IpPermissions.1.Ipv6Ranges.1.CidrIpv6': '::/0'
+				});
+			} catch (error) {
+				if (!(error instanceof AwsError && error.code === 'InvalidPermission.Duplicate')) {
+					throw error;
+				}
+			}
 		}
 		return groupId;
 	}
+
+	/** The mesh port's security group. */
+	const ensureSecurityGroup = (api: AwsClient, region: string, vpcId: string) =>
+		ensureGroup(api, region, vpcId, {
+			name: SECURITY_GROUP,
+			description: 'Tramline: nodes reach each other’s WireGuard mesh',
+			protocol: 'udp',
+			ports: [MESH_PORT]
+		});
 
 	const adapter = defineAdapter({
 		meta: {
@@ -276,7 +303,8 @@ export function awsAdapter(options: ClientOptions = {}) {
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
-			inventory: true
+			inventory: true,
+			edgePorts: true
 		},
 
 		async validate(creds) {
@@ -424,6 +452,37 @@ export function awsAdapter(options: ClientOptions = {}) {
 				if (error instanceof AwsError && error.code === 'InvalidInstanceID.NotFound') return;
 				throw error;
 			}
+		},
+
+		async setEdge(creds, id, open) {
+			const api = client(creds);
+			const found = await describe(api, id);
+			if (!found) {
+				// a machine that's gone has nothing open
+				if (open) throw new AdapterError(`There is no instance ${id}`);
+				return;
+			}
+			const { region, instanceId, instance } = found;
+			if (tagOf(instance, TAG) !== 'node') {
+				throw new AdapterError(`${instanceId} wasn't created by Tramline, so it was left alone`);
+			}
+			const vpcId = text(instance, 'vpcId') ?? (await defaultSubnets(api, region)).vpcId;
+			const edgeId = open
+				? await ensureGroup(api, region, vpcId, {
+						name: EDGE_GROUP,
+						description: 'Tramline: edge nodes serve public domains',
+						protocol: 'tcp',
+						ports: EDGE_PORTS
+					})
+				: await findGroup(api, region, vpcId, EDGE_GROUP);
+			const groups = items(instance, 'groupSet').map((g) => text(g, 'groupId')!);
+			if (!edgeId || groups.includes(edgeId) === open) return;
+			// the instance's whole list: tramline-mesh and any others stay
+			const next = open ? [...groups, edgeId] : groups.filter((g) => g !== edgeId);
+			await api.call(region, 'ModifyInstanceAttribute', {
+				InstanceId: instanceId,
+				...Object.fromEntries(next.map((g, i) => [`GroupId.${i + 1}`, g]))
+			});
 		}
 	});
 	return adapter;

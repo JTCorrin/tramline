@@ -35,7 +35,8 @@ All of it is in one resource group (`tramline` unless you choose another), and a
   - Its cloud-init comes in `customData`, which Azure's metadata service doesn't return, so containers on the node can't read the join token.
 - **Per region:** a virtual network `tramline-<region>` and a security group `tramline-<region>`, with a rule allowing UDP 51820 for the mesh. Turn off "Open the mesh port" to leave it closed and manage the rule yourself. A group that already exists keeps its other rules.
 - **Mesh:** each node's public address is known before it boots, and it offers that as its mesh endpoint, so nodes elsewhere reach it directly.
-- **Safety:** Tramline only lists and deletes tagged resources, so an app with wider permissions still can't delete your other VMs. A create that fails removes what it made.
+- **Edge nodes:** the security group is shared by the region's nodes, so it gets no broad rule. Turning on a node's Edge switch adds its NIC to the application security group `tramline-edge-<region>` (created the first time), and the rule `tramline-edge` in `tramline-<region>` allows TCP 80 and 443 from anywhere to members of that group only. Turning it off takes the NIC out of the group; the group and the rule stay. Caddy on the node only answers for hostnames with a public domain, and services never get host ports, so the rest of the node stays private. SSH stays closed. Contributor covers all of it.
+- **Safety:** Tramline only lists, deletes and changes tagged resources, so an app with wider permissions still can't delete your other VMs. A create that fails removes what it made.
 
 ## Conformance against a real subscription
 
@@ -45,4 +46,4 @@ TRAMLINE_AZURE_SUBSCRIPTION=… TRAMLINE_AZURE_REGION=eastus \
   pnpm --filter @tramline/adapter-azure test
 ```
 
-It creates a `Standard_B1s` in the resource group `tramline-conformance`, checks that it's listed, deletes it, and checks nothing is left behind. The group, its network and its security group stay, for the next run.
+It creates a `Standard_B1s` in the resource group `tramline-conformance`, checks that it's listed, opens and closes its edge ports, deletes it, and checks nothing is left behind. The group, its network and its security groups stay, for the next run.

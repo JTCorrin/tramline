@@ -14,7 +14,8 @@ import { GcpClient, GoogleError, type ClientOptions, type ServiceAccountKey } fr
  * cloud-init from the `user-data` metadata key). VMs get a public address,
  * no service account of their own, and the `tramline` label and network
  * tag; the adapter only ever deletes VMs with the label. A firewall rule
- * opens the mesh port (UDP 51820) to VMs with the tag.
+ * opens the mesh port (UDP 51820) to VMs with the tag. An edge node also gets
+ * the `tramline-edge` tag, which another rule opens TCP 80 and 443 to.
  *
  * A region is offered as a whole; the VM goes in its first zone that has
  * the machine type and room for it. See docs/adapters/gcp.md for the roles.
@@ -22,6 +23,9 @@ import { GcpClient, GoogleError, type ClientOptions, type ServiceAccountKey } fr
 
 export const LABEL = 'tramline';
 export const MESH_PORT = 51820;
+/** The network tag of VMs that serve public domains, and the ports it opens. */
+export const EDGE_TAG = 'tramline-edge';
+export const EDGE_PORTS = ['80', '443'];
 export const DEFAULT_IMAGE = 'projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64';
 /** The address Google's metadata server gives the VM's first public interface. */
 export const METADATA_ADDRESS =
@@ -47,7 +51,7 @@ const credentials = z.object({
 		.meta({
 			title: 'Service account key (JSON)',
 			description:
-				'From IAM & Admin → Service Accounts → Keys → Add key → JSON. The account needs Compute Instance Admin (v1), and Compute Security Admin to open the mesh port.',
+				'From IAM & Admin → Service Accounts → Keys → Add key → JSON. The account needs Compute Instance Admin (v1), and Compute Security Admin to open the mesh port and edge nodes’ TCP 80 and 443.',
 			secret: true,
 			multiline: true,
 			placeholder: '{ "type": "service_account", … }'
@@ -128,7 +132,8 @@ interface Instance {
 	zone: string;
 	status: string;
 	labels?: Record<string, string>;
-	networkInterfaces?: { accessConfigs?: { natIP?: string }[] }[];
+	tags?: { items?: string[]; fingerprint?: string };
+	networkInterfaces?: { network?: string; accessConfigs?: { natIP?: string }[] }[];
 }
 
 interface MachineType {
@@ -216,32 +221,69 @@ export function gcpAdapter(options: ClientOptions = {}) {
 		}
 	}
 
-	/** Lets nodes reach each other's mesh port; there is one rule per network. */
-	async function ensureFirewall(api: GcpClient, creds: GcpCredentials) {
-		const name = `tramline-mesh-${creds.network}`.slice(0, 63);
+	/** A firewall rule, created the first time; there is one of each per network. */
+	async function ensureRule(
+		api: GcpClient,
+		rule: { name: string; description: string; network: string; allowed: unknown[]; tag: string },
+		forbidden: (error: unknown) => unknown
+	) {
+		const name = rule.name.slice(0, 63);
 		try {
 			await api.get(`global/firewalls/${name}`);
 			return;
 		} catch (error) {
-			if (!(error instanceof GoogleError && error.status === 404)) throw firewallError(error);
+			if (!(error instanceof GoogleError && error.status === 404)) throw forbidden(error);
 		}
 		try {
 			await api.wait(
 				await api.call('POST', 'global/firewalls', {
 					name,
-					description: 'Tramline: nodes reach each other’s WireGuard mesh',
-					network: `global/networks/${creds.network}`,
+					description: rule.description,
+					network: `global/networks/${rule.network}`,
 					direction: 'INGRESS',
-					allowed: [{ IPProtocol: 'udp', ports: [String(MESH_PORT)] }],
+					allowed: rule.allowed,
 					sourceRanges: ['0.0.0.0/0'],
-					targetTags: [LABEL]
+					targetTags: [rule.tag]
 				})
 			);
 		} catch (error) {
 			if (error instanceof GoogleError && error.reason === 'alreadyExists') return;
-			throw firewallError(error);
+			throw forbidden(error);
 		}
 	}
+
+	/** Lets nodes reach each other's mesh port. */
+	const ensureFirewall = (api: GcpClient, creds: GcpCredentials) =>
+		ensureRule(
+			api,
+			{
+				name: `tramline-mesh-${creds.network}`,
+				description: 'Tramline: nodes reach each other’s WireGuard mesh',
+				network: creds.network,
+				allowed: [{ IPProtocol: 'udp', ports: [String(MESH_PORT)] }],
+				tag: LABEL
+			},
+			firewallError
+		);
+
+	/** Lets the internet reach edge nodes' Caddy, and nothing else on them. */
+	const ensureEdgeFirewall = (api: GcpClient, network: string) =>
+		ensureRule(
+			api,
+			{
+				name: `tramline-edge-${network}`,
+				description: 'Tramline: edge nodes serve public domains',
+				network,
+				allowed: [{ IPProtocol: 'tcp', ports: EDGE_PORTS }],
+				tag: EDGE_TAG
+			},
+			(error) =>
+				error instanceof GoogleError && error.status === 403
+					? new AdapterError(
+							`The service account can’t manage firewall rules, so TCP 80 and 443 can’t be opened. Give it Compute Security Admin, or allow TCP 80 and 443 to VMs tagged “${EDGE_TAG}” yourself.`
+						)
+					: error
+		);
 
 	const firewallError = (error: unknown) =>
 		error instanceof GoogleError && error.status === 403
@@ -263,7 +305,8 @@ export function gcpAdapter(options: ClientOptions = {}) {
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
-			inventory: true
+			inventory: true,
+			edgePorts: true
 		},
 
 		async validate(creds) {
@@ -441,6 +484,31 @@ export function gcpAdapter(options: ClientOptions = {}) {
 				if (error instanceof GoogleError && error.status === 404) return;
 				throw error;
 			}
+		},
+
+		async setEdge(creds, id, open) {
+			const api = client(creds);
+			const vm = await find(api, id);
+			if (!vm) {
+				// a machine that's gone has nothing open
+				if (open) throw new AdapterError(`There is no VM ${id}`);
+				return;
+			}
+			if (!vm.labels?.[LABEL]) {
+				throw new AdapterError(`${vm.name} wasn't created by Tramline, so it was left alone`);
+			}
+			const network = last(vm.networkInterfaces?.[0]?.network ?? creds.network);
+			if (open) await ensureEdgeFirewall(api, network);
+			const items = vm.tags?.items ?? [];
+			if (items.includes(EDGE_TAG) === open) return;
+			const { zone, name } = splitId(id);
+			// the fingerprint makes Google refuse it if the tags changed since they were read
+			await api.wait(
+				await api.call('POST', `zones/${zone}/instances/${name}/setTags`, {
+					items: open ? [...items, EDGE_TAG] : items.filter((tag) => tag !== EDGE_TAG),
+					fingerprint: vm.tags?.fingerprint
+				})
+			);
 		}
 	});
 	return adapter;

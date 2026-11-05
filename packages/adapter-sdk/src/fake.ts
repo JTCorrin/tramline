@@ -12,12 +12,15 @@ const credentials = z.object({
 /**
  * An in-memory adapter for tests: it creates machines that exist only in
  * its state. `onCreate` can play the part of the machine booting and
- * enrolling.
+ * enrolling. `edges` holds the machines whose TCP 80 and 443 are open, and
+ * `edgeCalls` every `setEdge` call, in order.
  */
 export function fakeAdapter(
 	options: { onCreate?: (spec: NodeSpec, node: ProviderNode) => void } = {}
 ) {
 	const machines = new Map<string, ProviderNode & { spec: NodeSpec }>();
+	const edges = new Set<string>();
+	const edgeCalls: { id: string; open: boolean }[] = [];
 	let seq = 0;
 	const check = async (creds: z.infer<typeof credentials>) => {
 		if (creds.apiToken !== FAKE_TOKEN) throw new AdapterError('The API token was rejected');
@@ -32,7 +35,14 @@ export function fakeAdapter(
 			description: 'Machines that exist only in memory, for tests'
 		},
 		credentials,
-		capabilities: { spot: true, arch: ['amd64'], autoProvision: true, gpus: true, inventory: true },
+		capabilities: {
+			spot: true,
+			arch: ['amd64'],
+			autoProvision: true,
+			gpus: true,
+			inventory: true,
+			edgePorts: true
+		},
 		validate: check,
 		async listRegions(creds) {
 			await check(creds);
@@ -100,7 +110,19 @@ export function fakeAdapter(
 		async destroyNode(creds, id) {
 			await check(creds);
 			machines.delete(id);
+			edges.delete(id);
+		},
+		async setEdge(creds, id, open) {
+			await check(creds);
+			edgeCalls.push({ id, open });
+			// a machine that's gone has nothing open
+			if (!machines.has(id)) {
+				if (open) throw new AdapterError(`There is no machine ${id}`);
+				return;
+			}
+			if (open) edges.add(id);
+			else edges.delete(id);
 		}
 	});
-	return { adapter, machines };
+	return { adapter, machines, edges, edgeCalls };
 }

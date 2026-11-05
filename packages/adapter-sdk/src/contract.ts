@@ -91,6 +91,12 @@ export interface AdapterCapabilities {
 	 * adapter that only hands back instructions, which then has nothing to list.
 	 */
 	inventory: boolean;
+	/**
+	 * `setEdge` opens and closes TCP 80 and 443 to one machine in the
+	 * provider's firewall, so it can serve public domains. False where the
+	 * firewall is the person's own (a home router, say).
+	 */
+	edgePorts: boolean;
 }
 
 export interface ComputeAdapter<Creds = unknown> {
@@ -119,6 +125,13 @@ export interface ComputeAdapter<Creds = unknown> {
 	listNodes(creds: Creds): Promise<ProviderNode[]>;
 	/** Idempotent: destroying a machine that's already gone succeeds. */
 	destroyNode(creds: Creds, id: string): Promise<void>;
+	/**
+	 * Opens (or closes) inbound TCP 80 and 443 from anywhere to this machine
+	 * only, and nothing else, for a node that serves public domains. Required
+	 * when `capabilities.edgePorts` is true. Idempotent: opening an open
+	 * machine, or closing a closed one, succeeds.
+	 */
+	setEdge?(creds: Creds, id: string, open: boolean): Promise<void>;
 }
 
 /** Declares an adapter, keeping its credentials type. */

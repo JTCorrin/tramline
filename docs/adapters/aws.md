@@ -68,16 +68,29 @@ You need three things: an account, an IAM user's access key with the policy belo
    			"Condition": { "StringEquals": { "aws:ResourceTag/tramline": "node" } }
    		},
    		{
-   			"Sid": "MeshPort",
+   			"Sid": "Ports",
    			"Effect": "Allow",
    			"Action": ["ec2:CreateSecurityGroup", "ec2:AuthorizeSecurityGroupIngress"],
    			"Resource": "*"
+   		},
+   		{
+   			"Sid": "EdgeOnlyTagged",
+   			"Effect": "Allow",
+   			"Action": "ec2:ModifyInstanceAttribute",
+   			"Resource": "arn:aws:ec2:*:*:instance/*",
+   			"Condition": { "StringEquals": { "aws:ResourceTag/tramline": "node" } }
+   		},
+   		{
+   			"Sid": "EdgeGroups",
+   			"Effect": "Allow",
+   			"Action": "ec2:ModifyInstanceAttribute",
+   			"Resource": "arn:aws:ec2:*:*:security-group/*"
    		}
    	]
    }
    ```
 
-   The conditions mean the key can only start instances tagged `tramline=node`, and only terminate those, so it can't touch your other instances even if it leaks. Leave out `MeshPort` and turn off "Open the mesh port" if you manage the security group yourself.
+   The conditions mean the key can only start instances tagged `tramline=node`, and only terminate those, so it can't touch your other instances even if it leaks. `Ports` creates the security groups below and their rules; leave it out and turn off "Open the mesh port" if you manage the security groups yourself. `EdgeOnlyTagged` and `EdgeGroups` let the Edge switch change the security groups of instances tagged `tramline=node`, and no others; leave them out if no node of this account will be an edge node.
 
 2. Under IAM → Users, create a user, e.g. `tramline`, with no console access, and attach the policy.
 3. Open the user → Security credentials → Create access key → "Application running outside AWS". Copy both the access key ID and the secret; the secret is shown once.
@@ -96,7 +109,8 @@ Instances enroll over the internet, so Tramline needs an address they can reach.
   - **IMDSv2 only, one hop:** the metadata service answers the host but not containers on Docker's bridge network, so a workload can't read the instance's user data (which holds the join token) or anything else about the machine.
 - **Placement:** you choose a region, and Tramline uses its first availability zone with room, trying the next when one is out of capacity.
 - **Security group:** `tramline-mesh` in each region's default VPC, allowing UDP 51820 from anywhere and nothing else inbound. Nodes offer their public address as their mesh endpoint, so nodes elsewhere reach them directly.
-- **Safety:** Tramline only lists and terminates instances with its tag.
+- **Edge nodes:** turning on a node's Edge switch adds its instance to the security group `tramline-edge` (created in the default VPC the first time), which allows TCP 80 and 443 from anywhere (IPv4 and IPv6) and nothing else. Turning it off removes the instance from the group again; the instance's other groups, `tramline-mesh` included, stay. Caddy on the node only answers for hostnames with a public domain, and services never get host ports, so the rest of the node stays private. SSH stays closed.
+- **Safety:** Tramline only lists, terminates and changes the security groups of instances with its tag.
 
 ## Conformance against a real account
 
@@ -105,4 +119,4 @@ TRAMLINE_AWS_KEY_ID=AKIA… TRAMLINE_AWS_SECRET=… TRAMLINE_AWS_REGION=us-east-
   pnpm --filter @tramline/adapter-aws test
 ```
 
-It starts a `t3.micro`, checks that it's listed, terminates it, and checks nothing is left behind. The security group stays, for the next run.
+It starts a `t3.micro`, checks that it's listed, opens and closes its edge ports, terminates it, and checks nothing is left behind. The security groups stay, for the next run.

@@ -13,8 +13,8 @@ You need three things: a project with the Compute Engine API on, a service accou
 
 1. Under IAM & Admin → Service Accounts, create an account, e.g. `tramline`.
 2. Give it these roles on the project:
-   - **Compute Instance Admin (v1)** to create, read and delete VMs.
-   - **Compute Security Admin** to add the firewall rule for the mesh. Without it, turn off "Open the mesh port" and allow UDP 51820 to VMs tagged `tramline` yourself.
+   - **Compute Instance Admin (v1)** to create, read and delete VMs, and to tag edge nodes (`compute.instances.setTags`).
+   - **Compute Security Admin** to add the firewall rules for the mesh and for edge nodes. Without it, turn off "Open the mesh port" and allow UDP 51820 to VMs tagged `tramline` yourself, and allow TCP 80 and 443 to VMs tagged `tramline-edge` if you'll have edge nodes.
 3. Open the account → Keys → Add key → Create new key → JSON. The file downloads once.
 
 Paste the file's contents into Nodes → Compute accounts → Google Cloud, or load the file there. Tramline stores it encrypted and never shows it again, so delete the download afterwards.
@@ -30,7 +30,8 @@ VMs enroll over the internet, so Tramline needs an address they can reach. That 
 - **VMs** named after the node, with the label `tramline=node` and the network tag `tramline`. They have a public address and **no service account**, so a compromised node has no Google Cloud access.
 - **Placement:** you choose a region, and Tramline uses its first zone that has the size and room for it, trying the next one when a zone is out of capacity.
 - **Firewall:** one rule per network, `tramline-mesh-<network>`, allowing UDP 51820 to the `tramline` tag. Nodes offer their public address as their mesh endpoint, so nodes elsewhere reach them directly.
-- **Safety:** Tramline only lists and deletes VMs with its label, so a key with wider permissions still can't delete your other VMs.
+- **Edge nodes:** turning on a node's Edge switch adds the network tag `tramline-edge` to its VM, and creates one rule per network the first time, `tramline-edge-<network>`, allowing TCP 80 and 443 from anywhere to that tag and nothing else. Turning it off removes the tag; the rule stays and matches nothing. Caddy on the node only answers for hostnames with a public domain, and services never get host ports, so the rest of the node stays private. SSH stays closed.
+- **Safety:** Tramline only lists, deletes and tags VMs with its label, so a key with wider permissions still can't touch your other VMs.
 
 ## Conformance against a real project
 
@@ -39,4 +40,4 @@ TRAMLINE_GCP_KEY_FILE=key.json TRAMLINE_GCP_REGION=us-central1 \
   pnpm --filter @tramline/adapter-gcp test
 ```
 
-It creates an `e2-micro`, checks that it's listed, deletes it, and checks nothing is left behind.
+It creates an `e2-micro`, checks that it's listed, opens and closes its edge ports, deletes it, and checks nothing is left behind. The firewall rules stay, for the next run.

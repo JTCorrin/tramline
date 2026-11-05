@@ -328,9 +328,10 @@ describe('Azure adapter', () => {
 			pollMs: 1
 		});
 		expect(steps).toContain('no orphans');
-		// only the region's network and security group, and someone else's VM, are left
+		// only the region's network, security groups, and someone else's VM, are left
 		expect([...resources.keys()].sort()).toEqual([
 			'resourcegroups/tramline/providers/microsoft.compute/virtualmachines/theirs',
+			'resourcegroups/tramline/providers/microsoft.network/applicationsecuritygroups/tramline-edge-eastus',
 			'resourcegroups/tramline/providers/microsoft.network/networksecuritygroups/tramline-eastus',
 			'resourcegroups/tramline/providers/microsoft.network/virtualnetworks/tramline-eastus'
 		]);
@@ -526,6 +527,81 @@ describe('Azure adapter', () => {
 		forbidden = true;
 		await expect(adapter.createNode(creds(), spec())).rejects.toThrow(
 			/Give the app the Contributor role/
+		);
+	});
+
+	it('opens TCP 80 and 443 to an edge VM’s NIC only, through an application security group', async () => {
+		await adapter.createNode(creds(), spec());
+		const nicGroups = () =>
+			(
+				resource('microsoft.network', 'networkinterfaces/azure-node-nic')!.properties
+					.ipConfigurations as { properties: { applicationSecurityGroups?: { id: string }[] } }[]
+			)[0]!.properties.applicationSecurityGroups ?? [];
+		const asgId = `/subscriptions/${SUB}/resourceGroups/tramline/providers/Microsoft.Network/applicationSecurityGroups/tramline-edge-eastus`;
+
+		await adapter.setEdge!(creds(), 'azure-node', true);
+		expect(nicGroups()).toEqual([{ id: asgId }]);
+		expect(
+			resource('microsoft.network', 'applicationsecuritygroups/tramline-edge-eastus')
+		).toMatchObject({
+			location: 'eastus',
+			tags: { tramline: 'network' }
+		});
+		const rules = resource('microsoft.network', 'networksecuritygroups/tramline-eastus')!.properties
+			.securityRules as { name: string; properties: Record<string, unknown> }[];
+		expect(rules.map((r) => r.name)).toEqual(['tramline-mesh', 'tramline-edge']);
+		expect(rules[1]!.properties).toMatchObject({
+			protocol: 'Tcp',
+			sourceAddressPrefix: '*',
+			destinationApplicationSecurityGroups: [{ id: asgId }],
+			destinationPortRanges: ['80', '443'],
+			access: 'Allow',
+			direction: 'Inbound'
+		});
+		// the rule is for the group, not the whole region's subnet
+		expect(rules[1]!.properties.destinationAddressPrefix).toBeUndefined();
+
+		// opening again changes nothing
+		const before = requests.length;
+		await adapter.setEdge!(creds(), 'azure-node', true);
+		expect(requests.slice(before).filter((r) => !r.startsWith('GET'))).toEqual([]);
+
+		await adapter.setEdge!(creds(), 'azure-node', false);
+		expect(nicGroups()).toEqual([]);
+		const after = requests.length;
+		await adapter.setEdge!(creds(), 'azure-node', false);
+		expect(requests.slice(after).filter((r) => !r.startsWith('GET'))).toEqual([]);
+
+		// a VM that's gone has nothing to close, and can't be opened
+		await adapter.setEdge!(creds(), 'gone', false);
+		await expect(adapter.setEdge!(creds(), 'gone', true)).rejects.toThrow(/There is no VM gone/);
+	});
+
+	it('only touches VMs and groups it created', async () => {
+		resources.set(
+			'resourcegroups/tramline/providers/microsoft.network/networkinterfaces/theirs-nic',
+			{
+				name: 'theirs-nic',
+				location: 'eastus',
+				properties: { ipConfigurations: [] }
+			}
+		);
+		await expect(adapter.setEdge!(creds(), 'theirs', true)).rejects.toThrow(/left alone/);
+
+		await adapter.createNode(creds(), spec());
+		const nsgKey =
+			'resourcegroups/tramline/providers/microsoft.network/networksecuritygroups/tramline-eastus';
+		const nsg = resources.get(nsgKey)!;
+		resources.set(nsgKey, { ...nsg, tags: {} });
+		await expect(adapter.setEdge!(creds(), 'azure-node', true)).rejects.toThrow(
+			/security group tramline-eastus is missing or wasn't created by Tramline/
+		);
+		resources.set(nsgKey, nsg);
+		const asgKey =
+			'resourcegroups/tramline/providers/microsoft.network/applicationsecuritygroups/tramline-edge-eastus';
+		resources.set(asgKey, { ...resources.get(asgKey)!, tags: {} });
+		await expect(adapter.setEdge!(creds(), 'azure-node', true)).rejects.toThrow(
+			/application security group tramline-edge-eastus wasn't created by Tramline/
 		);
 	});
 

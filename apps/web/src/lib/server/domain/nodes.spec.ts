@@ -167,7 +167,7 @@ describe('scheduling', () => {
 		expect(placed[c.id]!.nodeId).toBe(first);
 	});
 
-	it('skips cordoned nodes, unless the service is pinned there', () => {
+	it('skips cordoned nodes, unless the service is pinned there', async () => {
 		const { ctx, project, env, local } = setup();
 		const quiet = enroll(ctx, 'quiet', { cordoned: true });
 		const a = addService(ctx, project.id, env.id);
@@ -176,7 +176,7 @@ describe('scheduling', () => {
 		expect(placed[a.id]!.nodeId).toBe(local.id);
 		expect(placed[b.id]!.nodeId).toBe(quiet.id);
 
-		nodes.update(ctx, local.id, { cordoned: true });
+		await nodes.update(ctx, local.id, { cordoned: true });
 		const c = addService(ctx, project.id, env.id);
 		expect(deployAll(ctx, env.id)[c.id]).toMatchObject({
 			status: 'queued',
@@ -201,13 +201,13 @@ describe('scheduling', () => {
 		);
 	});
 
-	it('only places a memory limit where it fits', () => {
+	it('only places a memory limit where it fits', async () => {
 		const { ctx, project, env, local } = setup();
 		const small = enroll(ctx, 'small', { memoryMb: 1024 });
 		const a = addService(ctx, project.id, env.id, { deploy: { memoryMb: 2048, node: null } });
 		expect(deployAll(ctx, env.id)[a.id]!.nodeId).toBe(local.id);
 
-		nodes.update(ctx, local.id, { cordoned: true });
+		await nodes.update(ctx, local.id, { cordoned: true });
 		const b = addService(ctx, project.id, env.id, { deploy: { memoryMb: 4096 } });
 		expect(deployAll(ctx, env.id)[b.id]!.message).toBe(
 			'Waiting for a node with 4096 MB of memory free'
@@ -216,13 +216,13 @@ describe('scheduling', () => {
 		expect(nodes.list(ctx).find((n) => n.id === local.id)!.allocatedMemoryMb).toBe(2048);
 	});
 
-	it('runs a service with a volume where its data is, even when cordoned', () => {
+	it('runs a service with a volume where its data is, even when cordoned', async () => {
 		const { ctx, project, env, local } = setup();
 		const a = addService(ctx, project.id, env.id, { volume: { mountPath: '/data' } });
 		expect(deployAll(ctx, env.id)[a.id]!.nodeId).toBe(local.id);
 
 		enroll(ctx, 'second');
-		nodes.update(ctx, local.id, { cordoned: true });
+		await nodes.update(ctx, local.id, { cordoned: true });
 		services.stageConfig(ctx, a.id, env.id, { deploy: { replicas: 1, startCommand: 'again' } });
 		expect(deployAll(ctx, env.id)[a.id]!.nodeId).toBe(local.id);
 	});
@@ -266,9 +266,9 @@ describe('scheduling', () => {
 });
 
 describe('requests and spreading', () => {
-	it('packs by CPU and memory requests, with a limit standing in for a missing request', () => {
+	it('packs by CPU and memory requests, with a limit standing in for a missing request', async () => {
 		const { ctx, project, env, local } = setup();
-		nodes.update(ctx, local.id, { cordoned: true });
+		await nodes.update(ctx, local.id, { cordoned: true });
 		const box = enroll(ctx, 'box', { memoryMb: 4096 });
 		const a = addService(ctx, project.id, env.id, {
 			deploy: { cpuRequest: 3, memoryRequestMb: 1024, memoryMb: 3072 }
@@ -364,7 +364,7 @@ describe('requests and spreading', () => {
 		expect(moved).toMatchObject({ nodeId: local.id, replicaNodes: null });
 	});
 
-	it('keeps replicas together when a build, a volume or a pin ties them to one node', () => {
+	it('keeps replicas together when a build, a volume or a pin ties them to one node', async () => {
 		const { ctx, project, env, local } = setup();
 		const other = enroll(ctx, 'other');
 		const pinned = addService(ctx, project.id, env.id, {
@@ -385,14 +385,14 @@ describe('requests and spreading', () => {
 		expect(placed[pinned.id]).toMatchObject({ nodeId: other.id, replicaNodes: null });
 		expect(placed[repo.id]!.replicaNodes).toBeNull();
 		// one node is no reason to record a spread
-		nodes.update(ctx, other.id, { cordoned: true });
+		await nodes.update(ctx, other.id, { cordoned: true });
 		const solo = addService(ctx, project.id, env.id, { deploy: { replicas: 2 } });
 		expect(deployAll(ctx, env.id)[solo.id]).toMatchObject({ nodeId: local.id, replicaNodes: null });
 	});
 
-	it('waits until every replica has room', () => {
+	it('waits until every replica has room', async () => {
 		const { ctx, project, env, local } = setup();
-		nodes.update(ctx, local.id, { cordoned: true });
+		await nodes.update(ctx, local.id, { cordoned: true });
 		enroll(ctx, 'a', { memoryMb: 1024 });
 		enroll(ctx, 'b', { memoryMb: 1024 });
 		const web = addService(ctx, project.id, env.id, {
@@ -406,7 +406,7 @@ describe('requests and spreading', () => {
 });
 
 describe('draining and removing', () => {
-	it('moves stateless deployments and keeps those with data or a pin', () => {
+	it('moves stateless deployments and keeps those with data or a pin', async () => {
 		const { ctx, project, env, local } = setup();
 		const web = addService(ctx, project.id, env.id);
 		const db = addService(ctx, project.id, env.id, { volume: { mountPath: '/data' } });
@@ -431,7 +431,7 @@ describe('draining and removing', () => {
 		expect(copies.find((d) => d.id !== placed[web.id]!.id)!.nodeId).toBe(other.id);
 
 		// uncordoning ends the drain
-		expect(nodes.update(ctx, local.id, { cordoned: false })).toMatchObject({
+		expect(await nodes.update(ctx, local.id, { cordoned: false })).toMatchObject({
 			cordoned: false,
 			draining: false
 		});

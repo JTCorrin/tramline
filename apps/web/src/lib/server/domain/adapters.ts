@@ -342,6 +342,32 @@ export async function cancelProvisioning(ctx: Ctx, id: string) {
 	ctx.db.delete(joinToken).where(eq(joinToken.id, id)).run();
 }
 
+/** An adapter that opens and closes edge nodes' TCP 80 and 443 itself. */
+export const opensEdgePorts = (adapter: ComputeAdapter | undefined) =>
+	!!adapter?.capabilities.edgePorts && typeof adapter.setEdge === 'function';
+
+/**
+ * Opens (or closes) TCP 80 and 443 to the machine behind a node an adapter
+ * created, before the node becomes (or stops being) an edge node. Nodes
+ * whose adapter can't, enrolled by hand say, are left to the person.
+ */
+export async function setMachineEdge(ctx: Ctx, target: typeof node.$inferSelect, open: boolean) {
+	if (!target.adapterAccountId || !target.providerNodeId) return;
+	const row = requireAccount(ctx, target.adapterAccountId);
+	const { adapter, creds } = connect(ctx, row);
+	if (!opensEdgePorts(adapter)) return;
+	await call(row, () =>
+		(adapter as ComputeAdapter).setEdge!(creds, target.providerNodeId!, open)
+	).catch((error: AppError) => {
+		throw new AppError(
+			'conflict',
+			open
+				? `Couldn't open TCP 80 and 443 on ${target.name}, so it isn't an edge node. ${error.message}`
+				: `Couldn't close TCP 80 and 443 on ${target.name}, so it's still an edge node. ${error.message}`
+		);
+	});
+}
+
 /**
  * Destroys the machine behind a node an adapter created, before the node is
  * forgotten. Nodes enrolled by hand have nothing to destroy.
