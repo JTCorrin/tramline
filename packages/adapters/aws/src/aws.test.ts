@@ -35,6 +35,7 @@ interface Instance {
 	state: string;
 	tags: Record<string, string>;
 	params: Record<string, string>;
+	groups: string[];
 }
 
 let instances: Instance[];
@@ -52,7 +53,8 @@ function reset() {
 			region: 'us-east-1',
 			state: 'running',
 			tags: { Name: 'theirs' },
-			params: {}
+			params: {},
+			groups: ['sg-theirs']
 		}
 	];
 	groups = [];
@@ -111,6 +113,7 @@ const matches = (instance: Instance, filters: Record<string, string[]>) =>
 const instanceXml = (i: Instance) =>
 	`<instanceId>${i.id}</instanceId><instanceState><code>16</code><name>${i.state}</name></instanceState>` +
 	(i.state === 'running' ? '<ipAddress>54.0.0.10</ipAddress>' : '') +
+	`<vpcId>vpc-1</vpcId><groupSet>${items(i.groups.map((g) => `<groupId>${g}</groupId><groupName>${groups.find((x) => x.id === g)?.name ?? 'other'}</groupName>`))}</groupSet>` +
 	`<tagSet>${items(Object.entries(i.tags).map(([k, v]) => `<key>${k}</key><value>${v}</value>`))}</tagSet>`;
 
 async function handle(url: URL, init: RequestInit): Promise<Response> {
@@ -265,10 +268,19 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 				region,
 				state: 'pending',
 				tags,
-				params
+				params,
+				groups: [params['NetworkInterface.1.SecurityGroupId.1'] ?? 'sg-default']
 			};
 			instances.push(instance);
 			return xml(action, `<instancesSet>${items([instanceXml(instance)])}</instancesSet>`);
+		}
+		case 'ModifyInstanceAttribute': {
+			const instance = instances.find((i) => i.id === params.InstanceId)!;
+			instance.groups = Object.entries(params)
+				.filter(([k]) => /^GroupId\.\d+$/.test(k))
+				.sort(([a], [b]) => Number(a.slice(8)) - Number(b.slice(8)))
+				.map(([, v]) => v);
+			return xml(action, '<return>true</return>');
 		}
 		case 'TerminateInstances': {
 			const instance = instances.find((i) => i.id === params['InstanceId.1'])!;
@@ -437,6 +449,54 @@ describe('AWS adapter', () => {
 		expect(instances[0]!.state).toBe('running');
 		await expect(adapter.getNode(creds(), 'not-an-id')).rejects.toThrow(/isn't an EC2 instance ID/);
 		expect(await adapter.getNode(creds(), 'us-east-1/i-0123456789abcdef0')).toBeNull();
+	});
+
+	it('opens TCP 80 and 443 to an edge instance through its own security group, and closes them', async () => {
+		const node = await adapter.createNode(creds(), spec());
+		const instance = instances.at(-1)!;
+		await adapter.setEdge!(creds(), node.id, true);
+		expect(groups.find((g) => g.name === 'tramline-edge')).toMatchObject({
+			vpc: 'vpc-1',
+			rules: ['tcp/80 0.0.0.0/0 ::/0', 'tcp/443 0.0.0.0/0 ::/0']
+		});
+		const edge = groups.find((g) => g.name === 'tramline-edge')!.id;
+		// the mesh group stays, and the mesh group's rules are untouched
+		expect(instance.groups).toEqual(['sg-1', edge]);
+		expect(groups.find((g) => g.name === 'tramline-mesh')!.rules).toEqual([
+			'udp/51820 0.0.0.0/0 ::/0'
+		]);
+
+		// opening again changes nothing; a second node reuses the group
+		await adapter.setEdge!(creds(), node.id, true);
+		expect(actions.filter((a) => a.endsWith('ModifyInstanceAttribute'))).toHaveLength(1);
+		const second = await adapter.createNode(creds(), spec({ name: 'second' }));
+		await adapter.setEdge!(creds(), second.id, true);
+		expect(groups.filter((g) => g.name === 'tramline-edge')).toHaveLength(1);
+
+		await adapter.setEdge!(creds(), node.id, false);
+		expect(instance.groups).toEqual(['sg-1']);
+		await adapter.setEdge!(creds(), node.id, false);
+		expect(actions.filter((a) => a.endsWith('ModifyInstanceAttribute'))).toHaveLength(3);
+
+		// a machine that's gone has nothing to close, and can't be opened
+		await adapter.setEdge!(creds(), 'us-east-1/i-0123456789abcdef0', false);
+		await expect(adapter.setEdge!(creds(), 'us-east-1/i-0123456789abcdef0', true)).rejects.toThrow(
+			/There is no instance/
+		);
+	});
+
+	it('only changes the groups of instances it created, and closes nothing that was never opened', async () => {
+		await expect(adapter.setEdge!(creds(), 'us-east-1/i-0000000000000aaaa', true)).rejects.toThrow(
+			/left alone/
+		);
+		expect(instances[0]!.groups).toEqual(['sg-theirs']);
+		const node = await adapter.createNode(creds(), spec());
+		await adapter.setEdge!(creds(), node.id, false);
+		expect(groups.some((g) => g.name === 'tramline-edge')).toBe(false);
+		denied.add('ModifyInstanceAttribute');
+		await expect(adapter.setEdge!(creds(), node.id, true)).rejects.toThrow(
+			/ec2:ModifyInstanceAttribute/
+		);
 	});
 
 	it('keeps Name tags printable and short', () => {

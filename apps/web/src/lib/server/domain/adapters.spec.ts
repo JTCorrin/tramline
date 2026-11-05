@@ -29,7 +29,15 @@ type Creds = Parameters<typeof fake.adapter.validate>[0];
 registerAdapter({
 	...fake.adapter,
 	createNode: (creds: Creds, spec: NodeSpec) => fake.adapter.createNode(creds, spec),
-	destroyNode: (creds: Creds, id: string) => fake.adapter.destroyNode(creds, id)
+	destroyNode: (creds: Creds, id: string) => fake.adapter.destroyNode(creds, id),
+	setEdge: (creds: Creds, id: string, open: boolean) => fake.adapter.setEdge!(creds, id, open)
+} as never);
+// a provider whose firewall Tramline leaves to the person
+registerAdapter({
+	...fakeAdapter({ onCreate: (spec) => created.push(spec) }).adapter,
+	meta: { ...fake.adapter.meta, id: 'fake-open' },
+	capabilities: { ...fake.adapter.capabilities, edgePorts: false },
+	setEdge: undefined
 } as never);
 
 beforeEach(() => {
@@ -255,5 +263,80 @@ describe('provisioning a node', () => {
 		expect(
 			ctx.db.select().from(adapterAccount).where(eq(adapterAccount.id, account.id)).get()
 		).toBeUndefined();
+	});
+});
+
+describe('edge nodes on machines an adapter created', () => {
+	async function enrolled(ctx: Ctx, account: string) {
+		await provision(ctx, account);
+		const { nodeId } = join(ctx.db, created.at(-1)!.install.token, hello);
+		const machine = [...fake.machines.keys()].at(-1)!;
+		return { nodeId, machine };
+	}
+	const summary = (ctx: Ctx, id: string) => nodes.list(ctx).find((n) => n.id === id)!;
+
+	it('opens TCP 80 and 443 when Edge goes on, and closes them when it goes off', async () => {
+		const { ctx, account } = setup();
+		const { nodeId, machine } = await enrolled(ctx, account.id);
+		expect(summary(ctx, nodeId)).toMatchObject({ edge: false, edgePorts: 'managed' });
+
+		expect(await nodes.update(ctx, nodeId, { edge: true })).toMatchObject({ edge: true });
+		expect([...fake.edges]).toEqual([machine]);
+		// asking again, or changing something else, leaves the ports alone
+		await nodes.update(ctx, nodeId, { edge: true });
+		await nodes.update(ctx, nodeId, { cordoned: true });
+		expect(fake.edgeCalls).toEqual([{ id: machine, open: true }]);
+
+		expect(await nodes.update(ctx, nodeId, { edge: false })).toMatchObject({ edge: false });
+		expect(fake.edges.size).toBe(0);
+		expect(fake.edgeCalls).toEqual([
+			{ id: machine, open: true },
+			{ id: machine, open: false }
+		]);
+	});
+
+	it('changes nothing when the adapter can’t open or close the ports, and says why', async () => {
+		const { ctx, account } = setup();
+		const { nodeId } = await enrolled(ctx, account.id);
+		const setEdge = fake.adapter.setEdge!;
+		fake.adapter.setEdge = async () => {
+			throw new AdapterError('The firewall is locked');
+		};
+		await expect(nodes.update(ctx, nodeId, { edge: true })).rejects.toThrow(
+			"Couldn't open TCP 80 and 443 on gpu-1, so it isn't an edge node. Fake lab: The firewall is locked"
+		);
+		expect(summary(ctx, nodeId).edge).toBe(false);
+
+		fake.adapter.setEdge = setEdge;
+		await nodes.update(ctx, nodeId, { edge: true });
+		fake.adapter.setEdge = async () => {
+			throw new Error('timeout');
+		};
+		await expect(nodes.update(ctx, nodeId, { edge: false })).rejects.toThrow(
+			"Couldn't close TCP 80 and 443 on gpu-1, so it's still an edge node. Fake lab: timeout"
+		);
+		expect(summary(ctx, nodeId).edge).toBe(true);
+	});
+
+	it('leaves the ports to the person on nodes enrolled by hand, or whose provider can’t', async () => {
+		const { ctx } = setup();
+		const byHand = nodes.createJoinToken(ctx, { name: 'home' }, 'http://t.test');
+		const home = join(ctx.db, byHand.token, hello).nodeId;
+		expect(summary(ctx, home).edgePorts).toBe('manual');
+		expect((await nodes.update(ctx, home, { edge: true })).edge).toBe(true);
+
+		const open = adapters.createAccount(ctx, {
+			adapter: 'fake-open',
+			name: 'Open lab',
+			credentials: good
+		});
+		await provision(ctx, open.id, 'open-1');
+		const { nodeId } = join(ctx.db, created.at(-1)!.install.token, hello);
+		expect(summary(ctx, nodeId)).toMatchObject({
+			edgePorts: 'manual',
+			account: { name: 'Open lab' }
+		});
+		expect((await nodes.update(ctx, nodeId, { edge: true })).edge).toBe(true);
+		expect(fake.edgeCalls).toEqual([]);
 	});
 });

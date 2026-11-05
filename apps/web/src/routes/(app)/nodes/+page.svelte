@@ -87,9 +87,24 @@
 		try {
 			await api().nodes.update(node.id, input);
 			await refresh();
+			return true;
 		} catch (error) {
 			reportError(error);
+			return false;
 		}
+	}
+
+	/** Bumped to redraw a node's edge switch, undoing a flip that didn't happen. */
+	let edgeSwitch = $state<Record<string, number>>({});
+
+	async function setEdge(node: NodeSummary, edge: boolean) {
+		const message =
+			node.edgePorts === 'managed'
+				? `Opens TCP 80 and 443 on ${node.name} to the internet. Only services with a public domain are reachable through them; everything else on the node stays private.`
+				: `Serving public domains needs TCP 80 and 443 to reach ${node.name}; open them on your router or firewall.`;
+		// turning it off needs no asking; on a managed node it closes the ports
+		const done = (!edge || confirm(message)) && (await configure(node, { edge }));
+		if (!done) edgeSwitch[node.id] = (edgeSwitch[node.id] ?? 0) + 1;
 	}
 
 	// svelte-ignore state_referenced_locally
@@ -324,11 +339,13 @@
 					</div>
 					<div class="mt-3 flex flex-wrap items-center gap-4 text-sm">
 						<label class="flex items-center gap-2">
-							<Switch
-								checked={node.edge}
-								onCheckedChange={(edge) => configure(node, { edge })}
-								aria-label="Edge node"
-							/>
+							{#key edgeSwitch[node.id]}
+								<Switch
+									checked={node.edge}
+									onCheckedChange={(edge) => setEdge(node, edge)}
+									aria-label="Edge node"
+								/>
+							{/key}
 							Edge: serve every public domain
 						</label>
 						<form

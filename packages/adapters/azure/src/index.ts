@@ -20,11 +20,15 @@ import { AzureClient, AzureError, type ClientOptions } from './client';
  * Every resource carries the `tramline` tag and a name derived from the VM's
  * (`<name>-ip`, `<name>-nic`, `<name>-disk`); the adapter only ever deletes
  * tagged ones. Each region gets a network and a security group that opens
- * the mesh port (UDP 51820). See docs/adapters/azure.md for the roles.
+ * the mesh port (UDP 51820). An edge node's NIC joins the region's
+ * application security group `tramline-edge-<region>`, which a rule in that
+ * security group opens TCP 80 and 443 to. See docs/adapters/azure.md for the roles.
  */
 
 export const TAG = 'tramline';
 export const MESH_PORT = 51820;
+/** The ports an edge node serves public domains on. */
+export const EDGE_PORTS = ['80', '443'];
 export const DEFAULT_IMAGE = 'Canonical:ubuntu-24_04-lts:server:latest';
 const COMPUTE_API = 'api-version=2024-07-01';
 const NETWORK_API = 'api-version=2024-05-01';
@@ -151,6 +155,23 @@ interface Vm extends Resource {
 	};
 }
 
+interface IdRef {
+	id: string;
+}
+
+interface Nic extends Resource {
+	properties: {
+		ipConfigurations?: {
+			name: string;
+			properties: { applicationSecurityGroups?: IdRef[] } & Record<string, unknown>;
+		}[];
+	} & Record<string, unknown>;
+}
+
+interface Nsg extends Resource {
+	properties: { securityRules?: { name: string }[] };
+}
+
 interface PublicIp extends Resource {
 	properties: { ipAddress?: string };
 }
@@ -275,6 +296,51 @@ export function azureAdapter(options: ClientOptions = {}) {
 		return id(api, subnet);
 	}
 
+	/**
+	 * The region's application security group for edge nodes, and the rule in
+	 * its security group that lets the internet reach them on TCP 80 and 443.
+	 */
+	async function ensureEdgeGroup(api: AzureClient, creds: AzureCredentials, location: string) {
+		const base = `${group(creds)}/providers/Microsoft.Network`;
+		const asg = `${base}/applicationSecurityGroups/tramline-edge-${location}`;
+		const existing = await find<Resource>(api, `${asg}?${NETWORK_API}`);
+		if (existing && !existing.tags?.[TAG]) {
+			throw new AdapterError(
+				`The application security group tramline-edge-${location} wasn't created by Tramline, so it was left alone`
+			);
+		}
+		if (!existing) {
+			await api.run('PUT', `${asg}?${NETWORK_API}`, {
+				location,
+				tags: { [TAG]: 'network' },
+				properties: {}
+			});
+		}
+		const nsg = `${base}/networkSecurityGroups/tramline-${location}`;
+		const found = await find<Nsg>(api, `${nsg}?${NETWORK_API}`);
+		if (!found?.tags?.[TAG]) {
+			throw new AdapterError(
+				`The security group tramline-${location} is missing or wasn't created by Tramline, so TCP 80 and 443 weren't opened`
+			);
+		}
+		if (!found.properties.securityRules?.some((r) => r.name === 'tramline-edge')) {
+			await api.run('PUT', `${nsg}/securityRules/tramline-edge?${NETWORK_API}`, {
+				properties: {
+					description: 'Tramline: edge nodes serve public domains',
+					protocol: 'Tcp',
+					sourceAddressPrefix: '*',
+					sourcePortRange: '*',
+					destinationApplicationSecurityGroups: [{ id: id(api, asg) }],
+					destinationPortRanges: EDGE_PORTS,
+					access: 'Allow',
+					direction: 'Inbound',
+					priority: 1010
+				}
+			});
+		}
+		return id(api, asg);
+	}
+
 	/** Deletes what Tramline made for a VM, in the order Azure allows; skips anything untagged. */
 	async function removeAll(api: AzureClient, creds: AzureCredentials, name: string) {
 		const { vm, nic, ip, disk } = paths(creds, name);
@@ -316,7 +382,8 @@ export function azureAdapter(options: ClientOptions = {}) {
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
-			inventory: true
+			inventory: true,
+			edgePorts: true
 		},
 
 		async validate(creds) {
@@ -542,6 +609,54 @@ export function azureAdapter(options: ClientOptions = {}) {
 			}
 			// also clears what a failed or half-finished create left
 			await removeAll(api, creds, name);
+		},
+
+		async setEdge(creds, nodeId, open) {
+			const api = client(creds);
+			const name = vmName(nodeId);
+			const path = paths(creds, name);
+			const vm = await find<Vm>(api, `${path.vm}?${COMPUTE_API}`);
+			const nic = vm && (await find<Nic>(api, `${path.nic}?${NETWORK_API}`));
+			if (!vm || !nic) {
+				// a machine that's gone has nothing open
+				if (open) throw new AdapterError(`There is no VM ${name}`);
+				return;
+			}
+			if (!tagged(vm) || !tagged(nic)) {
+				throw new AdapterError(`${vm.name} wasn't created by Tramline, so it was left alone`);
+			}
+			const edgeGroup = open
+				? await ensureEdgeGroup(api, creds, vm.location)
+				: id(
+						api,
+						`${group(creds)}/providers/Microsoft.Network/applicationSecurityGroups/tramline-edge-${vm.location}`
+					);
+			const same = (ref: IdRef) => ref.id.toLowerCase() === edgeGroup.toLowerCase();
+			const configs = nic.properties.ipConfigurations ?? [];
+			if (
+				configs.every((c) => (c.properties.applicationSecurityGroups ?? []).some(same) === open)
+			) {
+				return;
+			}
+			await api.run('PUT', `${path.nic}?${NETWORK_API}`, {
+				location: nic.location,
+				tags: nic.tags,
+				properties: {
+					...nic.properties,
+					ipConfigurations: configs.map((config) => {
+						const others = (config.properties.applicationSecurityGroups ?? []).filter(
+							(ref) => !same(ref)
+						);
+						return {
+							...config,
+							properties: {
+								...config.properties,
+								applicationSecurityGroups: open ? [...others, { id: edgeGroup }] : others
+							}
+						};
+					})
+				}
+			});
 		}
 	});
 	return adapter;

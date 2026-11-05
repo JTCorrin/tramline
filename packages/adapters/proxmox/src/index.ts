@@ -159,7 +159,8 @@ export function proxmoxAdapter(options: ProxmoxOptions = {}) {
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
-			inventory: true
+			inventory: true,
+			edgePorts: false
 		},
 
 		async validate(creds) {

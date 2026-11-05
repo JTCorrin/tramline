@@ -28,6 +28,7 @@ describe('the fake adapter', () => {
 			pollMs: 1
 		});
 		expect(steps).toContain('no orphans');
+		expect(steps).toContain('setEdge');
 		expect(steps).toContain('the machine enrolled');
 		expect(enrolled).toMatch(/^conformance-/);
 		expect(machines.size).toBe(0);
@@ -58,7 +59,42 @@ function broken(patch: Partial<ComputeAdapter<typeof good>>) {
 	return defineAdapter({ ...adapter, ...patch });
 }
 
+describe('edge ports', () => {
+	it('opens and closes them per machine, idempotently, and records each call', async () => {
+		const { adapter, edges, edgeCalls } = fakeAdapter();
+		const machine = await adapter.createNode(good, {
+			name: 'edge',
+			region: 'fake-1',
+			offer: 'small',
+			install: { url: 'u', token: 't', command: 'c' },
+			userData: '',
+			seedUrl: ''
+		});
+		await adapter.setEdge!(good, machine.id, true);
+		await adapter.setEdge!(good, machine.id, true);
+		expect([...edges]).toEqual([machine.id]);
+		await adapter.setEdge!(good, machine.id, false);
+		expect(edges.size).toBe(0);
+		expect(edgeCalls).toEqual([
+			{ id: machine.id, open: true },
+			{ id: machine.id, open: true },
+			{ id: machine.id, open: false }
+		]);
+		await expect(adapter.setEdge!(good, 'fake-99', true)).rejects.toThrow('no machine fake-99');
+		await expect(adapter.setEdge!(good, 'fake-99', false)).resolves.toBeUndefined();
+		await expect(
+			adapter.setEdge!({ apiToken: 'x', project: 'p' }, machine.id, true)
+		).rejects.toThrow(AdapterError);
+	});
+});
+
 describe('the conformance suite', () => {
+	it('catches edgePorts without setEdge', async () => {
+		await expect(
+			conformance(broken({ setEdge: undefined }), { credentials: good })
+		).rejects.toThrow('there is no setEdge');
+	});
+
 	it('catches a machine that outlives destroyNode', async () => {
 		const adapter = broken({ destroyNode: async () => {} });
 		await expect(

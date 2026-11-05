@@ -17,7 +17,8 @@ import { nodesOf, onNode, reservedOn } from '../nodes/placement';
 import { hashToken, nodeStatus } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
-import { destroyMachine } from './adapters';
+import { getAdapter } from '../adapters/registry';
+import { destroyMachine, opensEdgePorts, setMachineEdge } from './adapters';
 import { copyDeployment } from './deployments';
 import { agentUrl } from './public-access';
 
@@ -41,7 +42,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 	const members = meshMembers(ctx.db);
 	const accounts = new Map(
 		ctx.db
-			.select({ id: adapterAccount.id, name: adapterAccount.name })
+			.select({ id: adapterAccount.id, name: adapterAccount.name, adapter: adapterAccount.adapter })
 			.from(adapterAccount)
 			.all()
 			.map((a) => [a.id, a])
@@ -56,6 +57,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 			const reserved = here.map((d) => reservedOn(d, row.id));
 			const me = members.find((m) => m.id === row.id);
 			const reach = me && members.length > 1 ? routes(members, me) : null;
+			const account = (row.adapterAccountId && accounts.get(row.adapterAccountId)) || null;
 			return {
 				id: row.id,
 				name: row.name,
@@ -65,7 +67,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				hostname: row.info?.hostname ?? null,
 				dockerVersion: row.info?.docker?.version ?? null,
 				adapter: row.adapter,
-				account: (row.adapterAccountId && accounts.get(row.adapterAccountId)) || null,
+				account: account && { id: account.id, name: account.name },
 				cpus: row.info?.cpus ?? null,
 				memoryMb: row.info?.memoryMb ?? null,
 				gpus: row.info?.gpus ?? [],
@@ -75,6 +77,10 @@ export function list(ctx: Ctx): NodeSummary[] {
 				cordoned: row.cordoned,
 				draining: row.draining,
 				edge: row.edge,
+				edgePorts:
+					account && row.providerNodeId && opensEdgePorts(getAdapter(account.adapter))
+						? ('managed' as const)
+						: ('manual' as const),
 				mesh: row.meshAddress
 					? {
 							address: row.meshAddress,
@@ -158,12 +164,17 @@ function requireNode(ctx: Ctx, id: string) {
 
 /**
  * Cordoning stops new deployments landing on a node, and uncordoning also
- * ends a drain. An edge node serves every public domain; the mesh endpoint
- * is where other nodes reach this one.
+ * ends a drain. An edge node serves every public domain: on a machine an
+ * adapter created, the adapter opens TCP 80 and 443 to it first (or closes
+ * them), and if it can't, nothing changes. The mesh endpoint is where other
+ * nodes reach this one.
  */
-export function update(ctx: Ctx, id: string, input: UpdateNode) {
+export async function update(ctx: Ctx, id: string, input: UpdateNode) {
 	requireInstallAdmin(ctx, 'change nodes');
-	requireNode(ctx, id);
+	const row = requireNode(ctx, id);
+	if (input.edge !== undefined && input.edge !== row.edge) {
+		await setMachineEdge(ctx, row, input.edge);
+	}
 	const changes = {
 		...(input.cordoned === true ? { cordoned: true } : {}),
 		...(input.cordoned === false ? { cordoned: false, draining: false } : {}),

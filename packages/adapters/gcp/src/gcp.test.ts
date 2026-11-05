@@ -39,6 +39,7 @@ interface Vm {
 	zone: string;
 	status: string;
 	labels?: Record<string, string>;
+	tags?: { items: string[]; fingerprint: string };
 	body?: Record<string, unknown>;
 	networkInterfaces?: unknown[];
 }
@@ -51,13 +52,15 @@ let tokenRequests: number;
 let exhausted: Set<string>;
 let forbidFirewalls: boolean;
 let apiDisabled: boolean;
+let staleTags: boolean;
 
 function reset() {
 	vms = [
 		{
 			name: 'someone-elses-vm',
 			zone: `${COMPUTE}projects/lab-123/zones/us-central1-a`,
-			status: 'RUNNING'
+			status: 'RUNNING',
+			tags: { items: ['web'], fingerprint: 'fp-0' }
 		}
 	];
 	firewalls = new Map();
@@ -67,6 +70,7 @@ function reset() {
 	exhausted = new Set();
 	forbidFirewalls = false;
 	apiDisabled = false;
+	staleTags = false;
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -196,6 +200,20 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 		}
 		return json({ items });
 	}
+	m = path.match(/^zones\/([^/]+)\/instances\/([^/]+)\/setTags$/);
+	if (m && method === 'POST') {
+		const vm = vms.find((v) => v.name === m![2] && v.zone.endsWith(`/zones/${m![1]}`));
+		if (!vm) return googleError(404, 'not found', 'notFound');
+		if (staleTags || body.fingerprint !== vm.tags?.fingerprint) {
+			return googleError(
+				412,
+				'Supplied fingerprint does not match current metadata fingerprint.',
+				'conditionNotMet'
+			);
+		}
+		vm.tags = { items: body.items, fingerprint: `fp-${++opSeq}` };
+		return operation(m[1]!);
+	}
 	m = path.match(/^zones\/([^/]+)\/instances(?:\/(.+))?$/);
 	if (m) {
 		const [, zone, name] = m;
@@ -208,8 +226,14 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 				zone: `${prefix}zones/${zone}`,
 				status: 'PROVISIONING',
 				labels: body.labels,
+				tags: { items: body.tags.items, fingerprint: 'fp-1' },
 				body,
-				networkInterfaces: [{ accessConfigs: [{ natIP: '203.0.113.20' }] }]
+				networkInterfaces: [
+					{
+						network: `${prefix}global/networks/${body.networkInterfaces[0].network.split('/').pop()}`,
+						accessConfigs: [{ natIP: '203.0.113.20' }]
+					}
+				]
 			};
 			vms.push(vm);
 			if (exhausted.has(zone!)) {
@@ -476,6 +500,56 @@ describe('GCP adapter', () => {
 			vm.status = status;
 			expect((await adapter.getNode(creds(), node.id))!.status).toBe(expected);
 		}
+	});
+
+	it('opens TCP 80 and 443 to an edge VM only, through its tag, and closes them again', async () => {
+		const node = await adapter.createNode(creds(), spec());
+		const vm = vms.find((v) => v.name === 'gcp-node')!;
+		await adapter.setEdge!(creds(), node.id, true);
+		expect(vm.tags!.items).toEqual(['tramline', 'tramline-edge']);
+		expect(firewalls.get('tramline-edge-default')).toMatchObject({
+			network: 'global/networks/default',
+			direction: 'INGRESS',
+			allowed: [{ IPProtocol: 'tcp', ports: ['80', '443'] }],
+			sourceRanges: ['0.0.0.0/0'],
+			targetTags: ['tramline-edge']
+		});
+		// the mesh rule is untouched, and opening again changes nothing
+		expect(firewalls.get('tramline-mesh-default')!.targetTags).toEqual(['tramline']);
+		const before = requests.length;
+		await adapter.setEdge!(creds(), node.id, true);
+		expect(requests.slice(before).filter((r) => r.startsWith('POST'))).toEqual([]);
+
+		await adapter.setEdge!(creds(), node.id, false);
+		expect(vm.tags!.items).toEqual(['tramline']);
+		// the rule stays, matching nothing
+		expect(firewalls.has('tramline-edge-default')).toBe(true);
+		await adapter.setEdge!(creds(), node.id, false);
+		expect(requests.filter((r) => r.endsWith('/setTags'))).toHaveLength(2);
+
+		// a VM that's gone has nothing to close, and can't be opened
+		await adapter.setEdge!(creds(), 'us-central1-a/gone', false);
+		await expect(adapter.setEdge!(creds(), 'us-central1-a/gone', true)).rejects.toThrow(
+			/There is no VM/
+		);
+	});
+
+	it('only tags VMs it created, and says which role opening the ports needs', async () => {
+		await expect(adapter.setEdge!(creds(), 'us-central1-a/someone-elses-vm', true)).rejects.toThrow(
+			/wasn't created by Tramline/
+		);
+		expect(vms[0]!.tags!.items).toEqual(['web']);
+
+		const node = await adapter.createNode(creds({ openMeshPort: false }), spec());
+		forbidFirewalls = true;
+		await expect(adapter.setEdge!(creds(), node.id, true)).rejects.toThrow(
+			/Compute Security Admin, or allow TCP 80 and 443 to VMs tagged “tramline-edge”/
+		);
+		forbidFirewalls = false;
+		// tags changed by someone else since they were read: Google refuses, and nothing changes
+		staleTags = true;
+		await expect(adapter.setEdge!(creds(), node.id, true)).rejects.toThrow(/fingerprint/);
+		expect(vms.find((v) => v.name === 'gcp-node')!.tags!.items).toEqual(['tramline']);
 	});
 
 	it('names VMs the way GCE allows', () => {

@@ -34,7 +34,9 @@ export const AdapterInfo = z.object({
 		arch: z.array(z.enum(['amd64', 'arm64'])),
 		autoProvision: z.boolean(),
 		gpus: z.boolean(),
-		inventory: z.boolean()
+		inventory: z.boolean(),
+		/** Tramline opens TCP 80 and 443 in the provider's firewall for edge nodes. */
+		edgePorts: z.boolean()
 	}),
 	/** Empty for an adapter that needs no account (`manual`). */
 	fields: z.array(CredentialField)

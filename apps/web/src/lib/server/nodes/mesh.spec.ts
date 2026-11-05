@@ -251,7 +251,7 @@ function deploy(ctx: Ctx, envId: string) {
 }
 
 describe('mesh in the desired state', () => {
-	it('assigns addresses and keeps the endpoint an admin set', () => {
+	it('assigns addresses and keeps the endpoint an admin set', async () => {
 		const { ctx, local, remote } = cluster();
 		const rows = ctx.db.select().from(node).all();
 		expect(rows.find((r) => r.id === local)!.meshAddress).toBe('10.231.0.1');
@@ -263,7 +263,7 @@ describe('mesh in the desired state', () => {
 		});
 		expect(rows.find((r) => r.id === local)!.edge).toBe(true);
 
-		nodes.update(ctx, local, { meshEndpoint: 'home.test:51820' });
+		await nodes.update(ctx, local, { meshEndpoint: 'home.test:51820' });
 		recordHello(ctx.db, local, hello({ publicKey: KEY(1), endpoint: null }));
 		expect(meshMembers(ctx.db).find((m) => m.id === local)!.endpoint).toBe('home.test:51820');
 		// the address stays the same across hellos
@@ -361,7 +361,7 @@ describe('mesh in the desired state', () => {
 		expect(target()).toBe(`${second!.id}.tramline.internal`);
 	});
 
-	it('shows each node’s place in the mesh', () => {
+	it('shows each node’s place in the mesh', async () => {
 		const { ctx, local } = cluster();
 		const listed = nodes.list(ctx);
 		expect(listed.find((n) => n.id === local)!.mesh).toEqual({
@@ -370,8 +370,8 @@ describe('mesh in the desired state', () => {
 			unreachable: [],
 			relayed: []
 		});
-		expect(nodes.update(ctx, local, { edge: false }).edge).toBe(false);
-		expect(nodes.update(ctx, local, {}).edge).toBe(false);
+		expect((await nodes.update(ctx, local, { edge: false })).edge).toBe(false);
+		expect((await nodes.update(ctx, local, {})).edge).toBe(false);
 	});
 });
 
@@ -395,7 +395,7 @@ describe('TCP proxy', () => {
 		return { ctx, local: local.id, env: env!, pg, project };
 	}
 
-	it('gives Postgres TLS and publishes it on the edge, to the allowlist only', () => {
+	it('gives Postgres TLS and publishes it on the edge, to the allowlist only', async () => {
 		const { ctx, local, env, pg } = proxied();
 		const [dep] = deploy(ctx, env.id);
 		const port = ctx.db
@@ -422,7 +422,7 @@ describe('TCP proxy', () => {
 		]);
 
 		// a non-edge node publishes nothing
-		nodes.update(ctx, local, { edge: false });
+		await nodes.update(ctx, local, { edge: false });
 		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, local).tcpProxies).toEqual([]);
 	});
 

@@ -57,6 +57,10 @@ export async function conformance<Creds>(
 		/^[a-z][a-z0-9-]*$/.test(adapter.meta.id),
 		`meta.id "${adapter.meta.id}" must be lowercase`
 	);
+	expect(
+		!can.edgePorts || typeof adapter.setEdge === 'function',
+		'capabilities.edgePorts is true, but there is no setEdge'
+	);
 	const creds = parse(adapter.credentials, options.credentials, 'The credentials');
 	step('credentials match the schema');
 
@@ -129,6 +133,15 @@ export async function conformance<Creds>(
 				'listNodes does not include it'
 			);
 			step('getNode and listNodes');
+		}
+
+		if (can.edgePorts) {
+			// twice each way: the control plane retries
+			await adapter.setEdge!(creds, created.id, true);
+			await adapter.setEdge!(creds, created.id, true);
+			await adapter.setEdge!(creds, created.id, false);
+			await adapter.setEdge!(creds, created.id, false);
+			step('setEdge');
 		}
 
 		if (options.enrolled) {

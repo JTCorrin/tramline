@@ -19,7 +19,8 @@ export const manual = defineAdapter({
 		arch: ['amd64', 'arm64'],
 		autoProvision: false,
 		gpus: false,
-		inventory: false
+		inventory: false,
+		edgePorts: false
 	},
 	async validate() {},
 	async listRegions() {
