@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api } from '#lib/api.js';
+	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import { Badge } from '#lib/components/ui/badge/index.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -14,7 +15,8 @@
 		AdapterOffer,
 		AdapterRegion,
 		CreatedJoinToken,
-		ProvisioningNode
+		ProvisioningNode,
+		PublicAccess
 	} from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 
@@ -24,8 +26,13 @@
 	 */
 	let {
 		accounts,
-		provisioning = $bindable()
-	}: { accounts: AdapterAccount[]; provisioning: ProvisioningNode[] } = $props();
+		provisioning = $bindable(),
+		access = null
+	}: {
+		accounts: AdapterAccount[];
+		provisioning: ProvisioningNode[];
+		access?: PublicAccess | null;
+	} = $props();
 
 	const MANUAL = 'manual';
 	let source = $state(MANUAL);
@@ -39,6 +46,24 @@
 	let offer = $state('');
 	let busy = $state(false);
 	const account = $derived(accounts.find((a) => a.id === source));
+
+	/** Why a machine an account creates can't reach this install yet, if we can tell. */
+	const unreachable = $derived.by(() => {
+		if (!account || !access) return null;
+		const tunnel = access.tunnel;
+		if (tunnel && tunnel.status !== 'healthy' && tunnel.status !== 'degraded') {
+			return `The Cloudflare tunnel isn't connected, so new machines can't reach Tramline. Start its connector under Public access first.`;
+		}
+		if (!access.agentUrl) {
+			return `New machines will connect to ${location.origin}, the address you opened Tramline at. Machines in a cloud can't reach that unless it's public; set one up under Public access.`;
+		}
+		return null;
+	});
+
+	/** Most machines enroll within a few minutes; past this, say what to check. */
+	const SLOW_MS = 5 * 60_000;
+	const slow = (pending: ProvisioningNode) =>
+		!pending.expired && Date.now() - new Date(pending.createdAt).getTime() > SLOW_MS;
 
 	$effect(() => {
 		// poll while machines boot and enroll
@@ -222,14 +247,34 @@
 					</Select.Root>
 				</Field.Field>
 			{/if}
-			<label class="flex h-9 items-center gap-2 text-sm">
+			<label
+				class="flex h-9 items-center gap-2 text-sm"
+				title="The node joins but runs nothing until you uncordon it"
+			>
 				<Switch bind:checked={startCordoned} aria-label="Start cordoned" />
 				Start cordoned
 			</label>
-			<Button type="submit" disabled={busy || (!!account && !offer)}
-				>{account ? 'Create machine' : 'Create join command'}</Button
-			>
+			<Button type="submit" disabled={busy || (!!account && !offer)}>
+				{#if busy}
+					<Loader2Icon class="size-4 animate-spin" />
+					{account ? 'Creating machine…' : 'Creating…'}
+				{:else}
+					{account ? 'Create machine' : 'Create join command'}
+				{/if}
+			</Button>
 		</form>
+		<p class="text-xs text-muted-foreground">
+			<strong>Start cordoned</strong> adds the node without placing any services on it, until you uncordon
+			it. Useful to check a machine first.
+		</p>
+		{#if unreachable}
+			<p
+				class="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm"
+				data-testid="unreachable"
+			>
+				{unreachable}
+			</p>
+		{/if}
 
 		{#if provisioning.length}
 			<ul class="divide-y rounded-lg border text-sm" data-testid="provisioning">
@@ -245,6 +290,12 @@
 							<Badge variant="destructive">Never enrolled</Badge>
 						{:else}
 							<Badge variant="secondary">Waiting to enroll</Badge>
+						{/if}
+						{#if slow(pending)}
+							<span class="w-full text-xs text-muted-foreground" data-testid="slow">
+								Most machines join within 5 minutes. Check that Public access shows a connected
+								address the machine can reach; it keeps retrying until its token expires.
+							</span>
 						{/if}
 						<Button class="ml-auto" size="sm" variant="ghost" onclick={() => cancel(pending)}
 							>Destroy</Button
