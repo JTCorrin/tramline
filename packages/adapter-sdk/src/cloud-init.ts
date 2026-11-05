@@ -1,3 +1,7 @@
+/** About 45 minutes of retries, inside the join token's hour. */
+export const ENROLL_ATTEMPTS = 180;
+export const ENROLL_DELAY_SECONDS = 15;
+
 /**
  * Cloud-init user data for a new machine: install Docker from the
  * distribution's packages when it's missing, then enroll with the join
@@ -33,7 +37,17 @@ export function cloudInit(install: { url: string; token: string; publicAddress?:
 					'ENDPOINT=""; [ -n "$ADDRESS" ] && ENDPOINT="--endpoint $ADDRESS:51820"'
 				]
 			: []),
-		`curl -fsSL ${quote(`${install.url}/install.sh`)} | sh -s -- --url ${quote(install.url)} --token ${quote(install.token)}${install.publicAddress ? ' $ENDPOINT' : ''}`
+		// Tramline may not be reachable yet (a tunnel whose connector isn't
+		// running, DNS still propagating), so keep trying for most of the join
+		// token's hour instead of giving up after one attempt. The install
+		// script removes what it made when enrolling fails, so a retry starts clean.
+		'attempt=1',
+		`until curl -fsSL --max-time 60 -o /run/tramline-install.sh ${quote(`${install.url}/install.sh`)} && sh /run/tramline-install.sh --url ${quote(install.url)} --token ${quote(install.token)}${install.publicAddress ? ' $ENDPOINT' : ''}; do`,
+		`  [ "$attempt" -lt ${ENROLL_ATTEMPTS} ] || { echo "tramline: couldn't enroll after $attempt attempts; can this machine reach Tramline?" >&2; exit 1; }`,
+		`  echo "tramline: couldn't enroll yet (attempt $attempt), retrying in ${ENROLL_DELAY_SECONDS} seconds" >&2`,
+		'  attempt=$((attempt + 1))',
+		`  sleep ${ENROLL_DELAY_SECONDS}`,
+		'done'
 	].join('\n');
 	return [
 		'#cloud-config',

@@ -191,7 +191,9 @@ Keep the token's value, which is shown once, and the certificate that `cat` prin
 
 Click **Connect**, then **Test connection**. It should say _connected_.
 
-**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a host under **Region** and **Small** under **Size**, then **Create machine**. It shows _Waiting to enroll_ and joins the node list within a few minutes.
+**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a host under **Region** and **Small** under **Size**, then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+Creating it can take a minute or two while Proxmox clones the template. The node then shows _Waiting to enroll_ while it boots, and moves to the node list once it joins.
 
 **6. Clean up.** Click **Remove** on the node. Tramline destroys the VM. It only ever destroys VMs tagged `tramline`.
 
@@ -219,11 +221,31 @@ More: [docs/adapters/proxmox.md](docs/adapters/proxmox.md)
 2. Give it two roles: **Compute Instance Admin (v1)** and **Compute Security Admin**.
 3. Open the account, then **Keys → Add key → Create new key → JSON**. A file downloads.
 
-**3. Let the VMs reach Tramline.** VMs join over the internet. If Tramline has a public HTTPS address, set `TRAMLINE_AGENT_URL` to it. At home, use **Nodes → Public access → Set up a Cloudflare tunnel** instead. Either way, that card should then show a public address.
+**3. Let the VMs reach Tramline.** VMs in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
 
-**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Google Cloud**. Load the JSON file into **Service account key (JSON)** and leave the rest as it is. Click **Connect**, then **Test connection**. Then delete the downloaded file.
+- **Tramline runs at home or on a private network** (most people): use a Cloudflare tunnel. It needs a domain on Cloudflare; the free plan is fine.
+  1. In Cloudflare, go to **My Profile → API Tokens → Create Token → Create Custom Token**. Give it **Account → Cloudflare Tunnel → Edit** and **Zone → DNS → Edit**, limited to your domain.
+  2. In Tramline, go to **Nodes → Public access → Set up a Cloudflare tunnel**. Paste the token and click **Next**.
+  3. Choose a subdomain (e.g. `tramline`) and your domain.
+  4. Set **Run the connector on** to a node that's always on, and **Tramline's address for the connector** to where that node reaches Tramline (e.g. `http://192.168.1.20:3000`). Click **Create tunnel**.
+  5. Wait for the tunnel's badge to say **Connected**. Machines can't join until it does.
 
-**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick **us-central1** and **e2-micro**, then **Create machine**. It joins the node list within a few minutes. In the console it appears under **Compute Engine → VM instances** with the label `tramline=node`.
+  _I'll run it myself_ also works, but the command it shows has to keep running, e.g. as a service. If it stops, new machines can't join.
+
+- **Tramline already has a public HTTPS address:** set `TRAMLINE_AGENT_URL=https://<that address>` in `apps/web/.env`, then restart Tramline.
+
+Either way, **Public access** should now say _New nodes connect to https://…_.
+
+**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Google Cloud**. Load the JSON file into **Service account key (JSON)**. That's the only field you need:
+
+- **Project ID**, **Network**, **Image** and **Disk size** can stay empty or as they are. Tramline takes the project from the key, and uses the `default` network, Ubuntu 24.04 and a 20 GB disk.
+- Leave **Open the mesh port** on. It lets your nodes reach each other over Tramline's encrypted WireGuard network (UDP 51820), and opens nothing else.
+
+Click **Connect**, then **Test connection**. Then delete the downloaded file.
+
+**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick **us-central1** and **e2-micro**, then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+**Create machine** takes up to a minute while the cloud creates it. The node then shows _Waiting to enroll_ for a few minutes while it boots, and moves to the node list once it joins. If it's still waiting after 5 minutes, check that the tunnel says **Connected**. In the console it appears under **Compute Engine → VM instances** with the label `tramline=node`.
 
 **6. Clean up.** Click **Remove** on the node. Tramline deletes the VM and its disk. The firewall rule `tramline-mesh-default` stays; it costs nothing.
 
@@ -252,11 +274,31 @@ More: [docs/adapters/gcp.md](docs/adapters/gcp.md)
 
 **2. Give it access.** Go to **Subscriptions → (yours)**, copy the **Subscription ID**, then open **Access control (IAM) → Add → Add role assignment**. On the **Privileged administrator roles** tab, choose **Contributor**, select the `tramline` app as the member, and save.
 
-**3. Let the VMs reach Tramline.** VMs join over the internet. If Tramline has a public HTTPS address, set `TRAMLINE_AGENT_URL` to it. At home, use **Nodes → Public access → Set up a Cloudflare tunnel** instead. Either way, that card should then show a public address.
+**3. Let the VMs reach Tramline.** VMs in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
 
-**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Microsoft Azure**, and fill in the tenant ID, client ID, client secret and subscription ID. Leave the rest as it is. Click **Connect**, then **Test connection**.
+- **Tramline runs at home or on a private network** (most people): use a Cloudflare tunnel. It needs a domain on Cloudflare; the free plan is fine.
+  1. In Cloudflare, go to **My Profile → API Tokens → Create Token → Create Custom Token**. Give it **Account → Cloudflare Tunnel → Edit** and **Zone → DNS → Edit**, limited to your domain.
+  2. In Tramline, go to **Nodes → Public access → Set up a Cloudflare tunnel**. Paste the token and click **Next**.
+  3. Choose a subdomain (e.g. `tramline`) and your domain.
+  4. Set **Run the connector on** to a node that's always on, and **Tramline's address for the connector** to where that node reaches Tramline (e.g. `http://192.168.1.20:3000`). Click **Create tunnel**.
+  5. Wait for the tunnel's badge to say **Connected**. Machines can't join until it does.
 
-**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a region such as **eastus (East US)** and the **Standard_B1s** size, then **Create machine**. It joins the node list within a few minutes. In the portal, everything is in the resource group `tramline`.
+  _I'll run it myself_ also works, but the command it shows has to keep running, e.g. as a service. If it stops, new machines can't join.
+
+- **Tramline already has a public HTTPS address:** set `TRAMLINE_AGENT_URL=https://<that address>` in `apps/web/.env`, then restart Tramline.
+
+Either way, **Public access** should now say _New nodes connect to https://…_.
+
+**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Microsoft Azure**, and fill in the tenant ID, client ID, client secret and subscription ID. That's all you need:
+
+- **Resource group**, **Image** and **Disk size** can stay as they are: a `tramline` group (created for you), Ubuntu 24.04 and a 30 GB disk.
+- Leave **Open the mesh port** on. It lets your nodes reach each other over Tramline's encrypted WireGuard network (UDP 51820), and opens nothing else.
+
+Click **Connect**, then **Test connection**.
+
+**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a region such as **eastus (East US)** and the **Standard_B1s** size, then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+**Create machine** takes up to a minute while the cloud creates it. The node then shows _Waiting to enroll_ for a few minutes while it boots, and moves to the node list once it joins. If it's still waiting after 5 minutes, check that the tunnel says **Connected**. In the portal, everything is in the resource group `tramline`.
 
 **6. Clean up.** Click **Remove** on the node. Tramline deletes the VM, its disk, network interface and public IP. The region's network and security group stay; they cost nothing.
 
@@ -285,11 +327,31 @@ More: [docs/adapters/azure.md](docs/adapters/azure.md)
 2. Open the user, then **Security credentials → Create access key → Application running outside AWS**.
 3. Copy the **access key ID** and the **secret access key**. The secret is shown once.
 
-**3. Let the instances reach Tramline.** Instances join over the internet. If Tramline has a public HTTPS address, set `TRAMLINE_AGENT_URL` to it. At home, use **Nodes → Public access → Set up a Cloudflare tunnel** instead. Either way, that card should then show a public address.
+**3. Let the instances reach Tramline.** Instances in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
 
-**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Amazon Web Services**, and enter the key ID and secret. Click **Connect**, then **Test connection**.
+- **Tramline runs at home or on a private network** (most people): use a Cloudflare tunnel. It needs a domain on Cloudflare; the free plan is fine.
+  1. In Cloudflare, go to **My Profile → API Tokens → Create Token → Create Custom Token**. Give it **Account → Cloudflare Tunnel → Edit** and **Zone → DNS → Edit**, limited to your domain.
+  2. In Tramline, go to **Nodes → Public access → Set up a Cloudflare tunnel**. Paste the token and click **Next**.
+  3. Choose a subdomain (e.g. `tramline`) and your domain.
+  4. Set **Run the connector on** to a node that's always on, and **Tramline's address for the connector** to where that node reaches Tramline (e.g. `http://192.168.1.20:3000`). Click **Create tunnel**.
+  5. Wait for the tunnel's badge to say **Connected**. Machines can't join until it does.
 
-**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a region such as **us-east-1** and **t3.micro**, then **Create machine**. It joins the node list within a few minutes. In the console it appears under **EC2 → Instances** with the tag `tramline=node`.
+  _I'll run it myself_ also works, but the command it shows has to keep running, e.g. as a service. If it stops, new machines can't join.
+
+- **Tramline already has a public HTTPS address:** set `TRAMLINE_AGENT_URL=https://<that address>` in `apps/web/.env`, then restart Tramline.
+
+Either way, **Public access** should now say _New nodes connect to https://…_.
+
+**4. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Amazon Web Services**, and enter the key ID and secret. That's all you need:
+
+- **Disk size** can stay at 20 GB.
+- Leave **Open the mesh port** on. It lets your nodes reach each other over Tramline's encrypted WireGuard network (UDP 51820), and opens nothing else.
+
+Click **Connect**, then **Test connection**.
+
+**5. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a region such as **us-east-1** and **t3.micro**, then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+**Create machine** takes up to a minute while the cloud creates it. The node then shows _Waiting to enroll_ for a few minutes while it boots, and moves to the node list once it joins. If it's still waiting after 5 minutes, check that the tunnel says **Connected**. In the console it appears under **EC2 → Instances** with the tag `tramline=node`.
 
 **6. Clean up.** Click **Remove** on the node. Tramline terminates the instance, which deletes its disk. The security group `tramline-mesh` stays; it costs nothing.
 

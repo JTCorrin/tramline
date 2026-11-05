@@ -170,7 +170,7 @@
 	{/if}
 
 	{#if data.canManage}
-		<AddNode accounts={computeAccounts} bind:provisioning />
+		<AddNode accounts={computeAccounts} bind:provisioning access={publicAccess} />
 		<ComputeAccounts adapters={data.adapters} bind:accounts={computeAccounts} />
 		{#if publicAccess}
 			<PublicAccess bind:access={publicAccess} nodes={data.nodes} />
