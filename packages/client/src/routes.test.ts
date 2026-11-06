@@ -65,6 +65,14 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['nodes.join', (c) => c.nodes.join({ name: 'box' }), 'POST /nodes'],
 	['nodes.update', (c) => c.nodes.update('node_1', { cordoned: true }), 'PATCH /nodes/node_1'],
 	['nodes.drain', (c) => c.nodes.drain('node_1'), 'POST /nodes/node_1/drain'],
+	['pools.getAll', (c) => c.pools.getAll(), 'GET /node-pools'],
+	['pools.update', (c) => c.pools.update('pool_1', { maxNodes: 2 }), 'PATCH /node-pools/pool_1'],
+	['pools.remove', (c) => c.pools.remove('pool_1'), 'DELETE /node-pools/pool_1'],
+	[
+		'adapters.leftovers',
+		(c) => c.adapters.leftovers('acct_1'),
+		'GET /adapter-accounts/acct_1/leftovers'
+	],
 	['nodes.updateAgent', (c) => c.nodes.updateAgent('node_1'), 'POST /nodes/node_1/agent-update'],
 	['nodes.remove', (c) => c.nodes.remove('node_1'), 'DELETE /nodes/node_1'],
 	['adapters.getAll', (c) => c.adapters.getAll(), 'GET /adapters'],

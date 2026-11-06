@@ -10,7 +10,15 @@ import { randomBytes } from 'node:crypto';
 import { ulid } from 'ulid';
 import { AppError, notFound } from '../api/errors';
 import type { DbOrTx } from '../db/client';
-import { adapterAccount, deployment, joinToken, node, service, volume } from '../db/schema';
+import {
+	adapterAccount,
+	deployment,
+	joinToken,
+	node,
+	nodePool,
+	service,
+	volume
+} from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { meshMembers, routes } from '../nodes/mesh';
@@ -41,6 +49,13 @@ export function list(ctx: Ctx): NodeSummary[] {
 		.where(inArray(deployment.status, [...LIVE]))
 		.all();
 	const members = meshMembers(ctx.db);
+	const pools = new Map(
+		ctx.db
+			.select({ id: nodePool.id, name: nodePool.name })
+			.from(nodePool)
+			.all()
+			.map((p) => [p.id, p])
+	);
 	const accounts = new Map(
 		ctx.db
 			.select({ id: adapterAccount.id, name: adapterAccount.name, adapter: adapterAccount.adapter })
@@ -71,6 +86,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				agent: agentSummary(row),
 				adapter: row.adapter,
 				account: account && { id: account.id, name: account.name },
+				pool: (row.poolId && pools.get(row.poolId)) || null,
 				cpus: row.info?.cpus ?? null,
 				memoryMb: row.info?.memoryMb ?? null,
 				gpus: row.info?.gpus ?? [],
@@ -143,7 +159,7 @@ export function issueJoinToken(
 	ctx: Ctx,
 	input: CreateJoinToken,
 	origin: string,
-	adapter: { adapterAccountId?: string; region?: string; offer?: string },
+	adapter: { adapterAccountId?: string; region?: string; offer?: string; poolId?: string },
 	now = new Date()
 ) {
 	if (nameTaken(ctx.db, input.name, now)) {
@@ -253,7 +269,12 @@ export function updateAgent(ctx: Ctx, id: string) {
  */
 export function drain(ctx: Ctx, id: string): DrainResult {
 	requireInstallAdmin(ctx, 'drain nodes');
-	const target = requireNode(ctx, id);
+	return drainNode(ctx, requireNode(ctx, id));
+}
+
+/** `drain` without the permission check, for node pools. */
+export function drainNode(ctx: Ctx, target: typeof node.$inferSelect): DrainResult {
+	const id = target.id;
 	return ctx.db.transaction((tx) => {
 		tx.update(node).set({ cordoned: true, draining: true }).where(eq(node.id, id)).run();
 		const here = tx
@@ -294,7 +315,12 @@ export function drain(ctx: Ctx, id: string): DrainResult {
  */
 export async function remove(ctx: Ctx, id: string) {
 	requireInstallAdmin(ctx, 'remove nodes');
-	const row = requireNode(ctx, id);
+	await removeNode(ctx, requireNode(ctx, id));
+}
+
+/** `remove` without the permission check: node pools remove their idle machines. */
+export async function removeNode(ctx: Ctx, row: typeof node.$inferSelect) {
+	const id = row.id;
 	if (row.name === 'local') {
 		throw new AppError(
 			'conflict',

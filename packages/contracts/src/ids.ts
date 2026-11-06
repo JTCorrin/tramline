@@ -9,6 +9,7 @@ export const ID_PREFIXES = {
 	deployment: 'dep',
 	variable: 'var',
 	node: 'node',
+	nodePool: 'pool',
 	change: 'chg',
 	volume: 'vol',
 	backup: 'bak',

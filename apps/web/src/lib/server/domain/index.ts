@@ -13,6 +13,7 @@ export * as metrics from './metrics';
 export * as nodes from './nodes';
 export * as oidc from './oidc';
 export * as organizations from './organizations';
+export * as pools from './pools';
 export * as projects from './projects';
 export * as publicAccess from './public-access';
 export * as services from './services';

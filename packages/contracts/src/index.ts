@@ -9,6 +9,7 @@ export * from './errors';
 export * from './github';
 export * from './ids';
 export * from './metrics';
+export * from './pools';
 export * from './projects';
 export * from './public-access';
 export * from './scan';

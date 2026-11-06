@@ -9,6 +9,7 @@ import type {
 	AdapterOffer,
 	AdapterRegion,
 	CreateAdapterAccount,
+	LeftoverMachine,
 	ProvisioningNode,
 	ProvisionNode,
 	UpdateAdapterAccount
@@ -19,7 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import { getAdapter } from '../adapters/registry';
 import type { DbOrTx } from '../db/client';
-import { adapterAccount, joinToken, node } from '../db/schema';
+import { adapterAccount, joinToken, node, nodePool } from '../db/schema';
 import { newId } from '../ids';
 import { hashToken } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
@@ -33,7 +34,7 @@ import { issueJoinToken } from './nodes';
  * never sent back.
  */
 
-type Row = typeof adapterAccount.$inferSelect;
+export type Row = typeof adapterAccount.$inferSelect;
 
 function requireAdapter(id: string) {
 	const adapter = getAdapter(id);
@@ -45,7 +46,7 @@ function requireAdapter(id: string) {
 	return adapter;
 }
 
-function requireAccount(ctx: Ctx, id: string) {
+export function requireAccount(ctx: Pick<Ctx, 'db'>, id: string) {
 	const row = ctx.db.select().from(adapterAccount).where(eq(adapterAccount.id, id)).get();
 	if (!row) throw notFound('Account');
 	return row;
@@ -149,6 +150,17 @@ export function updateAccount(ctx: Ctx, id: string, input: UpdateAdapterAccount)
 export function removeAccount(ctx: Ctx, id: string) {
 	requireInstallAdmin(ctx, 'remove compute accounts');
 	const row = requireAccount(ctx, id);
+	const pool = ctx.db
+		.select({ name: nodePool.name })
+		.from(nodePool)
+		.where(eq(nodePool.adapterAccountId, id))
+		.get();
+	if (pool) {
+		throw new AppError(
+			'conflict',
+			`The node pool ${pool.name} uses ${row.name}. Remove the pool first.`
+		);
+	}
 	const used = usage(ctx.db, id);
 	if (used) {
 		throw new AppError(
@@ -167,7 +179,7 @@ export function removeAccount(ctx: Ctx, id: string) {
 }
 
 /** An account's adapter, with its credentials decrypted and checked. */
-function connect(ctx: Pick<Ctx, 'secrets'>, row: Row) {
+export function connect(ctx: Pick<Ctx, 'secrets'>, row: Row) {
 	const adapter = getAdapter(row.adapter);
 	if (!adapter) {
 		throw new AppError(
@@ -179,7 +191,7 @@ function connect(ctx: Pick<Ctx, 'secrets'>, row: Row) {
 }
 
 /** Runs an adapter call, turning its failure into a message about the account. */
-async function call<T>(row: Row, run: () => Promise<T>): Promise<T> {
+export async function call<T>(row: Row, run: () => Promise<T>): Promise<T> {
 	try {
 		return await run();
 	} catch (error) {
@@ -221,11 +233,22 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 	requireInstallAdmin(ctx, 'add nodes');
 	const parsed = ProvisionSchema.parse(input);
 	const row = requireAccount(ctx, parsed.account);
+	return provisionMachine(ctx, row, parsed, origin);
+}
+
+/** `provision` without the permission check, for node pools growing by themselves. */
+export async function provisionMachine(
+	ctx: Ctx,
+	row: Row,
+	machine: { name: string; region: string; offer: string; cordoned: boolean; poolId?: string },
+	origin: string
+) {
 	const { adapter, creds } = connect(ctx, row);
-	const joining = issueJoinToken(ctx, { name: parsed.name, cordoned: parsed.cordoned }, origin, {
+	const joining = issueJoinToken(ctx, { name: machine.name, cordoned: machine.cordoned }, origin, {
 		adapterAccountId: row.id,
-		region: parsed.region,
-		offer: parsed.offer
+		region: machine.region,
+		offer: machine.offer,
+		...(machine.poolId ? { poolId: machine.poolId } : {})
 	});
 	const { id: tokenId, url } = joining;
 	const userData = cloudInit({ url, token: joining.token });
@@ -236,11 +259,11 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 		.where(eq(joinToken.id, tokenId))
 		.run();
 	try {
-		const machine = await call(row, () =>
+		const created = await call(row, () =>
 			adapter.createNode(creds, {
-				name: parsed.name,
-				region: parsed.region,
-				offer: parsed.offer,
+				name: machine.name,
+				region: machine.region,
+				offer: machine.offer,
 				install: { url, token: joining.token, command: joining.command },
 				userData,
 				seedUrl: `${url}/api/agent/v1/seed/${seedId}/`
@@ -248,7 +271,7 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 		);
 		const token = ctx.db
 			.update(joinToken)
-			.set({ providerNodeId: machine.id })
+			.set({ providerNodeId: created.id })
 			.where(eq(joinToken.id, tokenId))
 			.returning({ nodeId: joinToken.nodeId })
 			.get();
@@ -256,11 +279,11 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 		if (token?.nodeId) {
 			ctx.db
 				.update(node)
-				.set({ providerNodeId: machine.id })
+				.set({ providerNodeId: created.id })
 				.where(eq(node.id, token.nodeId))
 				.run();
 		}
-		return { id: tokenId, name: parsed.name, expiresAt: joining.expiresAt, machine };
+		return { id: tokenId, name: machine.name, expiresAt: joining.expiresAt, machine: created };
 	} catch (error) {
 		ctx.db.delete(joinToken).where(eq(joinToken.id, tokenId)).run();
 		throw error;
@@ -334,12 +357,63 @@ export async function cancelProvisioning(ctx: Ctx, id: string) {
 		)
 		.get();
 	if (!token) throw notFound('Node being added');
+	await destroyPending(ctx, token);
+}
+
+/** Destroys a machine that hasn't enrolled, then forgets its join token. */
+export async function destroyPending(ctx: Ctx, token: typeof joinToken.$inferSelect) {
 	const row = requireAccount(ctx, token.adapterAccountId!);
 	if (token.providerNodeId) {
 		const { adapter, creds } = connect(ctx, row);
 		await call(row, () => adapter.destroyNode(creds, token.providerNodeId!));
 	}
-	ctx.db.delete(joinToken).where(eq(joinToken.id, id)).run();
+	ctx.db.delete(joinToken).where(eq(joinToken.id, token.id)).run();
+}
+
+/**
+ * Machines an account's provider runs with Tramline's tag that no node, and
+ * no machine still enrolling, accounts for: left over from a failed create,
+ * a database restored from an older backup, or another install using the
+ * same account.
+ */
+export async function leftovers(ctx: Ctx, id: string): Promise<LeftoverMachine[]> {
+	requireInstallAdmin(ctx, 'look for leftover machines');
+	const row = requireAccount(ctx, id);
+	const { adapter, creds } = connect(ctx, row);
+	if (!adapter.capabilities.inventory) return [];
+	const machines = await call(row, () => adapter.listNodes(creds));
+	const known = new Set([
+		...ctx.db
+			.select({ id: node.providerNodeId })
+			.from(node)
+			.where(eq(node.adapterAccountId, id))
+			.all()
+			.map((n) => n.id),
+		...ctx.db
+			.select({ id: joinToken.providerNodeId })
+			.from(joinToken)
+			.where(and(eq(joinToken.adapterAccountId, id), isNull(joinToken.usedAt)))
+			.all()
+			.map((t) => t.id)
+	]);
+	return machines
+		.filter((m) => !known.has(m.id))
+		.map((m) => ({
+			id: m.id,
+			name: m.name,
+			region: m.region,
+			status: m.status,
+			address: m.address
+		}));
+}
+
+/** Destroys a leftover machine; only one `leftovers` would list, never a node's. */
+export async function destroyLeftover(ctx: Ctx, id: string, machineId: string) {
+	const found = await leftovers(ctx, id);
+	if (!found.some((m) => m.id === machineId)) throw notFound('Leftover machine');
+	const row = requireAccount(ctx, id);
+	const { adapter, creds } = connect(ctx, row);
+	await call(row, () => adapter.destroyNode(creds, machineId));
 }
 
 /** An adapter that opens and closes edge nodes' TCP 80 and 443 itself. */

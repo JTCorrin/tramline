@@ -6,7 +6,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { reportError } from '#lib/forms.js';
-	import type { AdapterAccount, AdapterInfo } from '@tramline/contracts';
+	import type { AdapterAccount, AdapterInfo, LeftoverMachine } from '@tramline/contracts';
 	import { toast } from 'svelte-sonner';
 	import CredentialForm from './credential-form.svelte';
 
@@ -73,6 +73,28 @@
 		}
 	}
 
+	/** Leftover machines found per account, once someone looked. */
+	let leftovers = $state<Record<string, LeftoverMachine[]>>({});
+
+	async function findLeftovers(account: AdapterAccount) {
+		try {
+			leftovers[account.id] = await api().adapters.leftovers(account.id);
+			if (!leftovers[account.id]!.length) toast.success(`${account.name}: no leftover machines`);
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
+	async function destroyLeftover(account: AdapterAccount, machine: LeftoverMachine) {
+		if (!confirm(`Destroy ${machine.name} on ${account.name}? No node uses it.`)) return;
+		try {
+			await api().adapters.destroyLeftover(account.id, machine.id);
+			leftovers[account.id] = leftovers[account.id]!.filter((m) => m.id !== machine.id);
+		} catch (error) {
+			reportError(error);
+		}
+	}
+
 	async function remove(account: AdapterAccount) {
 		if (!confirm(`Remove ${account.name}? Its credentials are deleted.`)) return;
 		try {
@@ -108,9 +130,36 @@
 								<Button size="sm" variant="outline" onclick={() => test(account)}
 									>Test connection</Button
 								>
+								<Button
+									size="sm"
+									variant="ghost"
+									title="Machines with Tramline's tag that no node accounts for"
+									onclick={() => findLeftovers(account)}>Find leftovers</Button
+								>
 								<Button size="sm" variant="ghost" onclick={() => open(account)}>Edit</Button>
 								<Button size="sm" variant="ghost" onclick={() => remove(account)}>Remove</Button>
 							</span>
+							{#if leftovers[account.id]?.length}
+								<ul class="w-full space-y-1 text-xs" data-testid="leftovers">
+									{#each leftovers[account.id] as machine (machine.id)}
+										<li class="flex items-center gap-2">
+											<span class="text-amber-400">Leftover:</span>
+											<span class="font-medium">{machine.name}</span>
+											<span class="text-muted-foreground"
+												>{[machine.region, machine.status, machine.address]
+													.filter(Boolean)
+													.join(' · ')}</span
+											>
+											<Button
+												class="ml-auto"
+												size="sm"
+												variant="ghost"
+												onclick={() => destroyLeftover(account, machine)}>Destroy</Button
+											>
+										</li>
+									{/each}
+								</ul>
+							{/if}
 						</li>
 					{/each}
 				</ul>

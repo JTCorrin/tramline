@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { build, container, deployment, node, service } from '../db/schema';
+import { build, container, deployment, node, nodePool, service } from '../db/schema';
 import { publish } from '../events';
 import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
@@ -89,6 +89,17 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 
 	const nodes = db.select().from(node).orderBy(asc(node.createdAt)).all();
 	const online = nodes.filter((n) => isOnline(n, now));
+	const pools = new Map(
+		db
+			.select({
+				id: nodePool.id,
+				forEnvironment: nodePool.forEnvironment,
+				environmentId: nodePool.environmentId
+			})
+			.from(nodePool)
+			.all()
+			.map((p) => [p.id, p])
+	);
 
 	const active = db
 		.select()
@@ -133,7 +144,7 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	// schedule first, so the recreate plan below sees what was just scheduled
 	const placed = active.filter((d) => d.status !== 'queued' && d.nodeId);
 	for (const dep of active.filter((d) => d.status === 'queued')) {
-		const t = schedule(db, dep, { online, all: nodes, placed }, now);
+		const t = schedule(db, dep, { online, all: nodes, placed, pools }, now);
 		apply(dep, t);
 		if (t.nodeId) placed.push({ ...dep, nodeId: t.nodeId, replicaNodes: t.replicaNodes ?? null });
 		// the volume lives on the node the service first ran on
@@ -174,6 +185,14 @@ interface Cluster {
 	all: NodeRow[];
 	/** Deployments already placed (live, or scheduled earlier in this pass). */
 	placed: DeploymentRow[];
+	/** Node pools, for the environment each one's machines are kept for. */
+	pools?: Map<string, { forEnvironment: boolean; environmentId: string | null }>;
+}
+
+/** A pool's machines take only its environment's work; a pool's whose environment was deleted take none. */
+export function servesEnvironment(n: NodeRow, environmentId: string, pools: Cluster['pools']) {
+	const pool = n.poolId ? pools?.get(n.poolId) : undefined;
+	return !pool?.forEnvironment || pool.environmentId === environmentId;
 }
 
 /**
@@ -192,7 +211,7 @@ interface Cluster {
  * (which saves a hop over the mesh), and the least loaded by its requests.
  */
 function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Transition {
-	const { online, all, placed } = cluster;
+	const { online, all, placed, pools } = cluster;
 	const named = (id: string) => all.find((n) => n.id === id)?.name ?? 'the node';
 
 	// a service with a volume runs where its data is
@@ -221,7 +240,9 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 			return { message: `Waiting for ${named(pin)}, which this service is pinned to` };
 		}
 	} else {
-		candidates = online.filter((n) => !n.cordoned);
+		candidates = online.filter(
+			(n) => !n.cordoned && servesEnvironment(n, dep.environmentId, pools)
+		);
 	}
 
 	if (!candidates.length) {
@@ -231,9 +252,11 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		);
 		if (broken) return { message: `Waiting for a node: ${broken.name} reports "${broken.error}"` };
 		return {
-			message: online.length
-				? 'Waiting for a node: every online node is cordoned'
-				: 'Waiting for a node to come online'
+			message: !online.length
+				? 'Waiting for a node to come online'
+				: online.some((n) => !n.cordoned)
+					? 'Waiting for a node: the online ones are kept for other environments'
+					: 'Waiting for a node: every online node is cordoned'
 		};
 	}
 
