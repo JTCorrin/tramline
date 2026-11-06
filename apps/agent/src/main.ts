@@ -1,3 +1,4 @@
+import Docker from 'dockerode';
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import os from 'node:os';
@@ -7,8 +8,10 @@ import { ControlPlane } from './client';
 import { DockerRuntime } from './docker';
 import { enroll, nodeTokenFile } from './enroll';
 import { DEFAULT_MESH_IMAGE } from './mesh';
+import { ownContainerId, ownImage, SelfUpdater, swapAgent } from './self-update';
 
-const VERSION = '0.1.0';
+/** Published images are stamped with their commit. */
+const VERSION = process.env.TRAMLINE_AGENT_VERSION || '0.1.0';
 
 // TCP proxies run this same program in proxy mode
 if (process.argv[2] === 'proxy') {
@@ -22,6 +25,17 @@ if (process.argv[2] === 'mesh') {
 	const { runMeshDaemon } = await import('./mesh-daemon');
 	const { MESH_CONFIG_PATH } = await import('./mesh');
 	await runMeshDaemon(MESH_CONFIG_PATH);
+}
+
+// the helper that swaps in a newer agent runs this same program in update mode
+if (process.argv[2] === 'update') {
+	try {
+		await swapAgent(new Docker(), process.argv[3]!, process.argv[4]!);
+		process.exit(0);
+	} catch (error) {
+		console.error(`[update] ${error instanceof Error ? error.message : String(error)}`);
+		process.exit(1);
+	}
 }
 
 const url = process.env.TRAMLINE_URL ?? 'http://localhost:5173';
@@ -56,9 +70,11 @@ async function token(agent: Agent) {
 }
 
 const client = new ControlPlane(url, '');
+const runtime = new DockerRuntime();
+const self = await ownImage(new Docker(), ownContainerId());
 
 const agent = new Agent({
-	runtime: new DockerRuntime(),
+	runtime,
 	client,
 	onUnauthorized: () => {
 		if (process.env.TRAMLINE_AGENT_TOKEN) return;
@@ -81,9 +97,11 @@ const agent = new Agent({
 		process.env.TRAMLINE_MESH === 'off'
 			? undefined
 			: {
-					image: process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE,
+					// the exact image this agent runs, so the mesh and proxies move with it on an update
+					image: self?.id ?? process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE,
 					endpoint: process.env.TRAMLINE_MESH_ENDPOINT || null
-				}
+				},
+	selfUpdate: self ? new SelfUpdater(runtime, { stateDir, image: self }) : undefined
 });
 
 try {

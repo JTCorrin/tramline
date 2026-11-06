@@ -17,7 +17,10 @@ FROM node:24-alpine
 RUN apk add --no-cache tini iproute2 wireguard-tools-wg \
 	&& mkdir -p /etc/tramline
 COPY --from=build /src/apps/agent/dist/agent.mjs /opt/tramline/agent.mjs
+# the commit it was built from, which the Nodes page shows (CI passes it; else 0.1.0)
+ARG VERSION=
 ENV NODE_ENV=production \
+	TRAMLINE_AGENT_VERSION=$VERSION \
 	TRAMLINE_AGENT_STATE_DIR=/var/lib/tramline
 VOLUME /var/lib/tramline
 ENTRYPOINT ["/sbin/tini", "--", "node", "/opt/tramline/agent.mjs"]

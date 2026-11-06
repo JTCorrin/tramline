@@ -44,6 +44,14 @@ import {
 import { backupJobs } from '../domain/backups';
 import { verifiedHostnames } from '../domain/domains';
 import { desiredTunnel, TUNNEL_INGRESS_PORT, tunnelIngressNode } from '../domain/public-access';
+import type { AgentUpdate } from '../db/schema/nodes';
+import { agentUpdateState } from './registry';
+
+/** An update the agent should run: asked for, and not finished or timed out. */
+function pendingAgentUpdate(update: AgentUpdate | null) {
+	const current = agentUpdateState(update);
+	return current && !current.finishedAt ? { id: current.id } : null;
+}
 
 /**
  * Everything one node should be running. Deterministic: the same database
@@ -293,6 +301,7 @@ export function buildDesiredState(
 		mesh,
 		tcpProxies: planTcpProxies(exports, { id: nodeId, edge: self?.edge ?? false }, mesh),
 		tunnel: desiredTunnel(db, secrets, nodeId),
+		agentUpdate: pendingAgentUpdate(self?.agentUpdate ?? null),
 		ingress: {
 			httpPort: settings.ingressPort,
 			tls: usesTls(settings),

@@ -48,8 +48,20 @@ export const node = sqliteTable('node', {
 	meshAddress: text('mesh_address').unique(),
 	/** `host:port` other nodes reach it on (UDP); null behind NAT. */
 	meshEndpoint: text('mesh_endpoint'),
+	/** The latest agent update asked for from the Nodes page, and how the agent says it went. */
+	agentUpdate: text('agent_update', { mode: 'json' }).$type<AgentUpdate>(),
 	...timestamps
 });
+
+export interface AgentUpdate {
+	id: string;
+	state: 'requested' | 'running' | 'succeeded' | 'failed';
+	detail: string | null;
+	error: string | null;
+	requestedBy: string | null;
+	requestedAt: string;
+	finishedAt: string | null;
+}
 
 /**
  * A one-time token a new machine trades for its node token. Only the hash is

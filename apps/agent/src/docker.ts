@@ -143,7 +143,8 @@ export class DockerRuntime implements ContainerRuntime {
 					])
 				),
 				...(spec.sysctls ? { Sysctls: spec.sysctls } : {}),
-				Binds: spec.binds
+				Binds: spec.binds,
+				...(spec.autoRemove ? { AutoRemove: true } : {})
 			},
 			NetworkingConfig: { EndpointsConfig: { [spec.network]: { Aliases: spec.aliases } } }
 		});

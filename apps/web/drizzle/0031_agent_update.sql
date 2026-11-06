@@ -1,0 +1,1 @@
+ALTER TABLE `node` ADD `agent_update` text;

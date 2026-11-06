@@ -532,3 +532,106 @@ describe('reports', () => {
 		expect(svc.id).toBe(row().serviceId);
 	});
 });
+
+describe('agent updates', () => {
+	const image = {
+		reference: 'ghcr.io/jtcorrin/tramline-agent:latest',
+		id: 'sha256:' + 'ab'.repeat(32)
+	};
+	const updatable = () => ({ ...hello(), features: ['self-update'], image });
+	const report = (agentUpdate: {
+		id: string;
+		state: 'running' | 'succeeded' | 'failed';
+		detail?: string;
+		error?: string;
+	}) => ({
+		containers: [],
+		revision: null,
+		agentUpdate: { size: null, detail: null, error: null, ...agentUpdate }
+	});
+
+	it('asks the agent to update itself, once, and records how it went', () => {
+		const { ctx } = setup();
+		const box = enroll(ctx, 'box');
+		recordHello(ctx.db, box.id, updatable());
+		recordReport(ctx.db, box.id, { containers: [], revision: null });
+		const summary = () => nodes.list(ctx).find((n) => n.id === box.id)!;
+		expect(summary().agent).toEqual({
+			version: 'test',
+			image: 'abababababab',
+			canUpdate: true,
+			update: null
+		});
+
+		nodes.updateAgent(ctx, box.id);
+		const desired = () => buildDesiredState(ctx.db, testSecrets, ctx.settings, box.id).agentUpdate;
+		const id = desired()!.id;
+		expect(summary().agent.update).toMatchObject({ state: 'requested', finishedAt: null });
+		// asking again while it runs changes nothing
+		nodes.updateAgent(ctx, box.id);
+		expect(desired()!.id).toBe(id);
+
+		// a report about some other update is ignored
+		recordReport(ctx.db, box.id, report({ id: 'aup_other', state: 'failed', error: 'no' }));
+		expect(summary().agent.update?.state).toBe('requested');
+
+		recordReport(
+			ctx.db,
+			box.id,
+			report({ id, state: 'running', detail: 'Restarting on 222222222222' })
+		);
+		expect(summary().agent.update).toMatchObject({
+			state: 'running',
+			detail: 'Restarting on 222222222222'
+		});
+		recordReport(ctx.db, box.id, report({ id, state: 'succeeded', detail: 'Updated from 1 to 2' }));
+		expect(summary().agent.update).toMatchObject({
+			state: 'succeeded',
+			detail: 'Updated from 1 to 2'
+		});
+		expect(summary().agent.update?.finishedAt).not.toBeNull();
+		expect(desired()).toBeNull();
+
+		// a finished update can be followed by another
+		nodes.updateAgent(ctx, box.id);
+		expect(desired()!.id).not.toBe(id);
+	});
+
+	it('gives up on an update the agent never finishes', () => {
+		const { ctx } = setup();
+		const box = enroll(ctx, 'box');
+		recordHello(ctx.db, box.id, updatable());
+		recordReport(ctx.db, box.id, { containers: [], revision: null });
+		nodes.updateAgent(ctx, box.id);
+		const row = ctx.db.select().from(node).where(eq(node.id, box.id)).get()!;
+		const requestedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+		ctx.db
+			.update(node)
+			.set({ agentUpdate: { ...row.agentUpdate!, requestedAt } })
+			.where(eq(node.id, box.id))
+			.run();
+		expect(nodes.list(ctx).find((n) => n.id === box.id)!.agent.update).toMatchObject({
+			state: 'failed',
+			error: "The agent didn't finish updating within 15 minutes"
+		});
+		expect(buildDesiredState(ctx.db, testSecrets, ctx.settings, box.id).agentUpdate).toBeNull();
+	});
+
+	it('refuses agents that predate it, offline nodes, and people who are not admins', () => {
+		const { ctx } = setup();
+		const box = enroll(ctx, 'box');
+		recordReport(ctx.db, box.id, { containers: [], revision: null });
+		expect(nodes.list(ctx).find((n) => n.id === box.id)!.agent.canUpdate).toBe(false);
+		expect(() => nodes.updateAgent(ctx, box.id)).toThrow(/install\.sh --update/);
+
+		recordHello(ctx.db, box.id, updatable());
+		ctx.db
+			.update(node)
+			.set({ lastSeenAt: new Date(Date.now() - 60 * 60_000) })
+			.where(eq(node.id, box.id))
+			.run();
+		expect(() => nodes.updateAgent(ctx, box.id)).toThrow(/offline/);
+
+		expect(() => nodes.updateAgent({ ...ctx, userId: 'usr_someone_else' }, box.id)).toThrow();
+	});
+});
