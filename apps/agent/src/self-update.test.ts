@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	HELPER_NAME,
 	ownContainerId,
+	ownImage,
 	recreateSpec,
 	SelfUpdater,
 	swapAgent,
@@ -43,6 +44,50 @@ describe('ownContainerId', () => {
 	it('is null outside a container, and TRAMLINE_AGENT_CONTAINER overrides it', () => {
 		expect(ownContainerId('/nonexistent', {})).toBeNull();
 		expect(ownContainerId('/nonexistent', { TRAMLINE_AGENT_CONTAINER: 'agent' })).toBe('agent');
+	});
+});
+
+describe('ownImage', () => {
+	const docker = (inspect: () => Promise<unknown>) =>
+		({ getContainer: () => ({ inspect }) }) as unknown as Docker;
+
+	it('finds the image and the mounted Docker socket', async () => {
+		const found = await ownImage(
+			docker(async () => ({
+				Id: ID,
+				Image: OLD,
+				Config: { Image: REF },
+				HostConfig: {
+					Binds: ['tramline-agent:/var/lib/tramline', '/run/docker.sock:/var/run/docker.sock']
+				}
+			})),
+			ID
+		);
+		expect(found).toEqual({
+			containerId: ID,
+			reference: REF,
+			id: OLD,
+			socketBind: '/run/docker.sock:/var/run/docker.sock'
+		});
+	});
+
+	it('is null without a container, the socket, or a working Docker', async () => {
+		const noSocket = docker(async () => ({
+			Id: ID,
+			Image: OLD,
+			Config: { Image: REF },
+			HostConfig: {}
+		}));
+		expect(await ownImage(noSocket, null)).toBeNull();
+		expect(await ownImage(noSocket, ID)).toBeNull();
+		expect(
+			await ownImage(
+				docker(async () => {
+					throw new Error('connect ENOENT');
+				}),
+				ID
+			)
+		).toBeNull();
 	});
 });
 
@@ -205,11 +250,15 @@ describe('recreateSpec', () => {
 });
 
 /** Just enough of dockerode for the swap. */
-function fakeDocker(options: { newAgentExits?: boolean } = {}) {
+function fakeDocker(
+	options: { newAgentExits?: boolean; leftover?: boolean; alreadyStopped?: boolean } = {}
+) {
 	const events: string[] = [];
 	const containers = new Map<string, { name: string; running: boolean }>([
 		[ID, { name: 'tramline-agent', running: true }]
 	]);
+	if (options.leftover)
+		containers.set('stale', { name: 'tramline-agent-previous', running: false });
 	const handle = (id: string) => ({
 		inspect: async () => {
 			const c = containers.get(id) ?? [...containers.values()].find((x) => x.name === id);
@@ -231,6 +280,9 @@ function fakeDocker(options: { newAgentExits?: boolean } = {}) {
 		},
 		stop: async () => {
 			events.push(`stop ${id}`);
+			if (options.alreadyStopped) {
+				throw Object.assign(new Error('container already stopped'), { statusCode: 304 });
+			}
 			containers.get(id)!.running = false;
 		},
 		start: async () => {
@@ -275,5 +327,13 @@ describe('swapAgent', () => {
 		);
 		expect(events.slice(-3)).toEqual(['remove new', `rename ${ID} tramline-agent`, `start ${ID}`]);
 		expect(containers.get(ID)).toEqual({ name: 'tramline-agent', running: true });
+	});
+
+	it('clears a container left by an earlier swap, and copes with an agent already stopped', async () => {
+		const { docker, events, containers } = fakeDocker({ leftover: true, alreadyStopped: true });
+		await swapAgent(docker, ID, NEW, { stableMs: 2, log: () => {} });
+		expect(events[0]).toBe('remove stale');
+		expect(events).toContain(`remove ${ID}`);
+		expect([...containers.values()]).toEqual([{ name: 'tramline-agent', running: true }]);
 	});
 });
