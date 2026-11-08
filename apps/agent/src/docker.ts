@@ -43,6 +43,11 @@ export class DockerRuntime implements ContainerRuntime {
 		return (await this.docker.version()).Version;
 	}
 
+	async gpuRuntime() {
+		const info = (await this.docker.info()) as { Runtimes?: Record<string, unknown> };
+		return Object.hasOwn(info.Runtimes ?? {}, 'nvidia');
+	}
+
 	async ensureNetwork(name: string) {
 		const networks = await this.docker.listNetworks({ filters: { name: [name] } });
 		if (networks.some((n) => n.Name === name)) return;
@@ -144,7 +149,13 @@ export class DockerRuntime implements ContainerRuntime {
 				),
 				...(spec.sysctls ? { Sysctls: spec.sysctls } : {}),
 				Binds: spec.binds,
-				...(spec.autoRemove ? { AutoRemove: true } : {})
+				...(spec.autoRemove ? { AutoRemove: true } : {}),
+				// what `docker run --gpus device=0,1` asks for
+				...(spec.gpus?.length
+					? {
+							DeviceRequests: [{ Driver: 'nvidia', DeviceIDs: spec.gpus, Capabilities: [['gpu']] }]
+						}
+					: {})
 			},
 			NetworkingConfig: { EndpointsConfig: { [spec.network]: { Aliases: spec.aliases } } }
 		});

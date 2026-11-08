@@ -40,6 +40,10 @@ export const NodePool = z.object({
 		name: z.string(),
 		vcpus: z.number().int(),
 		memoryMb: z.number().int(),
+		/** Its GPUs; a pool of GPU machines only grows for work that needs GPUs. */
+		gpu: z
+			.object({ model: z.string(), count: z.number().int(), vramGb: z.number().nullable() })
+			.nullable(),
 		/** null when the provider doesn't say (e.g. Proxmox without a price). */
 		hourly: z.number().nullable()
 	}),

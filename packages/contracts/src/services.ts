@@ -69,6 +69,16 @@ export const BuildConfig = z.object({
 
 export const RESTART_POLICIES = ['on_failure', 'always', 'never'] as const;
 
+/** GPUs each replica of a service gets, whole and to itself. */
+export const GpuRequest = z.object({
+	count: z.number().int().min(1).max(16),
+	/** Part of the model name, e.g. `A100` or `H100 80GB`; any model when null. */
+	model: z.string().trim().min(1).max(64).nullable(),
+	/** Memory each GPU must have, in GB; any when null. */
+	minVramGb: z.number().int().min(1).max(1024).nullable()
+});
+export type GpuRequest = z.infer<typeof GpuRequest>;
+
 export const DeployConfig = z.object({
 	startCommand: optionalText,
 	replicas: z.number().int().min(1).max(20),
@@ -84,6 +94,11 @@ export const DeployConfig = z.object({
 	memoryRequestMb: z.number().int().min(16).max(262_144).nullable(),
 	/** CPU cores each replica reserves, e.g. 0.25. Null reserves none. */
 	cpuRequest: z.number().min(0.01).max(256).nullable(),
+	/**
+	 * GPUs each replica needs; it only runs on a node that has them free.
+	 * Missing on services saved before GPUs existed, which means none.
+	 */
+	gpus: GpuRequest.nullable().optional(),
 	/** Mount the container's root filesystem read-only (with a writable /tmp). */
 	readOnlyRootFilesystem: z.boolean(),
 	/** Run only on this node (its id); null lets the scheduler choose. */
@@ -163,6 +178,7 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		memoryMb: null,
 		memoryRequestMb: null,
 		cpuRequest: null,
+		gpus: null,
 		readOnlyRootFilesystem: false,
 		node: null
 	},

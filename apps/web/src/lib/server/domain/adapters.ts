@@ -20,7 +20,7 @@ import { randomBytes } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
 import { getAdapter } from '../adapters/registry';
 import type { DbOrTx } from '../db/client';
-import { adapterAccount, joinToken, node, nodePool } from '../db/schema';
+import { adapterAccount, joinToken, node, nodePool, type OfferGpu } from '../db/schema';
 import { newId } from '../ids';
 import { hashToken } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
@@ -240,14 +240,32 @@ export async function provision(ctx: Ctx, input: ProvisionNode, origin: string) 
 export async function provisionMachine(
 	ctx: Ctx,
 	row: Row,
-	machine: { name: string; region: string; offer: string; cordoned: boolean; poolId?: string },
+	machine: {
+		name: string;
+		region: string;
+		offer: string;
+		cordoned: boolean;
+		poolId?: string;
+		/** The size's GPUs, when the caller knows them; looked up otherwise. */
+		gpu?: OfferGpu | null;
+	},
 	origin: string
 ) {
 	const { adapter, creds } = connect(ctx, row);
+	// the driver won't say how much memory a GPU has, so it's kept from the size
+	const gpu =
+		machine.gpu !== undefined
+			? machine.gpu
+			: adapter.capabilities.gpus
+				? await call(row, () => adapter.listOffers(creds, machine.region))
+						.then((offers) => offers.find((o) => o.id === machine.offer)?.gpu ?? null)
+						.catch(() => null)
+				: null;
 	const joining = issueJoinToken(ctx, { name: machine.name, cordoned: machine.cordoned }, origin, {
 		adapterAccountId: row.id,
 		region: machine.region,
 		offer: machine.offer,
+		offerGpu: gpu,
 		...(machine.poolId ? { poolId: machine.poolId } : {})
 	});
 	const { id: tokenId, url } = joining;

@@ -1,3 +1,4 @@
+import type { GpuRequest } from '@tramline/contracts';
 import { and, asc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { build, container, deployment, node, nodePool, service } from '../db/schema';
@@ -5,6 +6,7 @@ import { publish } from '../events';
 import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
+import { describeGpus, freeGpus, gpuMatches, gpuRequest, heldOn, nodeGpus } from './gpus';
 import { nodesOf, replicaNode, replicaRequest, reservedOn } from './placement';
 import { isOnline, ONLINE_WINDOW_MS } from './registry';
 import { isCron, runCronSchedules } from './cron';
@@ -32,7 +34,7 @@ interface Transition {
 	replicaNodes?: string[] | null;
 	startedAt?: Date;
 	/** Other columns to update, e.g. the built image. */
-	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit' | 'scan'>>;
+	set?: Partial<Pick<DeploymentRow, 'image' | 'resolvedImage' | 'commit' | 'scan' | 'replicaGpus'>>;
 	/** Written to the deployment's log. */
 	log?: string;
 }
@@ -146,7 +148,14 @@ export function reconcile(db: Db, settings: PlatformSettings, now = Date.now()) 
 	for (const dep of active.filter((d) => d.status === 'queued')) {
 		const t = schedule(db, dep, { online, all: nodes, placed, pools }, now);
 		apply(dep, t);
-		if (t.nodeId) placed.push({ ...dep, nodeId: t.nodeId, replicaNodes: t.replicaNodes ?? null });
+		if (t.nodeId) {
+			placed.push({
+				...dep,
+				nodeId: t.nodeId,
+				replicaNodes: t.replicaNodes ?? null,
+				replicaGpus: t.set?.replicaGpus ?? null
+			});
+		}
 		// the volume lives on the node the service first ran on
 		if (t.nodeId && dep.config.volume?.mountPath) {
 			ensureVolume(db, dep.serviceId, dep.environmentId, t.nodeId);
@@ -245,6 +254,23 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		);
 	}
 
+	// GPUs: only nodes that have enough of the right ones, and can hand them to containers
+	const gpus = gpuRequest(dep.config);
+	if (gpus && candidates.length) {
+		const capable = candidates.filter(
+			(n) => nodeGpus(n).filter((g) => gpuMatches(g, gpus)).length >= gpus.count
+		);
+		if (!capable.length) {
+			const withoutRuntime = candidates.find((n) => n.info?.gpus?.length && !n.info.gpuRuntime);
+			return {
+				message: withoutRuntime
+					? `Waiting for a node with ${describeGpus(gpus)}: ${withoutRuntime.name} has GPUs, but Docker there can't hand them to containers (install the NVIDIA container toolkit)`
+					: `Waiting for a node with ${describeGpus(gpus)}`
+			};
+		}
+		candidates = capable;
+	}
+
 	if (!candidates.length) {
 		// a node whose agent is connected but can't run containers is the most useful thing to point at
 		const broken = all.find(
@@ -276,14 +302,41 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	const one = replicaRequest(dep.config);
 	const cron = Boolean(dep.config.deploy.cronSchedule);
 	const replicas = cron ? 1 : dep.config.deploy.replicas;
+	// GPUs this service's older deployments hold are about to be free: they stop first (recreatePlan)
+	const replaced = (d: DeploymentRow) =>
+		d.serviceId === dep.serviceId &&
+		d.environmentId === dep.environmentId &&
+		d.createdAt.getTime() <= dep.createdAt.getTime();
+	// unheld GPUs first, so a redeploy with GPUs to spare swaps without stopping the old one
+	const free = new Map(
+		gpus
+			? candidates.map((n) => {
+					const releasing = heldOn(others.filter(replaced), n.id);
+					return [
+						n.id,
+						freeGpus(
+							n,
+							gpus,
+							heldOn(
+								others.filter((d) => !replaced(d)),
+								n.id
+							)
+						).sort((a, b) => Number(releasing.has(a)) - Number(releasing.has(b)))
+					];
+				})
+			: []
+	);
 	// nodes that haven't reported their size yet are given the benefit of the doubt
 	const room = (n: NodeRow, count: number) => {
 		const used = reserved.get(n.id)!;
 		const memory =
 			!one.memoryMb || !n.info?.memoryMb || n.info.memoryMb - used.memoryMb >= one.memoryMb * count;
 		const cpu = !one.cpus || !n.info?.cpus || n.info.cpus - used.cpus >= one.cpus * count - 1e-9;
-		return memory && cpu;
+		const gpu = !gpus || free.get(n.id)!.length >= gpus.count * count;
+		return memory && cpu && gpu;
 	};
+	// work that needs no GPU keeps off GPU nodes while others have room, so they stay free for it
+	const gpuNode = (n: NodeRow) => Number(!gpus && nodeGpus(n).length > 0);
 
 	// a built image lives on the node that built it; anywhere else builds it again
 	const builtOn =
@@ -309,11 +362,12 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		const chosen: NodeRow[] = [];
 		for (let r = 0; r < replicas; r++) {
 			const fits = candidates.filter((n) => room(n, (count.get(n.id) ?? 0) + 1));
-			if (!fits.length) return { message: waitingFor(one, replicas) };
+			if (!fits.length) return { message: waitingFor(one, replicas, gpus) };
 			const best = fits
 				.map((n, order) => ({ n, order }))
 				.sort(
 					(a, b) =>
+						gpuNode(a.n) - gpuNode(b.n) ||
 						(count.get(a.n.id) ?? 0) - (count.get(b.n.id) ?? 0) ||
 						sameEnvironment(b.n) - sameEnvironment(a.n) ||
 						load(a.n, count.get(a.n.id) ?? 0) - load(b.n, count.get(b.n.id) ?? 0) ||
@@ -326,12 +380,13 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		replicaNodes = count.size > 1 ? chosen.map((n) => n.id) : null;
 	} else {
 		const fits = candidates.filter((n) => room(n, replicas));
-		if (!fits.length) return { message: waitingFor(one, replicas) };
+		if (!fits.length) return { message: waitingFor(one, replicas, gpus) };
 		target = fits
 			.map((n, order) => ({ n, order }))
 			.sort(
 				(a, b) =>
 					Number(b.n.id === builtOn) - Number(a.n.id === builtOn) ||
+					gpuNode(a.n) - gpuNode(b.n) ||
 					sameEnvironment(b.n) - sameEnvironment(a.n) ||
 					load(a.n) - load(b.n) ||
 					a.order - b.order
@@ -340,6 +395,16 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	const where = replicaNodes
 		? `nodes ${[...new Set(replicaNodes)].map(named).join(', ')}`
 		: `node ${target.name}`;
+	// each replica takes its GPUs from what's free on its node
+	let replicaGpus: string[][] | null = null;
+	if (gpus) {
+		replicaGpus = [];
+		for (let r = 0; r < replicas; r++) {
+			const left = free.get(replicaNodes?.[r] ?? target.id)!;
+			replicaGpus.push(left.splice(0, gpus.count));
+		}
+	}
+	const gpuSet = gpus ? { replicaGpus } : {};
 	const rebuild = Boolean(builtOn !== undefined && target.id !== builtOn);
 	const image = rebuild ? null : dep.image;
 
@@ -350,7 +415,8 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 			replicaNodes,
 			startedAt: new Date(now),
 			message: 'Scanning image',
-			log: `Scanning on node ${target.name}`
+			log: `Scanning on node ${target.name}`,
+			set: gpuSet
 		};
 	}
 	if (dep.config.source?.type === 'repo' && !image) {
@@ -363,7 +429,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 			log: rebuild
 				? `Building on node ${target.name} (the image is on another node)`
 				: `Building on node ${target.name}`,
-			...(rebuild ? { set: { image: null } } : {})
+			set: { ...gpuSet, ...(rebuild ? { image: null } : {}) }
 		};
 	}
 	return {
@@ -372,15 +438,21 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		replicaNodes,
 		startedAt: new Date(now),
 		message: 'Pulling image',
-		log: `Scheduled on ${where}`
+		log: `Scheduled on ${where}${replicaGpus ? ` with GPU ${replicaGpus.map((g) => g.join(', ')).join('; ')}` : ''}`,
+		set: gpuSet
 	};
 }
 
 /** Why a deployment can't be placed yet: no node has room for its requests. */
-function waitingFor(one: { memoryMb: number; cpus: number }, replicas: number) {
+function waitingFor(
+	one: { memoryMb: number; cpus: number },
+	replicas: number,
+	gpus: GpuRequest | null = null
+) {
 	const each = [
 		one.memoryMb ? `${one.memoryMb} MB of memory` : null,
-		one.cpus ? `${one.cpus} CPU` : null
+		one.cpus ? `${one.cpus} CPU` : null,
+		gpus ? describeGpus(gpus) : null
 	]
 		.filter(Boolean)
 		.join(' and ');

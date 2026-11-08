@@ -19,9 +19,11 @@ import {
 	service,
 	volume
 } from '../db/schema';
+import type { OfferGpu } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
 import { meshMembers, routes } from '../nodes/mesh';
+import { heldOn } from '../nodes/gpus';
 import { nodesOf, onNode, reservedOn } from '../nodes/placement';
 import { agentUpdateState, hashToken, nodeStatus } from '../nodes/registry';
 import { requireInstallAdmin } from './admins';
@@ -43,6 +45,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 		.select({
 			nodeId: deployment.nodeId,
 			replicaNodes: deployment.replicaNodes,
+			replicaGpus: deployment.replicaGpus,
 			config: deployment.config
 		})
 		.from(deployment)
@@ -89,7 +92,13 @@ export function list(ctx: Ctx): NodeSummary[] {
 				pool: (row.poolId && pools.get(row.poolId)) || null,
 				cpus: row.info?.cpus ?? null,
 				memoryMb: row.info?.memoryMb ?? null,
-				gpus: row.info?.gpus ?? [],
+				// the driver doesn't say how much memory a GPU has; the size it was created as does
+				gpus: (row.info?.gpus ?? []).map((g) => ({
+					model: g.model,
+					vramMb: g.vramMb ?? (row.offerGpu?.vramGb ? row.offerGpu.vramGb * 1024 : null)
+				})),
+				gpuRuntime: row.info?.gpuRuntime ?? false,
+				allocatedGpus: heldOn(here, row.id).size,
 				allocatedMemoryMb: reserved.reduce((sum, r) => sum + r.memoryMb, 0),
 				allocatedCpus: Math.round(reserved.reduce((sum, r) => sum + r.cpus, 0) * 100) / 100,
 				deployments: here.length,
@@ -159,7 +168,13 @@ export function issueJoinToken(
 	ctx: Ctx,
 	input: CreateJoinToken,
 	origin: string,
-	adapter: { adapterAccountId?: string; region?: string; offer?: string; poolId?: string },
+	adapter: {
+		adapterAccountId?: string;
+		region?: string;
+		offer?: string;
+		offerGpu?: OfferGpu | null;
+		poolId?: string;
+	},
 	now = new Date()
 ) {
 	if (nameTaken(ctx.db, input.name, now)) {

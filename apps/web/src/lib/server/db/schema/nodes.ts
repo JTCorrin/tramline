@@ -29,6 +29,11 @@ export const node = sqliteTable('node', {
 	adapterAccountId: text('adapter_account_id').references(() => adapterAccount.id),
 	/** The provider's ID for the machine. */
 	providerNodeId: text('provider_node_id'),
+	/**
+	 * The GPUs of the size it was created as, as the provider describes them:
+	 * where a GPU's memory comes from, since the driver doesn't say.
+	 */
+	offerGpu: text('offer_gpu', { mode: 'json' }).$type<OfferGpu>(),
 	/** The pool that created it; the pool destroys it once it's idle. */
 	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
 	/** When a pool node was last seen running nothing; null while it runs something. */
@@ -59,6 +64,13 @@ export const node = sqliteTable('node', {
 	...timestamps
 });
 
+/** A machine size's GPUs: `count` of `model`, each with `vramGb` (null when the provider doesn't say). */
+export interface OfferGpu {
+	model: string;
+	count: number;
+	vramGb: number | null;
+}
+
 export interface AgentUpdate {
 	id: string;
 	state: 'requested' | 'running' | 'succeeded' | 'failed';
@@ -85,6 +97,7 @@ export const joinToken = sqliteTable('join_token', {
 	providerNodeId: text('provider_node_id'),
 	region: text('region'),
 	offer: text('offer'),
+	offerGpu: text('offer_gpu', { mode: 'json' }).$type<OfferGpu>(),
 	/** The pool that asked for the machine. */
 	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
 	/**
@@ -117,6 +130,7 @@ export const nodePool = sqliteTable('node_pool', {
 	offerName: text('offer_name').notNull(),
 	vcpus: integer('vcpus').notNull(),
 	memoryMb: integer('memory_mb').notNull(),
+	gpu: text('gpu', { mode: 'json' }).$type<OfferGpu>(),
 	hourly: real('hourly'),
 	/** The environment it serves; every environment when `forEnvironment` is false. */
 	forEnvironment: integer('for_environment', { mode: 'boolean' }).notNull().default(false),

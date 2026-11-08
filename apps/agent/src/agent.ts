@@ -263,6 +263,7 @@ export class Agent {
 					}
 				: null,
 			gpus: await detectGpus(this.options.gpuDir),
+			gpuRuntime: await this.options.runtime.gpuRuntime().catch(() => false),
 			mesh: this.#meshPublicKey
 				? { publicKey: this.#meshPublicKey, endpoint: this.options.mesh?.endpoint ?? null }
 				: null

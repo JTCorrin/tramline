@@ -300,7 +300,9 @@
 					{node.hostname ?? 'not connected yet'}
 					{#if node.cpus}· {node.cpus} CPUs{/if}
 					{#if node.memoryMb}· {gb(node.memoryMb)}{/if}
-					{#if node.gpus.length}· {node.gpus.length}× {node.gpus[0]!.model}{/if}
+					{#if node.gpus.length}· {node.gpus.length}× {node.gpus[0]!.model}{node.gpus[0]!.vramMb
+							? ` ${Math.round(node.gpus[0]!.vramMb / 1024)} GB`
+							: ''}{#if node.gpuRuntime}, {node.allocatedGpus} in use{/if}{/if}
 					{#if node.dockerVersion}· Docker {node.dockerVersion}{/if}
 					{#if node.agent.version}· agent {agentVersion(node.agent.version)}{/if}
 					{#if node.account}· on {node.account.name}{/if}
@@ -309,6 +311,13 @@
 						)}{/if}
 				</div>
 				{#if node.error}<p class="mt-1 text-xs text-red-400">{node.error}</p>{/if}
+				{#if node.gpus.length && !node.gpuRuntime && node.status === 'online'}
+					<p class="mt-1 text-xs text-amber-600 dark:text-amber-400" data-testid="no-gpu-runtime">
+						This node has GPUs, but Docker can't hand them to containers, so no GPU work runs here.
+						Install the NVIDIA container toolkit and run
+						<code>sudo nvidia-ctk runtime configure --runtime=docker</code>, then restart Docker.
+					</p>
+				{/if}
 				{#if updating(node)}
 					<p
 						class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
