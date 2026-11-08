@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { run as defaultRun, type Run } from './mesh-daemon';
 
 /**
@@ -64,9 +64,9 @@ export interface FirewallStatus {
 	detail: string | null;
 	/** `nft` or `legacy`: which iptables Docker uses. */
 	backend: string | null;
-	/** The rules' fingerprint: counters start again from zero when it changes. */
+	/** This daemon's run: counters start again from zero when it changes (a restart). */
 	generation?: string;
-	/** Per container, since the rules were last replaced. */
+	/** Per container, since this daemon started, across rule replacements. */
 	counters?: Record<string, ContainerCounters>;
 	at: string;
 }
@@ -215,6 +215,20 @@ export async function applyFirewall(
 	return true;
 }
 
+const add = (a: ContainerCounters | undefined, b: ContainerCounters): ContainerCounters => ({
+	metadata: (a?.metadata ?? 0) + b.metadata,
+	private: (a?.private ?? 0) + b.private,
+	host: (a?.host ?? 0) + b.host,
+	connections: (a?.connections ?? 0) + b.connections
+});
+
+/** What was carried over plus what the rules count now, per container. */
+function total(carried: Record<string, ContainerCounters>, now: Record<string, ContainerCounters>) {
+	const all = { ...carried };
+	for (const [name, counts] of Object.entries(now)) all[name] = add(all[name], counts);
+	return all;
+}
+
 export interface FirewallDaemonOptions {
 	intervalMs?: number;
 	exec?: Run;
@@ -240,6 +254,9 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 	let applied = '';
 	let checked = 0;
 	let counted = 0;
+	// counters since this daemon started, across rule replacements; a new daemon starts again
+	const carried: Record<string, ContainerCounters> = {};
+	const instance = randomBytes(6).toString('hex');
 	const interval = options.intervalMs ?? 1_000;
 	log('[firewall] waiting for config');
 	while (!options.signal?.aborted) {
@@ -256,7 +273,14 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 			} else if (text && (text !== applied || Date.now() - checked > 15 * interval)) {
 				// a new config at once; otherwise a check now and then that nothing removed the rules
 				const config = JSON.parse(text) as FirewallConfig;
+				// replacing the rules zeroes their counters: keep what they held
+				const before = await readCounters(backend, options.exec);
 				if (await applyFirewall(config, backend, options.exec)) {
+					const kept = new Set((config.containers ?? []).map((c) => c.name));
+					for (const [name, counts] of Object.entries(before)) {
+						if (kept.has(name)) carried[name] = add(carried[name], counts);
+					}
+					for (const name of Object.keys(carried)) if (!kept.has(name)) delete carried[name];
 					log(
 						`[firewall] containing ${config.workloads.length} networks (${backend}), ${config.allow.length} containers with private ranges open`
 					);
@@ -273,8 +297,8 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 					state: 'active',
 					backend,
 					detail: null,
-					generation: fingerprint(JSON.parse(applied) as FirewallConfig),
-					counters: await readCounters(backend, options.exec)
+					generation: instance,
+					counters: total(carried, await readCounters(backend, options.exec))
 				});
 			}
 		} catch (error) {
