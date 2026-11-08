@@ -37,6 +37,10 @@ export class FakeRuntime implements ContainerRuntime {
 		this.#guard('version');
 		return '27.0.0';
 	}
+	nvidia = false;
+	async gpuRuntime() {
+		return this.nvidia;
+	}
 	async ensureNetwork(name: string) {
 		this.#guard(`network ${name}`);
 		this.networks.add(name);

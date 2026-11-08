@@ -411,9 +411,62 @@ More: [docs/adapters/hetzner.md](docs/adapters/hetzner.md)
 
 </details>
 
+<details>
+<summary><strong>Lambda</strong>: GPU instances (about 10 minutes)</summary>
+
+<br>
+
+**You need:** a Lambda Cloud account with a payment method. There's no free tier: GPU instances cost from about $0.50 to over $20 an hour while they run, and Tramline shows the price of each size.
+
+**1. Create an API key.** In the Lambda Cloud dashboard, go to **API keys**, create a key named `tramline`, and copy it. It's shown once.
+
+**2. Let the instances reach Tramline.** Instances in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
+
+- **Tramline runs at home or on a private network** (most people): use a Cloudflare tunnel. It needs a domain on Cloudflare; the free plan is fine.
+  1. In Cloudflare, go to **My Profile → API Tokens → Create Token → Create Custom Token**. Give it **Account → Cloudflare Tunnel → Edit** and **Zone → DNS → Edit**, limited to your domain.
+  2. In Tramline, go to **Nodes → Public access → Set up a Cloudflare tunnel**. Paste the token and click **Next**.
+  3. Choose a subdomain (e.g. `tramline`) and your domain.
+  4. Set **Run the connector on** to a node that's always on, and **Tramline's address for the connector** to where that node reaches Tramline (e.g. `http://192.168.1.20:3000`). Click **Create tunnel**.
+  5. Wait for the tunnel's badge to say **Connected**. Machines can't join until it does.
+
+  _I'll run it myself_ also works, but the command it shows has to keep running, e.g. as a service. If it stops, new machines can't join.
+
+- **Tramline already has a public HTTPS address:** set `TRAMLINE_AGENT_URL=https://<that address>` in `apps/web/.env`, then restart Tramline.
+
+Either way, **Public access** should now say _New nodes connect to https://…_.
+
+**3. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Lambda**, and paste the key. That's all you need:
+
+- Leave **Open the mesh port** on. It adds one rule to your Lambda firewall allowing UDP 51820, so your nodes can reach each other over Tramline's encrypted WireGuard network. Lambda's firewall rules apply to all your instances; the rules you already have stay.
+
+Click **Connect**, then **Test connection**.
+
+**4. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a region, and pick a size such as **gpu_1x_a10**. Only sizes Lambda has free in that region right now are listed, with their GPU and hourly price. Then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+The node shows _Waiting to enroll_ while the instance boots, and moves to the node list once it joins. GPU instances can take longer to boot than small VMs, but Lambda's image already has the NVIDIA driver, Docker and the NVIDIA container toolkit, so nothing big is installed. If it's still waiting after 15 minutes, check that the tunnel says **Connected**. In the Lambda dashboard it appears under **Instances** with the node's name.
+
+**5. Clean up.** Click **Remove** on the node. Tramline terminates the instance, and billing stops. The SSH key `tramline-no-login` and the firewall rule stay; they cost nothing.
+
+**If it goes wrong**
+
+- _No sizes listed:_ Lambda has nothing free in that region right now. Try another region, or later.
+- _"none of that size free":_ the size filled up between listing and launching. Pick another size or region.
+- _Billing address or account inactive:_ finish setting up billing in the Lambda dashboard.
+- _"can't change firewall rules":_ the key's role can't manage the firewall. Use a key that can, or turn off **Open the mesh port**.
+
+More: [docs/adapters/lambda.md](docs/adapters/lambda.md)
+
+</details>
+
 ## Grow and shrink automatically
 
 On **Nodes → Node pools**, click **New pool** and pick a compute account, a region and a size, with a minimum and a maximum. When a deployment has nowhere to run, the pool creates a machine for it; once a machine has run nothing for 15 minutes, it's destroyed. A pool can serve every environment or just one, and a monthly cap keeps it from growing past what you want to spend. Tramline shows the cost and asks before a pool can grow.
+
+## Run on GPUs
+
+In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.
+
+GPUs come from a node with NVIDIA GPUs and the NVIDIA container toolkit, such as a [Lambda](#add-machines) instance. The Nodes page shows each node's GPUs and how many are in use, and warns when a node has GPUs Docker can't use. A node pool with a GPU size grows only for work that asks for its GPUs, so a busy CPU service never starts an expensive machine.
 
 ## Update a node's agent
 

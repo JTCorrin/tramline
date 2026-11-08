@@ -38,6 +38,7 @@
 		"@tramline/adapter-azure": "workspace:*",
 		"@tramline/adapter-gcp": "workspace:*",
 		"@tramline/adapter-hetzner": "workspace:*",
+		"@tramline/adapter-lambda": "workspace:*",
 		"@tramline/adapter-proxmox": "workspace:*",
 		"@tramline/adapter-sdk": "workspace:*",
 		"@tramline/client": "workspace:*",

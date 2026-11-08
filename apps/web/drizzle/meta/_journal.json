@@ -232,6 +232,13 @@
       "when": 1793882007487,
       "tag": "0032_node_pools",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1794150979583,
+      "tag": "0033_gpus",
+      "breakpoints": true
     }
   ]
 }

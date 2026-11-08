@@ -71,26 +71,48 @@ const LIVE: DeploymentRow['status'][] = ['deploying', 'active', 'crashed'];
 /**
  * Services with a volume are recreated rather than swapped: two containers
  * must never share one data directory. Of their live deployments only the
- * newest may run, and only once the older ones' containers are gone.
+ * newest may run, and only once the older ones' containers are gone. GPU
+ * services are too when the newest was given GPUs an older one still holds
+ * (a node with one GPU, say); with GPUs to spare they swap like any other.
  *
  * `withContainers` holds the deployments whose containers a node still reports.
  */
 export function recreatePlan(deployments: DeploymentRow[], withContainers: Set<string>) {
 	const stopped = new Map<string, string>();
 	const waiting = new Set<string>();
-	const groups = Map.groupBy(
-		deployments.filter((d) => LIVE.includes(d.status) && d.config.volume?.mountPath),
-		(d) => `${d.serviceId}:${d.environmentId}`
-	);
-	for (const group of groups.values()) {
+	const live = deployments.filter((d) => LIVE.includes(d.status));
+	const plan = (
+		group: DeploymentRow[],
+		mustStop: (older: DeploymentRow, newest: DeploymentRow) => boolean
+	) => {
 		const ordered = group.toSorted(
 			(a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id)
 		);
 		const newest = ordered.at(-1)!;
-		const older = ordered.slice(0, -1);
+		const older = ordered.slice(0, -1).filter((dep) => mustStop(dep, newest));
 		for (const dep of older) stopped.set(dep.id, newest.id);
 		if (older.some((dep) => withContainers.has(dep.id))) waiting.add(newest.id);
+	};
+	const byService = (d: DeploymentRow) => `${d.serviceId}:${d.environmentId}`;
+	for (const group of Map.groupBy(
+		live.filter((d) => d.config.volume?.mountPath),
+		byService
+	).values()) {
+		plan(group, () => true);
+	}
+	for (const group of Map.groupBy(
+		live.filter((d) => d.replicaGpus?.length),
+		byService
+	).values()) {
+		plan(group, (older, newest) => gpusOf(older).some((gpu) => gpusOf(newest).includes(gpu)));
 	}
 	/** `stopped`: older deployment → the one replacing it. `waiting`: may not start yet. */
 	return { stopped, waiting };
+}
+
+/** `node/gpu` for every GPU a deployment's replicas hold. */
+function gpusOf(dep: DeploymentRow) {
+	return (dep.replicaGpus ?? []).flatMap((gpus, replica) =>
+		gpus.map((gpu) => `${dep.replicaNodes?.[replica] ?? dep.nodeId}/${gpu}`)
+	);
 }

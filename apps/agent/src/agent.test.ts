@@ -56,7 +56,8 @@ describe('Agent', () => {
 		expect(calls.hellos[0]).toMatchObject({
 			protocol: 1,
 			docker: { version: '27.0.0' },
-			dockerError: null
+			dockerError: null,
+			gpuRuntime: false
 		});
 
 		await agent.sync();

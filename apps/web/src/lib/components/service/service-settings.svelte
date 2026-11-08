@@ -355,6 +355,55 @@
 					onsave={(v) => stage('deploy', { cpuRequest: toNumber(v) })}
 				/>
 			</Setting>
+			<Setting
+				label="GPUs"
+				for="deploy-gpus"
+				staged={staged('deploy', 'gpus')}
+				description="Whole GPUs for each replica. It only runs on a node that has them free."
+			>
+				<CommitInput
+					id="deploy-gpus"
+					type="number"
+					placeholder="None"
+					value={config.deploy.gpus?.count ?? null}
+					onsave={(v) => {
+						const count = toNumber(v);
+						stage('deploy', {
+							gpus: count ? { model: null, minVramGb: null, ...config.deploy.gpus, count } : null
+						});
+					}}
+				/>
+			</Setting>
+			{#if config.deploy.gpus}
+				{@const gpus = config.deploy.gpus}
+				<Setting
+					label="GPU model"
+					for="deploy-gpu-model"
+					staged={staged('deploy', 'gpus')}
+					description="Part of the name, e.g. A100 or H100. Any model if empty."
+				>
+					<CommitInput
+						id="deploy-gpu-model"
+						placeholder="Any"
+						value={gpus.model}
+						onsave={(v) => stage('deploy', { gpus: { ...gpus, model: v || null } })}
+					/>
+				</Setting>
+				<Setting
+					label="GPU memory (GB)"
+					for="deploy-gpu-vram"
+					staged={staged('deploy', 'gpus')}
+					description="The least each GPU must have."
+				>
+					<CommitInput
+						id="deploy-gpu-vram"
+						type="number"
+						placeholder="Any"
+						value={gpus.minVramGb}
+						onsave={(v) => stage('deploy', { gpus: { ...gpus, minVramGb: toNumber(v) } })}
+					/>
+				</Setting>
+			{/if}
 			<div class="flex items-start justify-between gap-3 rounded-lg border p-3">
 				<div>
 					<div class="flex items-center gap-2 text-sm font-medium">

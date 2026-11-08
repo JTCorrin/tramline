@@ -48,6 +48,11 @@ export const AgentHello = z.object({
 		.max(64)
 		.optional(),
 	/**
+	 * Docker can hand GPUs to containers: the NVIDIA container toolkit is
+	 * installed and registered as a runtime. GPUs without it can't be used.
+	 */
+	gpuRuntime: z.boolean().optional(),
+	/**
 	 * This node's WireGuard identity. The private key never leaves the node.
 	 * `endpoint` is where other nodes can reach it (`host:port`, UDP), or null
 	 * behind NAT.
@@ -91,7 +96,16 @@ export const DesiredContainer = z.object({
 	tls: z
 		.object({ kind: z.literal('postgres'), names: z.array(z.string()).min(1) })
 		.nullable()
-		.default(null)
+		.default(null),
+	/**
+	 * The node's GPUs (by index) this replica gets, all of them its own. Only
+	 * sent when there are some, so containers without GPUs keep their spec hash.
+	 */
+	gpus: z
+		.array(z.string().regex(/^\d{1,2}$/))
+		.min(1)
+		.max(16)
+		.optional()
 });
 
 export type DesiredContainer = z.infer<typeof DesiredContainer>;
@@ -485,6 +499,10 @@ export const NodeSummary = z.object({
 	cpus: z.number().int().nullable(),
 	memoryMb: z.number().int().nullable(),
 	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),
+	/** Docker on the node can hand GPUs to containers. */
+	gpuRuntime: z.boolean(),
+	/** GPUs held by the replicas placed here. */
+	allocatedGpus: z.number().int(),
 	/** Memory reserved by the replicas placed here (their requests, or else their limits). */
 	allocatedMemoryMb: z.number().int(),
 	/** CPU cores reserved by the replicas placed here. */

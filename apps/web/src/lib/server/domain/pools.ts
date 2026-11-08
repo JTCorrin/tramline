@@ -18,6 +18,7 @@ import {
 } from '../db/schema';
 import { newId } from '../ids';
 import { notifyNodes } from '../nodes/bus';
+import { gpuRequest, offerFits } from '../nodes/gpus';
 import { onNode, replicaRequest } from '../nodes/placement';
 import { isOnline } from '../nodes/registry';
 import { volumeFor } from '../nodes/volumes';
@@ -94,6 +95,7 @@ function toDto(db: Db, row: PoolRow): NodePool {
 			name: row.offerName,
 			vcpus: row.vcpus,
 			memoryMb: row.memoryMb,
+			gpu: row.gpu ?? null,
 			hourly: row.hourly
 		},
 		environment: env ?? null,
@@ -177,6 +179,7 @@ export async function create(ctx: Ctx, input: CreateNodePool, origin: string): P
 			offerName: offer.name,
 			vcpus: offer.vcpus,
 			memoryMb: offer.memoryMb,
+			gpu: offer.gpu,
 			hourly: offer.hourly,
 			forEnvironment: !!parsed.environmentId,
 			environmentId: parsed.environmentId,
@@ -297,6 +300,9 @@ export function waitingFor(db: Db, row: PoolRow, now: number) {
 			if (dep.config.volume?.mountPath && volumeFor(db, dep.serviceId, dep.environmentId)?.nodeId) {
 				return false;
 			}
+			// GPU machines are dear: they're only added for work that needs their GPUs
+			const gpus = gpuRequest(dep.config);
+			if (row.gpu ? !gpus || !offerFits(row.gpu, gpus) : gpus) return false;
 			const one = replicaRequest(dep.config);
 			// replicas of a registry image spread over machines; anything else needs them all on one
 			const together =
@@ -304,7 +310,9 @@ export function waitingFor(db: Db, row: PoolRow, now: number) {
 					? 1
 					: dep.config.deploy.replicas;
 			return (
-				one.memoryMb * together <= row.memoryMb * USABLE_MEMORY && one.cpus * together <= row.vcpus
+				one.memoryMb * together <= row.memoryMb * USABLE_MEMORY &&
+				one.cpus * together <= row.vcpus &&
+				(!gpus || gpus.count * together <= row.gpu!.count)
 			);
 		});
 }
@@ -326,7 +334,14 @@ async function grow(ctx: Ctx, row: PoolRow, reason: string, now: number) {
 		await provisionMachine(
 			ctx,
 			account,
-			{ name, region: row.region, offer: row.offer, cordoned: false, poolId: row.id },
+			{
+				name,
+				region: row.region,
+				offer: row.offer,
+				cordoned: false,
+				poolId: row.id,
+				gpu: row.gpu ?? null
+			},
 			origin
 		);
 		note(ctx.db, row.id, `Adding ${name} ${reason}`, now);

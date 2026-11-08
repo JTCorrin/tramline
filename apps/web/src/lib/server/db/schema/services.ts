@@ -163,6 +163,11 @@ export const deployment = sqliteTable(
 		 * null when every replica runs on `nodeId`. The first is always `nodeId`.
 		 */
 		replicaNodes: text('replica_nodes', { mode: 'json' }).$type<string[]>(),
+		/**
+		 * The GPUs (indices on its node) of each replica, by index, for a service
+		 * that asks for GPUs; null otherwise. No two live replicas share one.
+		 */
+		replicaGpus: text('replica_gpus', { mode: 'json' }).$type<string[][]>(),
 		/** Why it is in its current status, shown in the UI. */
 		message: text('message'),
 		/** When the current stage (build, then deploy) started; timeouts count from here, not from queueing. */
