@@ -378,7 +378,17 @@ export async function destroyPending(ctx: Ctx, token: typeof joinToken.$inferSel
  */
 export async function leftovers(ctx: Ctx, id: string): Promise<LeftoverMachine[]> {
 	requireInstallAdmin(ctx, 'look for leftover machines');
-	const row = requireAccount(ctx, id);
+	return (await unclaimed(ctx, requireAccount(ctx, id))).map((m) => ({
+		id: m.id,
+		name: m.name,
+		region: m.region,
+		status: m.status,
+		address: m.address
+	}));
+}
+
+/** `leftovers` without the permission check. */
+async function unclaimed(ctx: Ctx, row: Row) {
 	const { adapter, creds } = connect(ctx, row);
 	if (!adapter.capabilities.inventory) return [];
 	const machines = await call(row, () => adapter.listNodes(creds));
@@ -386,25 +396,53 @@ export async function leftovers(ctx: Ctx, id: string): Promise<LeftoverMachine[]
 		...ctx.db
 			.select({ id: node.providerNodeId })
 			.from(node)
-			.where(eq(node.adapterAccountId, id))
+			.where(eq(node.adapterAccountId, row.id))
 			.all()
 			.map((n) => n.id),
 		...ctx.db
 			.select({ id: joinToken.providerNodeId })
 			.from(joinToken)
-			.where(and(eq(joinToken.adapterAccountId, id), isNull(joinToken.usedAt)))
+			.where(and(eq(joinToken.adapterAccountId, row.id), isNull(joinToken.usedAt)))
 			.all()
 			.map((t) => t.id)
 	]);
-	return machines
-		.filter((m) => !known.has(m.id))
-		.map((m) => ({
-			id: m.id,
-			name: m.name,
-			region: m.region,
-			status: m.status,
-			address: m.address
-		}));
+	return machines.filter((m) => !known.has(m.id));
+}
+
+/**
+ * Whether a provider's machine name is how it spells this node's name:
+ * lowercased, other characters as hyphens, `tl-` before a leading digit, and
+ * cut short where the provider limits names (Azure at 50 characters).
+ */
+export function namedFor(machine: string, nodeName: string) {
+	const spell = (name: string) =>
+		name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-|-$/g, '');
+	const want = spell(nodeName);
+	const got = spell(machine).replace(/^tl-(?=\d)/, '');
+	return got === want || (got.length >= 40 && want.startsWith(got));
+}
+
+/**
+ * The provider's ID for the machine behind a node, or null when it has none.
+ * It's recorded once the adapter finishes creating the machine; if Tramline
+ * restarted before that, the node can still enroll without it, so it's found
+ * again among the account's unclaimed machines by name, and recorded.
+ */
+async function machineOf(ctx: Ctx, row: Row, target: typeof node.$inferSelect) {
+	if (target.providerNodeId) return target.providerNodeId;
+	const matches = (await unclaimed(ctx, row)).filter((m) => namedFor(m.name, target.name));
+	if (matches.length > 1) {
+		throw new AppError(
+			'conflict',
+			`Tramline didn't record which machine is ${target.name}'s, and ${matches.length} machines on ${row.name} match its name. Destroy the right one under Compute accounts → Find leftovers, then remove the node again.`
+		);
+	}
+	const id = matches[0]?.id ?? null;
+	if (id) ctx.db.update(node).set({ providerNodeId: id }).where(eq(node.id, target.id)).run();
+	return id;
 }
 
 /** Destroys a leftover machine; only one `leftovers` would list, never a node's. */
@@ -426,20 +464,22 @@ export const opensEdgePorts = (adapter: ComputeAdapter | undefined) =>
  * whose adapter can't, enrolled by hand say, are left to the person.
  */
 export async function setMachineEdge(ctx: Ctx, target: typeof node.$inferSelect, open: boolean) {
-	if (!target.adapterAccountId || !target.providerNodeId) return;
+	if (!target.adapterAccountId) return;
 	const row = requireAccount(ctx, target.adapterAccountId);
 	const { adapter, creds } = connect(ctx, row);
 	if (!opensEdgePorts(adapter)) return;
-	await call(row, () =>
-		(adapter as ComputeAdapter).setEdge!(creds, target.providerNodeId!, open)
-	).catch((error: AppError) => {
-		throw new AppError(
-			'conflict',
-			open
-				? `Couldn't open TCP 80 and 443 on ${target.name}, so it isn't an edge node. ${error.message}`
-				: `Couldn't close TCP 80 and 443 on ${target.name}, so it's still an edge node. ${error.message}`
-		);
-	});
+	const machine = await machineOf(ctx, row, target);
+	if (!machine) return;
+	await call(row, () => (adapter as ComputeAdapter).setEdge!(creds, machine, open)).catch(
+		(error: AppError) => {
+			throw new AppError(
+				'conflict',
+				open
+					? `Couldn't open TCP 80 and 443 on ${target.name}, so it isn't an edge node. ${error.message}`
+					: `Couldn't close TCP 80 and 443 on ${target.name}, so it's still an edge node. ${error.message}`
+			);
+		}
+	);
 }
 
 /**
@@ -447,15 +487,23 @@ export async function setMachineEdge(ctx: Ctx, target: typeof node.$inferSelect,
  * forgotten. Nodes enrolled by hand have nothing to destroy.
  */
 export async function destroyMachine(ctx: Ctx, target: typeof node.$inferSelect) {
-	if (!target.adapterAccountId || !target.providerNodeId) return;
+	if (!target.adapterAccountId) return;
 	const row = requireAccount(ctx, target.adapterAccountId);
 	const { adapter, creds } = connect(ctx, row);
-	await call(row, () =>
-		(adapter as ComputeAdapter).destroyNode(creds, target.providerNodeId!)
-	).catch((error: AppError) => {
+	const machine = await machineOf(ctx, row, target).catch((error: AppError) => {
 		throw new AppError(
 			'conflict',
 			`Couldn't destroy ${target.name}'s machine, so the node was kept. ${error.message}`
 		);
 	});
+	// gone already, or never made it: nothing to destroy
+	if (!machine) return;
+	await call(row, () => (adapter as ComputeAdapter).destroyNode(creds, machine)).catch(
+		(error: AppError) => {
+			throw new AppError(
+				'conflict',
+				`Couldn't destroy ${target.name}'s machine, so the node was kept. ${error.message}`
+			);
+		}
+	);
 }
