@@ -2,6 +2,7 @@ import { credentialFields, fakeAdapter, type ComputeAdapter } from '@tramline/ad
 import { aws } from '@tramline/adapter-aws';
 import { azure } from '@tramline/adapter-azure';
 import { gcp } from '@tramline/adapter-gcp';
+import { lambda } from '@tramline/adapter-lambda';
 import { manual } from '@tramline/adapter-manual';
 import { proxmox } from '@tramline/adapter-proxmox';
 import type { AdapterInfo } from '@tramline/contracts';
@@ -11,7 +12,10 @@ import type { AdapterInfo } from '@tramline/contracts';
  * the adapter contract; nothing outside it knows about any one provider.
  */
 const adapters = new Map<string, ComputeAdapter>(
-	[manual, proxmox, gcp, azure, aws].map((adapter) => [adapter.meta.id, adapter as ComputeAdapter])
+	[manual, proxmox, gcp, azure, aws, lambda].map((adapter) => [
+		adapter.meta.id,
+		adapter as ComputeAdapter
+	])
 );
 
 /** Adds an adapter: the fake one for tests (TRAMLINE_FAKE_ADAPTER), say. */
