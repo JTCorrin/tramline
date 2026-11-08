@@ -262,7 +262,12 @@ export class DockerRuntime implements ContainerRuntime {
 		let text = '';
 		output.on('data', (chunk: Buffer) => (text += chunk.toString()));
 		this.docker.modem.demuxStream(stream, output, output);
-		await new Promise<void>((resolve) => stream.on('end', () => resolve()));
+		// a stream that closes or fails without ending must not leave the caller waiting forever
+		await new Promise<void>((resolve) => {
+			stream.on('end', () => resolve());
+			stream.on('close', () => resolve());
+			stream.on('error', () => resolve());
+		});
 		const info = await exec.inspect();
 		return { exitCode: info.ExitCode ?? 1, output: text };
 	}

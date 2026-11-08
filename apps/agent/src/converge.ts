@@ -640,17 +640,32 @@ export class Converger {
 			await this.runtime.putFile(name, FIREWALL_CONFIG_PATH, Buffer.from(text), 0o600);
 			this.#firewallApplied = text;
 		}
-		// what it said last, now and then
+		// what it said last, now and then; never in the way of converging
 		if (this.#now() - this.#firewallAsked > 30_000 || this.containment.state === 'starting') {
 			this.#firewallAsked = this.#now();
-			const said = await this.runtime.exec(name, ['cat', FIREWALL_STATUS_PATH]).catch(() => null);
-			try {
-				const status = said?.exitCode === 0 ? (JSON.parse(said.output) as FirewallStatus) : null;
-				if (status) this.containment = { state: status.state, detail: status.detail };
-			} catch {
-				// not written yet
-			}
+			void this.#askFirewall(name);
 		}
+	}
+
+	#asking: Promise<void> | null = null;
+
+	/** Reads the firewall's status file, one read at a time and never for long. */
+	#askFirewall(name: string) {
+		if (this.#asking) return this.#asking;
+		const read = this.runtime.exec(name, ['cat', FIREWALL_STATUS_PATH]);
+		const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000).unref());
+		this.#asking = Promise.race([read, timeout])
+			.then((said) => {
+				try {
+					const status = said?.exitCode === 0 ? (JSON.parse(said.output) as FirewallStatus) : null;
+					if (status) this.containment = { state: status.state, detail: status.detail };
+				} catch {
+					// not written yet
+				}
+			})
+			.catch(() => {})
+			.finally(() => (this.#asking = null));
+		return this.#asking;
 	}
 
 	/**
