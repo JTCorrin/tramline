@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Converger } from './converge';
 import {
 	applyFirewall,
@@ -13,7 +13,8 @@ import {
 	readCounters,
 	fingerprint,
 	runFirewallDaemon,
-	type FirewallConfig
+	type FirewallConfig,
+	type FirewallStatus
 } from './firewall';
 import { LABELS } from './runtime';
 import { desiredContainer, desiredState, FakeRuntime } from './testing';
@@ -135,13 +136,19 @@ function fakeIptables(backend: 'nft' | 'legacy' | null = 'nft') {
 		['INPUT', []]
 	]);
 	const ran: string[] = [];
+	/** Packets per rule, keyed `chain rule`; replacing a chain zeroes them, as iptables does. */
+	const packets = new Map<string, number>();
 	const exec = async (cmd: string, args: string[], input?: string) => {
 		ran.push(`${cmd} ${args.join(' ')}`);
 		if (backend === null || !cmd.startsWith(`iptables-${backend}`)) throw new Error('not found');
 		if (cmd.endsWith('-restore')) {
 			for (const line of input!.split('\n')) {
 				const declared = line.match(/^:(\S+)/);
-				if (declared) chains.set(declared[1]!, []);
+				if (declared) {
+					chains.set(declared[1]!, []);
+					for (const key of packets.keys())
+						if (key.startsWith(`${declared[1]} `)) packets.delete(key);
+				}
 				const rule = line.match(/^-A (\S+) (.*)$/);
 				if (rule) chains.get(rule[1]!)!.push(rule[2]!);
 			}
@@ -150,6 +157,11 @@ function fakeIptables(backend: 'nft' | 'legacy' | null = 'nft') {
 		const [flag, chain, ...rest] = args;
 		const rules = chains.get(chain!);
 		if (!rules) throw new Error(`No chain ${chain}`);
+		if (flag === '-S' && rest[0] === '-v') {
+			return rules
+				.map((r) => `-A ${chain} ${r} -c ${packets.get(`${chain} ${r}`) ?? 0} 0`)
+				.join('\n');
+		}
 		if (flag === '-S') return rules.map((r) => `-A ${chain} ${r}`).join('\n');
 		if (flag === '-C') {
 			if (!rules.includes(rest.join(' '))) throw new Error('Bad rule');
@@ -158,7 +170,12 @@ function fakeIptables(backend: 'nft' | 'legacy' | null = 'nft') {
 		if (flag === '-I') rules.splice(0, 0, rest.slice(1).join(' '));
 		return '';
 	};
-	return { chains, ran, exec };
+	/** Counts packets on the rule in `chain` whose comment names `container`. */
+	const hit = (chain: string, container: string, count: number) => {
+		const rule = chains.get(chain)!.find((r) => r.includes(`c:${container}"`))!;
+		packets.set(`${chain} ${rule}`, (packets.get(`${chain} ${rule}`) ?? 0) + count);
+	};
+	return { chains, ran, exec, hit };
 }
 
 describe('applying the rules', () => {
@@ -184,6 +201,40 @@ describe('applying the rules', () => {
 		const changed = { ...config, workloads: [...config.workloads, '172.19.0.0/16'] };
 		expect(await applyFirewall(changed, 'nft', ipt.exec)).toBe(true);
 		expect(ipt.chains.get('TL-EGRESS')!.some((r) => r.startsWith('-s 172.19.0.0/16'))).toBe(true);
+	});
+
+	it('keeps counting across rule replacements', async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), 'tramline-firewall-'));
+		const file = path.join(dir, 'firewall.json');
+		const statusPath = path.join(dir, 'status.json');
+		const one = { name: 'tl-dep_1-0', ip: '172.18.0.5' };
+		writeFileSync(file, JSON.stringify({ ...config, containers: [one] }));
+		const ipt = fakeIptables();
+		const abort = new AbortController();
+		const daemon = runFirewallDaemon(file, {
+			exec: ipt.exec,
+			intervalMs: 2,
+			statusPath,
+			signal: abort.signal,
+			log: () => {}
+		});
+		const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+		const said = () => JSON.parse(readFileSync(statusPath, 'utf8')) as FirewallStatus;
+		await settle();
+		const generation = said().generation;
+		ipt.hit('TL-METADATA', 'tl-dep_1-0', 5);
+		// another container starts: the rules are replaced, and their counters go back to zero
+		writeFileSync(
+			file,
+			JSON.stringify({ ...config, containers: [one, { name: 'tl-dep_2-0', ip: '172.18.0.6' }] })
+		);
+		await settle();
+		ipt.hit('TL-METADATA', 'tl-dep_1-0', 2);
+		await settle();
+		abort.abort();
+		await daemon;
+		expect(said().counters!['tl-dep_1-0']!.metadata).toBe(7);
+		expect(said().generation).toBe(generation);
 	});
 
 	it('runs as a daemon, and says how it went', async () => {
@@ -318,5 +369,46 @@ describe('the firewall container', () => {
 			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'host', count: 2 },
 			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'scan', count: 900 }
 		]);
+	});
+
+	it('passes on what the firewall container says, for the report', async () => {
+		const runtime = new FakeRuntime();
+		runtime.pulled.add('tramline-agent:test');
+		runtime.execOutput.set(
+			FIREWALL_STATUS_PATH,
+			JSON.stringify({ state: 'unsupported', detail: 'no DOCKER-USER', backend: null, at: '' })
+		);
+		const c = converger(runtime);
+		await c.run(desiredState());
+		await c.settled();
+		expect(c.containment).toEqual({ state: 'unsupported', detail: 'no DOCKER-USER' });
+	});
+
+	it('keeps converging when the firewall fails, or never answers', async () => {
+		vi.useFakeTimers();
+		try {
+			const runtime = new FakeRuntime();
+			runtime.failPull.set('tramline-agent:test', 'manifest unknown');
+			const logged: string[] = [];
+			const c = new Converger(runtime, {
+				nodeId: 'node_1',
+				log: (m) => logged.push(m),
+				firewall: { image: 'tramline-agent:test' }
+			});
+			await c.run(desiredState());
+			expect(logged.filter((m) => m.startsWith('containment failed'))).toHaveLength(2);
+			// the service still started
+			expect(runtime.containers.has('tl-dep_1-0')).toBe(true);
+
+			runtime.failPull.clear();
+			runtime.exec = () => new Promise(() => {});
+			await c.run({ ...desiredState(), revision: 'r2' });
+			const read = c.settled();
+			await vi.advanceTimersByTimeAsync(5_000);
+			await read;
+			expect(c.containment.state).toBe('starting');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

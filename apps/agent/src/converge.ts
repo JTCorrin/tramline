@@ -673,6 +673,11 @@ export class Converger {
 
 	#asking: Promise<void> | null = null;
 
+	/** Waits for a status read in progress (tests). */
+	settled() {
+		return this.#asking ?? Promise.resolve();
+	}
+
 	/** Reads the firewall's status file, one read at a time and never for long. */
 	#askFirewall(name: string, deployments: Map<string, string>) {
 		if (this.#asking) return this.#asking;
@@ -694,11 +699,6 @@ export class Converger {
 			.catch(() => {})
 			.finally(() => (this.#asking = null));
 		return this.#asking;
-	}
-
-	/** Waits for a status read in progress (tests). */
-	settled() {
-		return this.#asking ?? Promise.resolve();
 	}
 
 	/**
