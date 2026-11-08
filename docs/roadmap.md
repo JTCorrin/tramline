@@ -687,8 +687,14 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 **7d: GPU nodes**
 
-- **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
-- **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
+- **GPU scheduling ✅** (unit-tested; not yet run on a real GPU):
+  - **Agent:** it reads the NVIDIA GPUs from the driver, and reports whether Docker has the NVIDIA runtime (`Runtimes.nvidia`); GPUs without it aren't used. A container gets exactly its GPUs, as a `DeviceRequest` by index (what `docker run --gpus device=0,1` does). Containers without GPUs don't carry the field, so their spec hash, and the container, stay as they were.
+  - **Services:** Settings → Deploy asks for GPUs per replica: a count, part of a model name (case-insensitive, so `a100` matches `NVIDIA A100-SXM4-80GB`) and a minimum memory per GPU. Memory unknown to Tramline never counts as enough.
+  - **Placement:** only nodes with that many matching GPUs free take the service. Each replica is given its own GPUs, recorded on the deployment (`replicaGpus`) so they stay put. Work that needs no GPU keeps off GPU nodes while others have room. A deployment that can't be placed says what it waits for, including a node whose GPUs Docker can't use.
+  - **Redeploys:** a new deployment takes unheld GPUs first, so with GPUs to spare it swaps with no downtime. When it can only get GPUs the old deployment holds (one GPU, say), the old one stops first, as with volumes.
+  - **GPU memory:** the driver doesn't say how much a GPU has, so machines Tramline creates keep their size's GPUs (model, count, memory) from the provider; machines enrolled by hand have unknown memory.
+  - **Pools:** a pool keeps its size's GPUs, and a GPU pool grows only for queued work whose request its size can meet. Its machines are cost-confirmed, capped and shut down when idle like any pool's.
+  - **Later:** GPU memory from the hardware (NVML), sharing a GPU (MIG or time-slicing), AMD GPUs, and spot machines with checkpoints.
 - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
 - **Lambda** (`@tramline/adapter-lambda`, guide in `docs/adapters/lambda.md`; unit-tested, not yet run against a real account):
   - **Account:** an API key, sent as a bearer token. Requests that hit Lambda's rate limit (one a second, one launch every 12 seconds) are retried after the wait it asks for.

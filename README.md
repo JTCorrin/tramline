@@ -417,6 +417,12 @@ More: [docs/adapters/lambda.md](docs/adapters/lambda.md)
 
 On **Nodes → Node pools**, click **New pool** and pick a compute account, a region and a size, with a minimum and a maximum. When a deployment has nowhere to run, the pool creates a machine for it; once a machine has run nothing for 15 minutes, it's destroyed. A pool can serve every environment or just one, and a monthly cap keeps it from growing past what you want to spend. Tramline shows the cost and asks before a pool can grow.
 
+## Run on GPUs
+
+In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.
+
+GPUs come from a node with NVIDIA GPUs and the NVIDIA container toolkit, such as a [Lambda](#add-machines) instance. The Nodes page shows each node's GPUs and how many are in use, and warns when a node has GPUs Docker can't use. A node pool with a GPU size grows only for work that asks for its GPUs, so a busy CPU service never starts an expensive machine.
+
 ## Update a node's agent
 
 On **Nodes**, click **Update agent**. The agent pulls the latest image and, if there's a newer one, restarts on it. Deployments keep running, and the node shows how it went.

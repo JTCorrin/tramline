@@ -107,8 +107,20 @@
 		}
 	}
 
+	/** GPU machines, and anything dear, cost real money while they run: say how much first. */
+	const DEAR_HOURLY = 0.25;
+	function confirmCost() {
+		const chosen = offers.find((o) => o.id === offer);
+		if (!chosen?.hourly || (!chosen.gpu && chosen.hourly < DEAR_HOURLY)) return true;
+		const monthly = Math.round(chosen.hourly * 730);
+		return confirm(
+			`${chosen.name} costs $${chosen.hourly.toFixed(2)} an hour (about $${monthly.toLocaleString()} a month) for as long as it runs, whether or not anything uses it. Create it?`
+		);
+	}
+
 	async function add(event: SubmitEvent) {
 		event.preventDefault();
+		if (source !== MANUAL && !confirmCost()) return;
 		busy = true;
 		try {
 			if (source === MANUAL) {

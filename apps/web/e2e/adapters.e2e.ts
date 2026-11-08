@@ -34,7 +34,15 @@ test('connect a compute account, test it, and create a machine with it', async (
 	await expect(add.getByRole('combobox', { name: 'Region' })).toHaveText('Fake Region 1');
 	await add.getByRole('combobox', { name: 'Size' }).click();
 	await page.getByRole('option', { name: /GPU · 8 vCPU · 64 GB · 1× NVIDIA L4/ }).click();
+	// a GPU machine says what it costs before it's made
+	const asked = new Promise<string>((resolve) =>
+		page.once('dialog', (dialog) => {
+			resolve(dialog.message());
+			void dialog.accept();
+		})
+	);
 	await add.getByRole('button', { name: 'Create machine' }).click();
+	expect(await asked).toContain('costs $0.80 an hour (about $584 a month)');
 	const pending = add.getByTestId('provisioning-node').filter({ hasText: 'gpu-e2e' });
 	await expect(pending).toContainText('Waiting to enroll');
 	await expect(pending).toContainText('Fake lab · gpu');
