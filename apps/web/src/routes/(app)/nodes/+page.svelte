@@ -311,6 +311,12 @@
 						)}{/if}
 				</div>
 				{#if node.error}<p class="mt-1 text-xs text-red-400">{node.error}</p>{/if}
+				{#if node.status === 'online' && node.containment && node.containment.state !== 'active' && node.containment.state !== 'starting'}
+					<p class="mt-1 text-xs text-amber-600 dark:text-amber-400" data-testid="not-contained">
+						Service containers here aren't contained, so they can reach the LAN, the mesh and the
+						node itself. {node.containment.detail ?? ''}
+					</p>
+				{/if}
 				{#if node.gpus.length && !node.gpuRuntime && node.status === 'online'}
 					<p class="mt-1 text-xs text-amber-600 dark:text-amber-400" data-testid="no-gpu-runtime">
 						This node has GPUs, but Docker can't hand them to containers, so no GPU work runs here.

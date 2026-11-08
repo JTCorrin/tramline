@@ -200,7 +200,8 @@ export function buildDesiredState(
 					readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
 					volumes,
 					tls: null,
-					...gpusFor(dep, 0)
+					...gpusFor(dep, 0),
+					...privateFor(config)
 				});
 			}
 			continue;
@@ -227,7 +228,8 @@ export function buildDesiredState(
 				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
 				volumes,
 				tls,
-				...gpusFor(dep, replica)
+				...gpusFor(dep, replica),
+				...privateFor(config)
 			});
 		}
 
@@ -321,4 +323,15 @@ export function buildDesiredState(
 const gpusFor = (dep: { replicaGpus: string[][] | null }, replica: number) => {
 	const gpus = dep.replicaGpus?.[replica];
 	return gpus?.length ? { gpus } : {};
+};
+
+/**
+ * The private ranges a service may reach past containment, as plain blocks;
+ * only when it has some, so other containers' spec hashes don't change.
+ */
+const privateFor = (config: { networking: { privateNetworks?: string[] } }) => {
+	const ranges = (config.networking.privateNetworks ?? []).map((r) =>
+		r.includes('/') ? r : `${r}/32`
+	);
+	return ranges.length ? { privateNetworks: ranges } : {};
 };

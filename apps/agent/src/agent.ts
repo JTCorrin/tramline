@@ -57,6 +57,8 @@ export interface AgentOptions {
 	 * pair is created in the state directory.
 	 */
 	mesh?: { image: string; endpoint: string | null };
+	/** The image the firewall container runs, which contains service containers; absent turns it off. */
+	firewall?: { image: string };
 	/** Updates the agent when the control plane asks; absent where it can't (outside a container). */
 	selfUpdate?: SelfUpdater;
 }
@@ -120,6 +122,7 @@ export class Agent {
 		this.converger = new Converger(options.runtime, {
 			log: this.#log,
 			agentImage: options.mesh?.image,
+			firewall: options.firewall,
 			certificates: (id, names) => serviceCertificate(options.stateDir, id, names),
 			mesh: options.mesh && keys ? { ...options.mesh, privateKey: keys.privateKey } : undefined
 		});
@@ -482,7 +485,8 @@ export class Agent {
 			agentUpdate: this.options.selfUpdate?.report ?? null,
 			volumes,
 			revision: desired?.revision ?? null,
-			dockerError: this.dockerError
+			dockerError: this.dockerError,
+			containment: this.converger.containment
 		});
 	}
 }

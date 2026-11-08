@@ -27,6 +27,12 @@ if (process.argv[2] === 'mesh') {
 	await runMeshDaemon(MESH_CONFIG_PATH);
 }
 
+// the firewall container runs this same program in firewall mode
+if (process.argv[2] === 'firewall') {
+	const { runFirewallDaemon, FIREWALL_CONFIG_PATH } = await import('./firewall');
+	await runFirewallDaemon(FIREWALL_CONFIG_PATH);
+}
+
 // the helper that swaps in a newer agent runs this same program in update mode
 if (process.argv[2] === 'update') {
 	try {
@@ -101,6 +107,11 @@ const agent = new Agent({
 					image: self?.id ?? process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE,
 					endpoint: process.env.TRAMLINE_MESH_ENDPOINT || null
 				},
+	// TRAMLINE_CONTAINMENT=off leaves service containers able to reach the LAN, the mesh and the host
+	firewall:
+		process.env.TRAMLINE_CONTAINMENT === 'off'
+			? undefined
+			: { image: self?.id ?? process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE },
 	selfUpdate: self ? new SelfUpdater(runtime, { stateDir, image: self }) : undefined
 });
 

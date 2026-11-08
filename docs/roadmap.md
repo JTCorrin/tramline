@@ -718,7 +718,8 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 
 What a hostile workload tries, from a published account of one on another platform: it took credentials from inside its own container and asked the platform for every secret, tried the cloud metadata endpoint, asked what the stolen credentials could do, guessed internal names of databases and caches, and port-scanned the internal network (all 65,536 addresses, twice). That was about 24 scripted commands in 15 minutes; the app itself never ran. Tramline should block each step, and record it so the owner can see it happened.
 
-- **Containment (blocks every step above):**
+- **Containment ✅** (unit-tested, with an end-to-end test against real Docker): the firewall container, its rules and what they allow are in SECURITY.md under Containment. Still to do: logging name guesses, which comes with detection.
+- **Containment (as planned):**
   - **Metadata endpoint:** the agent drops traffic from service containers to `169.254.169.254` (and `fd00:ec2::254`), in `DOCKER-USER`. Today a GCP node has no service account, so there are no cloud credentials to steal. The cloud-init user data does carry the join token, but that token is single-use, expires, and is spent at boot. The block makes this safe by design rather than by luck.
   - **No platform credentials in a workload:** service containers never get an agent token, the Docker socket or a Tramline API token unless the user adds one as a variable, and no route on the agent or the web app trusts a request just because it comes from a container or mesh address.
   - **Egress policy:** by default, a container reaches its own environment's network, the internet and the services it references. It can't reach the node's LAN, the mesh range, other environments or the host's ports. Private ranges can be opened per service.

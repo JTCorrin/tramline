@@ -1,0 +1,1 @@
+ALTER TABLE `node` ADD `containment` text;

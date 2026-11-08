@@ -231,6 +231,16 @@ export class DockerRuntime implements ContainerRuntime {
 		await this.docker.getNetwork(network).connect({ Container: container });
 	}
 
+	async networkSubnet(name: string) {
+		try {
+			const info = await this.docker.getNetwork(name).inspect();
+			const configs = (info.IPAM?.Config ?? []) as { Subnet?: string }[];
+			return configs.map((c) => c.Subnet).find((s) => s && !s.includes(':')) ?? null;
+		} catch {
+			return null;
+		}
+	}
+
 	async addresses(container: string) {
 		const info = await this.docker.getContainer(container).inspect();
 		return Object.fromEntries(

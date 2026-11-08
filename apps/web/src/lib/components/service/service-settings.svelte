@@ -547,6 +547,26 @@
 				{/if}
 			</div>
 		{/if}
+		<Setting
+			label="Private networks"
+			for="private-networks"
+			staged={staged('networking', 'privateNetworks')}
+			description="Containers can't reach your LAN, the mesh, other environments or the node itself. List the private addresses or blocks this service may reach, e.g. a NAS, separated by commas. The cloud metadata endpoint never opens."
+		>
+			<CommitInput
+				id="private-networks"
+				mono
+				placeholder="None"
+				value={(config.networking.privateNetworks ?? []).join(', ') || null}
+				onsave={(v) =>
+					stage('networking', {
+						privateNetworks: (v ?? '')
+							.split(/[\s,]+/)
+							.map((entry) => entry.trim())
+							.filter(Boolean)
+					})}
+			/>
+		</Setting>
 		{@render networking?.()}
 	</section>
 

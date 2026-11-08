@@ -13,8 +13,9 @@ RUN pnpm --filter @tramline/agent bundle
 
 FROM node:24-alpine
 # tini forwards signals, so the agent shuts down cleanly on `docker stop`; the same
-# image runs each node's mesh container (`mesh`), which needs ip and wg
-RUN apk add --no-cache tini iproute2 wireguard-tools-wg \
+# image runs each node's mesh container (`mesh`), which needs ip and wg, and its
+# firewall container (`firewall`), which needs iptables in whichever flavour Docker uses
+RUN apk add --no-cache tini iproute2 wireguard-tools-wg iptables iptables-legacy \
 	&& mkdir -p /etc/tramline
 COPY --from=build /src/apps/agent/dist/agent.mjs /opt/tramline/agent.mjs
 # the commit it was built from, which the Nodes page shows (CI passes it; else 0.1.0)
