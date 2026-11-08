@@ -539,6 +539,8 @@ export function azureAdapter(options: ClientOptions = {}) {
 								{ id: id(api, path.nic), properties: { primary: true, deleteOption: 'Delete' } }
 							]
 						},
+						// the serial log, in the portal under Boot diagnostics; managed storage, so free
+						diagnosticsProfile: { bootDiagnostics: { enabled: true } },
 						securityProfile: {
 							securityType: 'TrustedLaunch',
 							uefiSettings: { secureBootEnabled: true, vTpmEnabled: true }
