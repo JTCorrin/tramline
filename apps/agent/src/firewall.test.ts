@@ -294,6 +294,7 @@ describe('the firewall container', () => {
 
 		said('g1', 5, 10);
 		await c.run(desired);
+		await c.settled();
 		// the first look is where counting starts
 		expect(c.takeSecurity()).toEqual([]);
 		expect(c.containment.state).toBe('active');
@@ -301,6 +302,7 @@ describe('the firewall container', () => {
 		clock += 60_000;
 		said('g1', 8, 20);
 		await c.run({ ...desired, revision: 'r2' });
+		await c.settled();
 		expect(c.takeSecurity()).toEqual([
 			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'metadata', count: 3 }
 		]);
@@ -310,6 +312,7 @@ describe('the firewall container', () => {
 		clock += 60_000;
 		said('g2', 1, 900);
 		await c.run({ ...desired, revision: 'r3' });
+		await c.settled();
 		expect(c.takeSecurity()).toEqual([
 			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'metadata', count: 1 },
 			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'host', count: 2 },

@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import {
 	ALL_NODES_ONLINE,
 	createProject,
@@ -37,16 +38,25 @@ async function addService(
 
 test("a service container can't reach the metadata endpoint, the host or the LAN, but reaches its own environment", async ({
 	page
-}) => {
+}, testInfo) => {
 	await signUp(page);
 	await createProject(page, 'Contained');
 	await expect(page.getByTestId('node-status')).toHaveText(ALL_NODES_ONLINE, { timeout: 30_000 });
 	const env = await currentEnvironment(page);
 	const projectId = new URL(page.url()).pathname.split('/').at(-1)!;
 
-	await addService(page, projectId, env, 'traefik/whoami', { networking: { port: 80 } });
+	// pinned to this machine, so the two-node test's node doesn't take them
+	const nodes = (await (await page.request.get('/api/v1/nodes')).json()) as {
+		id: string;
+		name: string;
+	}[];
+	const local = nodes.find((n) => n.name === 'local')!.id;
+	await addService(page, projectId, env, 'traefik/whoami', {
+		networking: { port: 80 },
+		deploy: { node: local }
+	});
 	const probe = await addService(page, projectId, env, PROBE, {
-		deploy: { startCommand: 'sleep 3600' }
+		deploy: { startCommand: 'sleep 3600', node: local }
 	});
 	const deployed = await page.request.post(`/api/v1/environments/${env}/deploy`, { data: {} });
 	expect(deployed.ok(), await deployed.text()).toBe(true);
@@ -97,31 +107,61 @@ test("a service container can't reach the metadata endpoint, the host or the LAN
 	// nor anywhere on a private network
 	expect(fetchFrom('http://10.255.255.1/')).not.toContain('HTTP/');
 
-	// and each attempt shows on the service, with an alert
-	await expect
-		.poll(
-			async () => {
-				const events = (await (
-					await page.request.get(`/api/v1/services/${probe.id}/security?environmentId=${env}`)
-				).json()) as { kind: string }[];
-				return [...new Set(events.map((e) => e.kind))].sort();
-			},
-			{ timeout: 90_000 }
-		)
-		.toEqual(['host', 'metadata', 'private']);
-	await expect
-		.poll(
-			async () => {
-				const alerts = (await (await page.request.get('/api/v1/alerts')).json()) as {
-					kind: string;
-					serviceId: string | null;
-					resolvedAt: string | null;
-				}[];
-				return alerts.some(
-					(a) => a.kind === 'service_security' && a.serviceId === probe.id && !a.resolvedAt
-				);
-			},
-			{ timeout: 90_000 }
-		)
-		.toBe(true);
+	// and each attempt shows on the service, with an alert; if not, what the firewall counted
+	const firewall = `tramline-firewall-${local}`;
+	const inFirewall = (command: string) => {
+		try {
+			return execFileSync('docker', ['exec', firewall, 'sh', '-c', command], { encoding: 'utf8' });
+		} catch (error) {
+			return String(error);
+		}
+	};
+	try {
+		await expect
+			.poll(
+				async () => {
+					const events = (await (
+						await page.request.get(`/api/v1/services/${probe.id}/security?environmentId=${env}`)
+					).json()) as { kind: string }[];
+					return [...new Set(events.map((e) => e.kind))].sort();
+				},
+				{ timeout: 90_000 }
+			)
+			.toEqual(['host', 'metadata', 'private']);
+		await expect
+			.poll(
+				async () => {
+					const alerts = (await (await page.request.get('/api/v1/alerts')).json()) as {
+						kind: string;
+						serviceId: string | null;
+						resolvedAt: string | null;
+					}[];
+					return alerts.some(
+						(a) => a.kind === 'service_security' && a.serviceId === probe.id && !a.resolvedAt
+					);
+				},
+				{ timeout: 90_000 }
+			)
+			.toBe(true);
+	} catch (error) {
+		const report = [
+			'== status',
+			inFirewall('cat /run/tramline/firewall-status.json'),
+			'== TL-METADATA',
+			inFirewall('iptables-nft -S TL-METADATA -v || iptables-legacy -S TL-METADATA -v'),
+			'== TL-HOST',
+			inFirewall('iptables-nft -S TL-HOST -v || iptables-legacy -S TL-HOST -v'),
+			'== firewall logs',
+			(() => {
+				try {
+					return execFileSync('docker', ['logs', '--tail', '20', firewall], { encoding: 'utf8' });
+				} catch (e) {
+					return String(e);
+				}
+			})()
+		].join('\n');
+		await testInfo.attach('firewall-counters', { body: report, contentType: 'text/plain' });
+		console.log(report);
+		throw error;
+	}
 });
