@@ -656,6 +656,12 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Placement:** the region's first availability zone with room, trying the next when one is out of capacity.
   - **Mesh:** a `tramline-mesh` security group allowing UDP 51820, and each instance offers its public address from the metadata service as its mesh endpoint.
   - **Safety:** instances and volumes carry the `tramline` tag, and only tagged instances are listed or terminated. The policy in the guide limits termination to tagged instances too.
+- **Hetzner** (`@tramline/adapter-hetzner`, guide in `docs/adapters/hetzner.md`; unit-tested against a fake API, not yet verified on a real account):
+  - **Account:** a project API token with Read & Write, sent as a bearer token with plain `fetch`, with no Hetzner SDK.
+  - **Machines:** Ubuntu 24.04 servers (the x86 or Arm build, to match the size) with cloud-init user data, the `tramline=node` label, no IPv6, and a throwaway SSH key so Hetzner makes no root password. Sizes: each location's current server types up to 16 vCPUs, x86 and Arm, with their net hourly price there.
+  - **The address first:** a Primary IPv4 is made before the server and deleted with it, so cloud-init offers it as the mesh endpoint without a metadata lookup.
+  - **Mesh:** one `tramline-mesh` firewall per project, allowing only UDP 51820 in, applied to every server. Edge nodes also get `tramline-edge`, for TCP 80 and 443.
+  - **Safety:** only labelled servers are listed or deleted, it won't use a firewall or SSH key with its names that it didn't make, and a failed create removes what it made.
 - **Public access** (done first, so cloud machines can reach an install at home): the Nodes page shows where new nodes connect, and can set up a **Cloudflare tunnel** from an API token (Cloudflare Tunnel: Edit, DNS: Edit on one domain).
   - **What it creates:** a tunnel, its routes and a proxied DNS name, all through Cloudflare's API; anything that fails part-way is removed again. Removing it deletes both in Cloudflare (or forgets them, if Cloudflare can't be reached).
   - **What it carries:** only `/api/agent/` and `/install.sh`, so the dashboard stays private. Everything else on that hostname is a 404.
