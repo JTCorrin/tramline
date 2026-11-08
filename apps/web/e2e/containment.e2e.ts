@@ -25,13 +25,13 @@ async function addService(
 	const created = await page.request.post('/api/v1/services', {
 		data: { projectId, kind: 'image', source: { type: 'image', image } }
 	});
-	expect(created.ok()).toBe(true);
+	expect(created.ok(), await created.text()).toBe(true);
 	const service = (await created.json()) as { id: string; name: string };
 	const staged = await page.request.patch(
 		`/api/v1/services/${service.id}/config?environmentId=${environmentId}`,
 		{ data: { build: { scan: 'off' }, ...patch } }
 	);
-	expect(staged.ok()).toBe(true);
+	expect(staged.ok(), await staged.text()).toBe(true);
 	return service;
 }
 
@@ -46,7 +46,8 @@ test("a service container can't reach the metadata endpoint, the host or the LAN
 
 	await addService(page, projectId, env, 'traefik/whoami', { networking: { port: 80 } });
 	await addService(page, projectId, env, PROBE, { deploy: { startCommand: 'sleep 3600' } });
-	expect((await page.request.post(`/api/v1/environments/${env}/deploy`)).ok()).toBe(true);
+	const deployed = await page.request.post(`/api/v1/environments/${env}/deploy`, { data: {} });
+	expect(deployed.ok(), await deployed.text()).toBe(true);
 	await expect(page.getByTestId('service-node').filter({ hasText: 'busybox' })).toContainText(
 		'Online',
 		{ timeout: 540_000 }
