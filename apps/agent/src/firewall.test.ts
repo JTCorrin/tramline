@@ -1,12 +1,13 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Converger } from './converge';
 import {
 	applyFirewall,
 	detectBackend,
 	FIREWALL_CONFIG_PATH,
+	FIREWALL_STATUS_PATH,
 	firewallName,
 	firewallRules,
 	fingerprint,
@@ -223,5 +224,46 @@ describe('the firewall container', () => {
 		await c.run(desiredState());
 		expect(c.containment.state).toBe('off');
 		expect(runtime.containers.has(firewallName('node_1'))).toBe(false);
+	});
+
+	it('passes on what the firewall container says, for the report', async () => {
+		const runtime = new FakeRuntime();
+		runtime.pulled.add('tramline-agent:test');
+		runtime.execOutput.set(
+			FIREWALL_STATUS_PATH,
+			JSON.stringify({ state: 'unsupported', detail: 'no DOCKER-USER', backend: null, at: '' })
+		);
+		const c = converger(runtime);
+		await c.run(desiredState());
+		await c.settled();
+		expect(c.containment).toEqual({ state: 'unsupported', detail: 'no DOCKER-USER' });
+	});
+
+	it('keeps converging when the firewall fails, or never answers', async () => {
+		vi.useFakeTimers();
+		try {
+			const runtime = new FakeRuntime();
+			runtime.failPull.set('tramline-agent:test', 'manifest unknown');
+			const logged: string[] = [];
+			const c = new Converger(runtime, {
+				nodeId: 'node_1',
+				log: (m) => logged.push(m),
+				firewall: { image: 'tramline-agent:test' }
+			});
+			await c.run(desiredState());
+			expect(logged.filter((m) => m.startsWith('containment failed'))).toHaveLength(2);
+			// the service still started
+			expect(runtime.containers.has('tl-dep_1-0')).toBe(true);
+
+			runtime.failPull.clear();
+			runtime.exec = () => new Promise(() => {});
+			await c.run({ ...desiredState(), revision: 'r2' });
+			const read = c.settled();
+			await vi.advanceTimersByTimeAsync(5_000);
+			await read;
+			expect(c.containment.state).toBe('starting');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

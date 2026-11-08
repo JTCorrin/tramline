@@ -114,9 +114,11 @@ export class FakeRuntime implements ContainerRuntime {
 		const c = this.containers.get(container);
 		return Object.fromEntries((c?.networks ?? []).map((n, i) => [n, `172.30.${i}.2`]));
 	}
+	/** What an exec prints, by the command's last argument (e.g. a file `cat` reads). */
+	execOutput = new Map<string, string>();
 	async exec(container: string, cmd: string[]) {
 		this.#guard(`exec ${container} ${cmd.at(-1)}`);
-		return { exitCode: this.execExit, output: '' };
+		return { exitCode: this.execExit, output: this.execOutput.get(cmd.at(-1)!) ?? '' };
 	}
 	async execStream(container: string, cmd: string[], options: ExecStreamOptions) {
 		this.#guard(`exec ${container} ${cmd[0]}`);
