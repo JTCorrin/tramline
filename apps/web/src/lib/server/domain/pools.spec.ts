@@ -294,6 +294,44 @@ describe('node pools', () => {
 	});
 });
 
+describe('GPU pools', () => {
+	it('grows only for work that needs its GPUs, and the machine knows their memory', async () => {
+		const { ctx, account, project, env } = setup();
+		const pool = await createPool(ctx, account.id, { name: 'gpu', offer: 'gpu', maxNodes: 1 });
+		expect(pool.offer.gpu).toEqual({ model: 'NVIDIA L4', count: 1, vramGb: 24 });
+
+		// too big for the local node, but needs no GPU: a GPU machine isn't added for it
+		deploy(ctx, project.id, env.id);
+		await scale(ctx, later(20));
+		expect(created).toHaveLength(0);
+
+		// more GPUs than the size has
+		deploy(ctx, project.id, env.id, {
+			deploy: { memoryMb: 2048, gpus: { count: 2, model: null, minVramGb: null } }
+		});
+		await scale(ctx, later(40));
+		expect(created).toHaveLength(0);
+
+		const { row } = deploy(ctx, project.id, env.id, {
+			deploy: { memoryMb: 2048, gpus: { count: 1, model: 'L4', minVramGb: 16 } }
+		});
+		expect(row().message).toBe('Waiting for a node with 1 L4 GPU with 16 GB');
+		await scale(ctx, later(60));
+		expect(created).toHaveLength(1);
+
+		const joined = join(ctx.db, created[0]!.install.token, {
+			...hello(65_536),
+			gpus: [{ model: 'NVIDIA L4', vramMb: null }],
+			gpuRuntime: true
+		});
+		recordReport(ctx.db, joined.nodeId, { containers: [], revision: null });
+		const machine = ctx.db.select().from(node).where(eq(node.id, joined.nodeId)).get()!;
+		expect(machine.offerGpu).toEqual({ model: 'NVIDIA L4', count: 1, vramGb: 24 });
+		reconcile(ctx.db, ctx.settings);
+		expect(row()).toMatchObject({ nodeId: machine.id, replicaGpus: [['0']] });
+	});
+});
+
 describe('leftover machines', () => {
 	it('lists tagged machines no node accounts for, and destroys only those', async () => {
 		const { ctx, account, project, env } = setup();

@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { detectGpus } from './gpus';
+import { LABELS } from './runtime';
+import { toRunSpec } from './spec';
+import { desiredContainer } from './testing';
 
 describe('detectGpus', () => {
 	it('reads each GPU the NVIDIA driver describes', async () => {
@@ -27,5 +30,21 @@ describe('detectGpus', () => {
 
 	it('finds none without the driver', async () => {
 		expect(await detectGpus('/nonexistent/nvidia')).toEqual([]);
+	});
+});
+
+describe('GPUs for containers', () => {
+	it('hands a replica exactly its GPUs', () => {
+		expect(toRunSpec(desiredContainer({ gpus: ['0', '2'] }), 'node_1').gpus).toEqual(['0', '2']);
+	});
+
+	it('leaves containers without GPUs as they were, spec hash included', () => {
+		const spec = toRunSpec(desiredContainer(), 'node_1');
+		expect(spec.gpus).toBeUndefined();
+		// the hash of a container from before GPUs existed
+		expect(spec.labels[LABELS.spec]).toBe(
+			toRunSpec(desiredContainer({ gpus: undefined }), 'node_1').labels[LABELS.spec]
+		);
+		expect(JSON.stringify(desiredContainer())).not.toContain('gpus');
 	});
 });

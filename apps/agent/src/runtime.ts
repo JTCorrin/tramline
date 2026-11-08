@@ -4,6 +4,8 @@
  */
 export interface ContainerRuntime {
 	version(): Promise<string>;
+	/** Docker has the NVIDIA runtime, so containers can be given GPUs. */
+	gpuRuntime(): Promise<boolean>;
 	ensureNetwork(name: string): Promise<void>;
 	/** Containers carrying the `tramline.managed` label. */
 	list(): Promise<ManagedContainer[]>;
@@ -105,6 +107,8 @@ export interface RunSpec {
 	autoRemove?: boolean;
 	/** Named Docker volumes. */
 	volumes?: { name: string; target: string; readOnly?: boolean }[];
+	/** NVIDIA GPUs (by index) the container gets, through the container toolkit. */
+	gpus?: string[];
 	security: SecurityOptions;
 }
 

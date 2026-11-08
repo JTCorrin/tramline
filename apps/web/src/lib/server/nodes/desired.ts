@@ -154,7 +154,7 @@ export function buildDesiredState(
 		// a built image, or the configured one
 		const image = dep.image ?? (config.source?.type === 'image' ? config.source.image : null);
 		if (!image) continue;
-		// volume services: the old deployment stops before the new one starts
+		// volume services (and GPU ones short of GPUs): the old deployment stops before the new one starts
 		if (recreate.stopped.has(dep.id) || recreate.waiting.has(dep.id)) continue;
 		const mountPath = config.volume.mountPath;
 		const vol = mountPath ? volumeFor(db, dep.serviceId, dep.environmentId) : undefined;
@@ -199,7 +199,8 @@ export function buildDesiredState(
 					memoryMb: config.deploy.memoryMb,
 					readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
 					volumes,
-					tls: null
+					tls: null,
+					...gpusFor(dep, 0)
 				});
 			}
 			continue;
@@ -225,7 +226,8 @@ export function buildDesiredState(
 				memoryMb: config.deploy.memoryMb,
 				readOnlyRootFilesystem: config.deploy.readOnlyRootFilesystem,
 				volumes,
-				tls
+				tls,
+				...gpusFor(dep, replica)
 			});
 		}
 
@@ -314,3 +316,9 @@ export function buildDesiredState(
 	const revision = createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16);
 	return { revision, ...document };
 }
+
+/** A replica's GPUs, only when it has some, so other containers' spec hashes don't change. */
+const gpusFor = (dep: { replicaGpus: string[][] | null }, replica: number) => {
+	const gpus = dep.replicaGpus?.[replica];
+	return gpus?.length ? { gpus } : {};
+};
