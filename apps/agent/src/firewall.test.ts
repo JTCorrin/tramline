@@ -7,8 +7,10 @@ import {
 	applyFirewall,
 	detectBackend,
 	FIREWALL_CONFIG_PATH,
+	FIREWALL_STATUS_PATH,
 	firewallName,
 	firewallRules,
+	readCounters,
 	fingerprint,
 	runFirewallDaemon,
 	type FirewallConfig
@@ -41,36 +43,77 @@ describe('firewall rules', () => {
 		expect(out[1]).toBe('-m conntrack --ctstate DNAT -j RETURN');
 		expect(out[2]).toBe('-s 172.18.0.2 -j RETURN');
 		// metadata is dropped before any opening, for builds too
-		expect(at('-s 172.18.0.0/16 -d 169.254.169.254/32 -j DROP')).toBeLessThan(
+		expect(at('-s 172.18.0.0/16 -d 169.254.169.254/32 -j TL-METADATA')).toBeLessThan(
 			at('-s 172.18.0.5 -d 192.168.1.20/32 -j RETURN')
 		);
-		expect(out).toContain('-s 172.17.0.0/16 -d 169.254.169.254/32 -j DROP');
-		expect(out).toContain('-s 172.18.0.0/16 -d 168.63.129.16/32 -j DROP');
+		expect(out).toContain('-s 172.17.0.0/16 -d 169.254.169.254/32 -j TL-METADATA');
+		expect(out).toContain('-s 172.18.0.0/16 -d 168.63.129.16/32 -j TL-METADATA');
 		// its own environment and DNS pass; every private range after that is dropped
 		expect(at('-s 172.18.0.0/16 -d 172.18.0.0/16 -j RETURN')).toBeLessThan(
-			at('-s 172.18.0.0/16 -d 172.16.0.0/12 -j DROP')
+			at('-s 172.18.0.0/16 -d 172.16.0.0/12 -j TL-PRIVATE')
 		);
 		expect(out).toContain('-s 172.18.0.0/16 -p udp --dport 53 -j RETURN');
 		for (const range of ['10.0.0.0/8', '192.168.0.0/16', '100.64.0.0/10']) {
-			expect(out).toContain(`-s 172.18.0.0/16 -d ${range} -j DROP`);
+			expect(out).toContain(`-s 172.18.0.0/16 -d ${range} -j TL-PRIVATE`);
 		}
 		// DNS passes before the metadata drops: GCP's resolver is the metadata server, Azure's is
 		// its WireServer address
 		expect(at('-s 172.18.0.0/16 -p udp --dport 53 -j RETURN')).toBeLessThan(
-			at('-s 172.18.0.0/16 -d 169.254.169.254/32 -j DROP')
+			at('-s 172.18.0.0/16 -d 169.254.169.254/32 -j TL-METADATA')
 		);
 		expect(at('-s 172.17.0.0/16 -p udp --dport 53 -j RETURN')).toBeLessThan(
-			at('-s 172.17.0.0/16 -d 168.63.129.16/32 -j DROP')
+			at('-s 172.17.0.0/16 -d 168.63.129.16/32 -j TL-METADATA')
 		);
 		// builds only lose the metadata endpoint (and keep DNS)
-		expect(out.filter((r) => r.startsWith('-s 172.17.0.0/16') && r.endsWith('DROP'))).toHaveLength(
-			2
-		);
+		expect(
+			out.filter((r) => r.startsWith('-s 172.17.0.0/16') && r.includes('-j TL-'))
+		).toHaveLength(2);
 
-		expect(rules).toContain('-A TL-INPUT -s 172.18.0.0/16 -j DROP');
+		expect(rules).toContain('-A TL-INPUT -s 172.18.0.0/16 -j TL-HOST');
 		expect(rules).not.toContain('-A TL-INPUT -s 172.17.0.0/16');
-		expect(rules).toMatch(/^\*filter\n:TL-EGRESS - \[0:0\]\n:TL-INPUT - \[0:0\]\n/);
+		expect(rules).toMatch(/^\*filter\n:TL-EGRESS - \[0:0\]\n:TL-INPUT - \[0:0\]\n:TL-METADATA/);
 		expect(rules.trimEnd().endsWith('COMMIT')).toBe(true);
+	});
+
+	it('counts what each container tried, then drops it', () => {
+		const rules = firewallRules({
+			...config,
+			containers: [
+				{ name: 'tl-dep_1-0', ip: '172.18.0.5' },
+				{ name: 'bad name"; -j ACCEPT', ip: '172.18.0.6' }
+			]
+		});
+		for (const chain of ['TL-METADATA', 'TL-PRIVATE', 'TL-HOST']) {
+			const own = rules.split('\n').filter((l) => l.startsWith(`-A ${chain} `));
+			expect(own).toEqual([
+				`-A ${chain} -s 172.18.0.5 -m comment --comment "c:tl-dep_1-0" -j DROP`,
+				`-A ${chain} -j DROP`
+			]);
+		}
+		// new connections are counted (no target), after DNS and before anything is dropped
+		const out = egress(rules);
+		const counter = out.indexOf(
+			'-s 172.18.0.5 -m conntrack --ctstate NEW -m comment --comment "n:tl-dep_1-0"'
+		);
+		expect(counter).toBeGreaterThan(out.indexOf('-s 172.18.0.0/16 -p tcp --dport 53 -j RETURN'));
+		expect(counter).toBeLessThan(out.findIndex((r) => r.includes('-j TL-METADATA')));
+		expect(rules).not.toContain('ACCEPT');
+	});
+
+	it('reads the counters back by container', async () => {
+		const listed: Record<string, string> = {
+			'TL-METADATA':
+				'-N TL-METADATA\n-A TL-METADATA -s 172.18.0.5/32 -m comment --comment "c:tl-dep_1-0" -c 3 180 -j DROP\n-A TL-METADATA -c 9 540 -j DROP',
+			'TL-PRIVATE':
+				'-A TL-PRIVATE -s 172.18.0.5/32 -m comment --comment c:tl-dep_1-0 -c 7 420 -j DROP',
+			'TL-HOST': '-A TL-HOST -s 172.18.0.5/32 -m comment --comment "c:tl-dep_1-0" -c 0 0 -j DROP',
+			'TL-EGRESS':
+				'-A TL-EGRESS -s 172.18.0.5/32 -m conntrack --ctstate NEW -m comment --comment "n:tl-dep_1-0" -c 42 2520'
+		};
+		const exec = async (_cmd: string, args: string[]) => listed[args[1]!] ?? '';
+		expect(await readCounters('nft', exec)).toEqual({
+			'tl-dep_1-0': { metadata: 3, private: 7, host: 0, connections: 42 }
+		});
 	});
 
 	it('only ever writes plain addresses into a rule', () => {
@@ -81,7 +124,7 @@ describe('firewall rules', () => {
 			allow: [{ source: '172.19.0.4', destinations: ['10.0.0.0/8\n-A INPUT -j ACCEPT'] }]
 		});
 		expect(rules).not.toContain('ACCEPT');
-		expect(rules).toContain('-s 172.19.0.0/16 -d 10.0.0.0/8 -j DROP');
+		expect(rules).toContain('-s 172.19.0.0/16 -d 10.0.0.0/8 -j TL-PRIVATE');
 	});
 });
 
@@ -223,5 +266,54 @@ describe('the firewall container', () => {
 		await c.run(desiredState());
 		expect(c.containment.state).toBe('off');
 		expect(runtime.containers.has(firewallName('node_1'))).toBe(false);
+	});
+
+	it('reports what each container tried since the last look, and scans', async () => {
+		const runtime = new FakeRuntime();
+		runtime.pulled.add('tramline-agent:test');
+		let clock = 1_000_000;
+		const c = new Converger(runtime, {
+			nodeId: 'node_1',
+			log: () => {},
+			now: () => clock,
+			firewall: { image: 'tramline-agent:test' }
+		});
+		const said = (generation: string, metadata: number, connections: number) =>
+			runtime.execOutput.set(
+				FIREWALL_STATUS_PATH,
+				JSON.stringify({
+					state: 'active',
+					detail: null,
+					backend: 'nft',
+					generation,
+					counters: { 'tl-dep_1-0': { metadata, private: 0, host: 2, connections } },
+					at: new Date(clock).toISOString()
+				})
+			);
+		const desired = desiredState();
+
+		said('g1', 5, 10);
+		await c.run(desired);
+		// the first look is where counting starts
+		expect(c.takeSecurity()).toEqual([]);
+		expect(c.containment.state).toBe('active');
+
+		clock += 60_000;
+		said('g1', 8, 20);
+		await c.run({ ...desired, revision: 'r2' });
+		expect(c.takeSecurity()).toEqual([
+			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'metadata', count: 3 }
+		]);
+		expect(c.takeSecurity()).toEqual([]);
+
+		// new rules started the counters again; 900 connections in a minute is a scan
+		clock += 60_000;
+		said('g2', 1, 900);
+		await c.run({ ...desired, revision: 'r3' });
+		expect(c.takeSecurity()).toEqual([
+			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'metadata', count: 1 },
+			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'host', count: 2 },
+			{ container: 'tl-dep_1-0', deploymentId: 'dep_1', kind: 'scan', count: 900 }
+		]);
 	});
 });

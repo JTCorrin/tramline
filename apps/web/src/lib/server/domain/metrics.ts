@@ -1,7 +1,7 @@
-import { MetricRange, type Alert } from '@tramline/contracts';
+import { MetricRange, type Alert, type SecurityEvent } from '@tramline/contracts';
 import { and, desc, eq, gte, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { AppError, notFound } from '../api/errors';
-import { alert, node, project, service } from '../db/schema';
+import { alert, node, project, securityEvent, service } from '../db/schema';
 import { toAlert } from '../metrics/alerts';
 import * as store from '../metrics/store';
 import { requireInstance } from './access';
@@ -23,6 +23,41 @@ export function serviceMetrics(
 ) {
 	requireInstance(ctx, serviceId, environmentId);
 	return store.serviceMetrics(ctx.db, serviceId, environmentId, range(rangeParam));
+}
+
+/**
+ * What a service's containers tried that containment blocked, newest first,
+ * over the last week: for its organization only.
+ */
+export function securityEvents(
+	ctx: Ctx,
+	serviceId: string,
+	environmentId: string,
+	now = Date.now()
+): SecurityEvent[] {
+	requireInstance(ctx, serviceId, environmentId);
+	return ctx.db
+		.select({
+			deploymentId: securityEvent.deploymentId,
+			nodeId: securityEvent.nodeId,
+			nodeName: node.name,
+			kind: securityEvent.kind,
+			count: securityEvent.count,
+			bucket: securityEvent.bucket
+		})
+		.from(securityEvent)
+		.leftJoin(node, eq(node.id, securityEvent.nodeId))
+		.where(
+			and(
+				eq(securityEvent.serviceId, serviceId),
+				eq(securityEvent.environmentId, environmentId),
+				gte(securityEvent.bucket, new Date(now - 7 * 86_400_000))
+			)
+		)
+		.orderBy(desc(securityEvent.bucket))
+		.limit(500)
+		.all()
+		.map(({ bucket, ...e }) => ({ ...e, at: bucket.toISOString() }));
 }
 
 /** Nodes are shared by every organization on the install, and so are their metrics. */

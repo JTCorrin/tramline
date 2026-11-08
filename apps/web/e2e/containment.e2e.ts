@@ -45,7 +45,9 @@ test("a service container can't reach the metadata endpoint, the host or the LAN
 	const projectId = new URL(page.url()).pathname.split('/').at(-1)!;
 
 	await addService(page, projectId, env, 'traefik/whoami', { networking: { port: 80 } });
-	await addService(page, projectId, env, PROBE, { deploy: { startCommand: 'sleep 3600' } });
+	const probe = await addService(page, projectId, env, PROBE, {
+		deploy: { startCommand: 'sleep 3600' }
+	});
 	const deployed = await page.request.post(`/api/v1/environments/${env}/deploy`, { data: {} });
 	expect(deployed.ok(), await deployed.text()).toBe(true);
 	await expect(page.getByTestId('service-node').filter({ hasText: 'busybox' })).toContainText(
@@ -92,4 +94,34 @@ test("a service container can't reach the metadata endpoint, the host or the LAN
 	expect(fetchFrom(`http://${gateway}:4173/`)).not.toContain('HTTP/');
 	// nor another of Docker's networks: the default bridge's gateway is the host too
 	expect(fetchFrom('http://172.17.0.1:4173/')).not.toContain('HTTP/');
+	// nor anywhere on a private network
+	expect(fetchFrom('http://10.255.255.1/')).not.toContain('HTTP/');
+
+	// and each attempt shows on the service, with an alert
+	await expect
+		.poll(
+			async () => {
+				const events = (await (
+					await page.request.get(`/api/v1/services/${probe.id}/security?environmentId=${env}`)
+				).json()) as { kind: string }[];
+				return [...new Set(events.map((e) => e.kind))].sort();
+			},
+			{ timeout: 90_000 }
+		)
+		.toEqual(['host', 'metadata', 'private']);
+	await expect
+		.poll(
+			async () => {
+				const alerts = (await (await page.request.get('/api/v1/alerts')).json()) as {
+					kind: string;
+					serviceId: string | null;
+					resolvedAt: string | null;
+				}[];
+				return alerts.some(
+					(a) => a.kind === 'service_security' && a.serviceId === probe.id && !a.resolvedAt
+				);
+			},
+			{ timeout: 90_000 }
+		)
+		.toBe(true);
 });

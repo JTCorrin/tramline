@@ -5,7 +5,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as changes from '../domain/changes';
 import * as environments from '../domain/environments';
+import * as metrics from '../domain/metrics';
 import * as nodes from '../domain/nodes';
+import { evaluateAlerts, SECURITY_WINDOW_MS } from '../metrics/alerts';
 import * as projects from '../domain/projects';
 import * as services from '../domain/services';
 import { grantInstallAdmin, seedCtx, testSecrets } from '../testing';
@@ -110,5 +112,48 @@ describe('containment', () => {
 		// a report without it keeps what was said last
 		recordReport(ctx.db, local.id, { containers: [], revision: null });
 		expect(summary().containment!.state).toBe('unsupported');
+	});
+
+	it("records what a node's service containers tried, alerts, and resolves once they stop", () => {
+		const { ctx, local, env, add } = setup();
+		const svc = add();
+		const [dep] = changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const tried = (kind: 'metadata' | 'private' | 'host' | 'scan', count: number, id = dep!.id) =>
+			recordReport(ctx.db, local.id, {
+				containers: [],
+				revision: null,
+				security: [{ container: 'tl-x', deploymentId: id, kind, count }]
+			});
+		tried('metadata', 3);
+		tried('metadata', 2);
+		tried('scan', 900);
+		// a node speaks only for its own deployments
+		tried('host', 5, 'dep_elsewhere');
+
+		const events = metrics.securityEvents(ctx, svc.id, env.id);
+		expect(events.map((e) => [e.kind, e.count]).sort()).toEqual([
+			['metadata', 5],
+			['scan', 900]
+		]);
+		expect(events[0]).toMatchObject({ deploymentId: dep!.id, nodeName: 'local' });
+		// another organization sees none of it
+		expect(() => metrics.securityEvents(seedCtx(ctx.db), svc.id, env.id)).toThrow();
+
+		const now = Date.now();
+		const { opened } = evaluateAlerts(ctx.db, now);
+		expect(opened).toEqual([
+			expect.objectContaining({
+				kind: 'service_security',
+				serviceId: svc.id,
+				message: expect.stringMatching(
+					/was blocked: .*5 attempts to reach the cloud metadata endpoint.*opened 900 connections fast enough to be a scan/
+				)
+			})
+		]);
+		expect(evaluateAlerts(ctx.db, now + 60_000).opened).toEqual([]);
+		// quiet for the whole window: resolved
+		const { resolved } = evaluateAlerts(ctx.db, now + SECURITY_WINDOW_MS + 120_000);
+		expect(resolved.map((a) => a.kind)).toEqual(['service_security']);
 	});
 });

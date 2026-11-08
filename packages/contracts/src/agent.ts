@@ -444,6 +444,25 @@ export const Containment = z.object({
 });
 export type Containment = z.infer<typeof Containment>;
 
+/**
+ * What a service container tried that containment blocked: the cloud
+ * metadata endpoint, a private range (the LAN, the mesh, another
+ * environment), the host's own ports; or a scan, opening connections far
+ * faster than an app would.
+ */
+export const SECURITY_KINDS = ['metadata', 'private', 'host', 'scan'] as const;
+export const SecurityKind = z.enum(SECURITY_KINDS);
+export type SecurityKind = z.infer<typeof SecurityKind>;
+
+export const SecurityCount = z.object({
+	container: z.string().max(128),
+	deploymentId: z.string().max(64),
+	kind: SecurityKind,
+	/** Blocked packets; for a scan, new connections. */
+	count: z.number().int().positive()
+});
+export type SecurityCount = z.infer<typeof SecurityCount>;
+
 export const AgentReport = z.object({
 	containers: z.array(ActualContainer),
 	builds: z.array(BuildReport).default([]),
@@ -461,7 +480,9 @@ export const AgentReport = z.object({
 	 * Whether service containers are contained: no metadata endpoint, LAN,
 	 * mesh, other environments or host ports. Absent from older agents.
 	 */
-	containment: Containment.optional()
+	containment: Containment.optional(),
+	/** What service containers tried since the last report. */
+	security: z.array(SecurityCount).max(1000).optional()
 });
 
 export type AgentReport = z.infer<typeof AgentReport>;

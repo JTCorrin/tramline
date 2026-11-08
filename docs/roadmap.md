@@ -724,7 +724,13 @@ What a hostile workload tries, from a published account of one on another platfo
   - **No platform credentials in a workload:** service containers never get an agent token, the Docker socket or a Tramline API token unless the user adds one as a variable, and no route on the agent or the web app trusts a request just because it comes from a container or mesh address.
   - **Egress policy:** by default, a container reaches its own environment's network, the internet and the services it references. It can't reach the node's LAN, the mesh range, other environments or the host's ports. Private ranges can be opened per service.
   - **Names:** only names in the service's own environment resolve to anything. Guessing another environment's `postgres` gets nothing, and the guesses are logged.
-- **Detection (per service and per node, with alerts from 6c.3):**
+- **Detection ✅** (unit-tested, and the e2e test checks each attempt shows up):
+  - **Counting:** the firewall sends each blocked packet through a chain per kind (metadata, private range, host) with a counting rule per service container, and counts each container's new outbound connections. The agent reads the counters every 10 seconds and reports what changed; a container opening 600 or more new connections a minute counts as a scan.
+  - **Recording:** the control plane keeps them per deployment, kind and minute (only for deployments placed on the reporting node), for 30 days.
+  - **Alerts:** a `service_security` alert opens while a service has had blocked attempts or a scan in the last 10 minutes, posts to the alert webhook, and resolves once it has been quiet for 10 minutes.
+  - **Where:** the service's Metrics tab lists what each deployment tried and on which node, with **Stop deployment**.
+  - **Not yet:** name guessing (Docker's embedded DNS logs nothing to count), distinct addresses rather than connection rate for scans, and node-level events such as failed SSH logins.
+- **Detection (as planned):**
   - Blocked connections (metadata, LAN, mesh, other environments), counted per container from firewall log rules.
   - Scans: one container reaching many distinct addresses or ports in a minute.
   - Name guessing: a burst of failed lookups for private names.

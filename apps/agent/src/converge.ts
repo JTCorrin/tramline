@@ -1,4 +1,10 @@
-import type { Containment, DesiredContainer, DesiredState } from '@tramline/contracts';
+import type {
+	Containment,
+	DesiredContainer,
+	DesiredState,
+	SecurityCount,
+	SecurityKind
+} from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
 import {
 	MESH_CONFIG_PATH,
@@ -17,6 +23,7 @@ import {
 	FIREWALL_CONFIG_PATH,
 	FIREWALL_STATUS_PATH,
 	firewallName,
+	type ContainerCounters,
 	type FirewallConfig,
 	type FirewallStatus
 } from './firewall';
@@ -46,6 +53,12 @@ export interface ConvergeOptions {
 }
 
 export const DEFAULT_DRAIN_MS = 10_000;
+
+/**
+ * New connections a minute past which a container counts as scanning: far
+ * more than an app opens, even a busy one with no connection reuse.
+ */
+export const SCAN_CONNECTIONS_PER_MINUTE = 600;
 
 /** A container that failed to start is retried after this, doubling up to RETRY_MAX_MS. */
 export const RETRY_FIRST_MS = 10_000;
@@ -93,6 +106,14 @@ export class Converger {
 	#firewallAsked = 0;
 	/** What the firewall container last said, for the report. */
 	containment: Containment = { state: 'starting', detail: null };
+	/** The firewall's counters at the last look, to tell what changed. */
+	#counters: {
+		generation: string | undefined;
+		at: number;
+		counters: Record<string, ContainerCounters>;
+	} | null = null;
+	/** Blocked attempts and scans not reported yet, by container and kind. */
+	#security = new Map<string, SecurityCount>();
 
 	constructor(
 		private runtime: ContainerRuntime,
@@ -581,6 +602,12 @@ export class Converger {
 			Object.entries(await addresses(container))
 				.filter(([network]) => environments.includes(network))
 				.map(([, ip]) => ip);
+		// each running service container's address on its network, to count and to open for
+		const placed = (
+			await Promise.all(
+				desired.containers.map(async (c) => ({ c, ip: (await addresses(c.name))[c.network] }))
+			)
+		).filter((p): p is { c: DesiredContainer; ip: string } => !!p.ip);
 		// the mesh network only carries Tramline's own containers: links, the ingress and the mesh
 		const environments = desired.networks.filter((n) => n !== meshNetworkName(this.#node()));
 		const config: FirewallConfig = {
@@ -591,16 +618,10 @@ export class Converger {
 				...(await onNetworks(this.ingressName)),
 				...(await onNetworks(meshContainerName(this.#node())))
 			].sort(),
-			allow: (
-				await Promise.all(
-					desired.containers
-						.filter((c) => c.privateNetworks?.length)
-						.map(async (c) => {
-							const ip = (await addresses(c.name))[c.network];
-							return ip ? { source: ip, destinations: c.privateNetworks! } : null;
-						})
-				)
-			).filter((a) => a !== null)
+			allow: placed
+				.filter(({ c }) => c.privateNetworks?.length)
+				.map(({ c, ip }) => ({ source: ip, destinations: c.privateNetworks! })),
+			containers: placed.map(({ c, ip }) => ({ name: c.name, ip }))
 		};
 
 		const containers = await this.runtime.list();
@@ -641,16 +662,61 @@ export class Converger {
 			this.#firewallApplied = text;
 		}
 		// what it said last, now and then
-		if (this.#now() - this.#firewallAsked > 30_000 || this.containment.state === 'starting') {
+		if (this.#now() - this.#firewallAsked > 10_000 || this.containment.state === 'starting') {
 			this.#firewallAsked = this.#now();
 			const said = await this.runtime.exec(name, ['cat', FIREWALL_STATUS_PATH]).catch(() => null);
+			let status: FirewallStatus | null = null;
 			try {
-				const status = said?.exitCode === 0 ? (JSON.parse(said.output) as FirewallStatus) : null;
-				if (status) this.containment = { state: status.state, detail: status.detail };
+				status = said?.exitCode === 0 ? (JSON.parse(said.output) as FirewallStatus) : null;
 			} catch {
 				// not written yet
 			}
+			if (status) {
+				this.containment = { state: status.state, detail: status.detail };
+				this.#count(status, new Map(desired.containers.map((c) => [c.name, c.deploymentId])));
+			}
 		}
+	}
+
+	/**
+	 * Turns the firewall's counters into what each container tried since the
+	 * last look: blocked packets by kind, and a scan when it opened
+	 * connections faster than any ordinary app.
+	 */
+	#count(status: FirewallStatus, deployments: Map<string, string>) {
+		const last = this.#counters;
+		const now = this.#now();
+		this.#counters = { generation: status.generation, at: now, counters: status.counters ?? {} };
+		if (!status.counters || !last) return;
+		// rules replaced since: their counters started again from zero
+		const fresh = last.generation !== status.generation;
+		const minutes = Math.max((now - last.at) / 60_000, 1 / 6);
+		for (const [container, now] of Object.entries(status.counters)) {
+			const deploymentId = deployments.get(container);
+			if (!deploymentId) continue;
+			const before = fresh ? undefined : last.counters[container];
+			const delta = (kind: keyof ContainerCounters) =>
+				Math.max(now[kind] - (before?.[kind] ?? 0), 0);
+			const add = (kind: SecurityKind, count: number) => {
+				if (count <= 0) return;
+				const key = `${container}:${kind}`;
+				const pending = this.#security.get(key);
+				if (pending) pending.count += count;
+				else this.#security.set(key, { container, deploymentId, kind, count });
+			};
+			add('metadata', delta('metadata'));
+			add('private', delta('private'));
+			add('host', delta('host'));
+			const connections = delta('connections');
+			if (connections / minutes >= SCAN_CONNECTIONS_PER_MINUTE) add('scan', connections);
+		}
+	}
+
+	/** What containers tried since the last report; reporting it clears it. */
+	takeSecurity(): SecurityCount[] {
+		const all = [...this.#security.values()];
+		this.#security.clear();
+		return all;
 	}
 
 	/**

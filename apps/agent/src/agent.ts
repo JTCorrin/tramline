@@ -486,7 +486,8 @@ export class Agent {
 			volumes,
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError,
-			containment: this.converger.containment
+			containment: this.converger.containment,
+			security: this.converger.takeSecurity()
 		});
 	}
 }

@@ -8,6 +8,7 @@ import {
 	environment,
 	node,
 	nodeMetric,
+	securityEvent,
 	service
 } from '../db/schema';
 import { newId } from '../ids';
@@ -159,7 +160,76 @@ function conditions(db: DbOrTx, now: number): Condition[] {
 		});
 	}
 	found.push(...fullest.values());
+	found.push(...securityConditions(db, now));
 	return found;
+}
+
+/** A security alert stays open this long after the last blocked attempt. */
+export const SECURITY_WINDOW_MS = 10 * 60_000;
+
+const TRIED: Record<string, string> = {
+	metadata: 'the cloud metadata endpoint',
+	private: 'private addresses (the LAN, the mesh or another environment)',
+	host: "the node's own ports",
+	scan: 'connections fast enough to be a scan'
+};
+
+/**
+ * A service whose containers tried something containment blocked in the
+ * last ten minutes; quiet again once they stop. Services with an open alert
+ * and nothing new are reported quiet, so the alert resolves.
+ */
+function securityConditions(db: DbOrTx, now: number): Condition[] {
+	const recent = db
+		.select({
+			serviceId: securityEvent.serviceId,
+			environmentId: securityEvent.environmentId,
+			service: service.name,
+			environment: environment.name,
+			kind: securityEvent.kind,
+			count: sql<number>`sum(${securityEvent.count})`
+		})
+		.from(securityEvent)
+		.innerJoin(service, eq(service.id, securityEvent.serviceId))
+		.innerJoin(environment, eq(environment.id, securityEvent.environmentId))
+		.where(gte(securityEvent.bucket, new Date(now - SECURITY_WINDOW_MS)))
+		.groupBy(securityEvent.serviceId, securityEvent.environmentId, securityEvent.kind)
+		.all();
+	const found = new Map<string, Condition>();
+	for (const [key, rows] of Map.groupBy(recent, (r) => `${r.serviceId}:${r.environmentId}`)) {
+		const r = rows[0]!;
+		const what = rows
+			.map((row) =>
+				row.kind === 'scan'
+					? `opened ${row.count} ${TRIED.scan}`
+					: `${row.count} attempts to reach ${TRIED[row.kind]}`
+			)
+			.join('; ');
+		found.set(key, {
+			kind: 'service_security',
+			serviceId: r.serviceId,
+			environmentId: r.environmentId,
+			value: 1,
+			message: `${r.service} in ${r.environment} was blocked: ${what}`
+		});
+	}
+	const open = db
+		.select({ serviceId: alert.serviceId, environmentId: alert.environmentId })
+		.from(alert)
+		.where(and(eq(alert.kind, 'service_security'), isNull(alert.resolvedAt)))
+		.all();
+	for (const a of open) {
+		const key = `${a.serviceId}:${a.environmentId}`;
+		if (found.has(key)) continue;
+		found.set(key, {
+			kind: 'service_security',
+			serviceId: a.serviceId ?? undefined,
+			environmentId: a.environmentId ?? undefined,
+			value: 0,
+			message: ''
+		});
+	}
+	return [...found.values()];
 }
 
 export const toAlert = (row: AlertRow): Alert => ({
@@ -240,6 +310,13 @@ export function evaluateAlerts(db: DbOrTx, now = Date.now()) {
 	return { opened, resolved };
 }
 
+/** Security events are kept for a month. */
+export function pruneSecurityEvents(db: DbOrTx, now = Date.now()) {
+	db.delete(securityEvent)
+		.where(sql`${securityEvent.bucket} < ${now - 30 * 86_400_000}`)
+		.run();
+}
+
 /** Resolved alerts are kept for a month. */
 export function pruneAlerts(db: DbOrTx, now = Date.now()) {
 	db.delete(alert)
@@ -291,5 +368,6 @@ export async function runMetricsJobs(db: DbOrTx, webhookUrl: string | undefined,
 	rollUp(db, now);
 	pruneMetrics(db, now);
 	pruneAlerts(db, now);
+	pruneSecurityEvents(db, now);
 	await notifyAlerts(webhookUrl, evaluateAlerts(db, now));
 }
