@@ -44,7 +44,7 @@
 		"@tramline/client": "workspace:*",
 		"@types/better-sqlite3": "^9.6.0",
 		"@types/node": "^22",
-		"@vitest/browser-playwright": "^4.1.8",
+		"@vitest/browser-playwright": "^5.1.0",
 		"@vitest/coverage-v8": "^4.1.12",
 		"bits-ui": "^2.20.2",
 		"cn": "^0.5.1",
