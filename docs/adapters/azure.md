@@ -15,7 +15,7 @@ You need three things: a subscription, an app registration with a client secret,
 1. Under Microsoft Entra ID → App registrations, create a registration, e.g. `tramline`. It needs no redirect URI.
 2. On its overview page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
 3. Under Certificates & secrets → Client secrets, add a secret and copy its **Value**. It is shown once; the Secret ID is not what you want.
-4. Give the app a role. Under the subscription (or a resource group you made for Tramline) → Access control (IAM) → Add role assignment, give it **Contributor**.
+4. Give the app a role. This is on the subscription, not the app: open **Subscriptions → (yours) → Access control (IAM) → Add → Add role assignment** (or the same on a resource group you made for Tramline). Choose **Contributor** from the **Privileged administrator roles** tab, then under **Select members** search for the app by name; apps don't appear until you search.
    - On the subscription, Tramline creates its resource group itself.
    - On one resource group, Tramline uses only that group. Enter its name in the account form.
 

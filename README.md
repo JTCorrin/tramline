@@ -272,7 +272,12 @@ More: [docs/adapters/gcp.md](docs/adapters/gcp.md)
 2. On its overview page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
 3. Under **Certificates & secrets → New client secret**, add a secret and copy its **Value**. It's shown once; the _Secret ID_ is not what you want.
 
-**2. Give it access.** Go to **Subscriptions → (yours)**, copy the **Subscription ID**, then open **Access control (IAM) → Add → Add role assignment**. On the **Privileged administrator roles** tab, choose **Contributor**, select the `tramline` app as the member, and save.
+**2. Give it access.** This is set on your subscription, not on the app, so it's a different page from step 1:
+
+1. Search the portal for **Subscriptions**, open yours, and copy its **Subscription ID**.
+2. In the subscription's menu, open **Access control (IAM) → Add → Add role assignment**.
+3. On the **Privileged administrator roles** tab, choose **Contributor**, then **Next**.
+4. Click **Select members** and type `tramline`. Apps only appear once you search for them. Select it, then click **Review + assign**.
 
 **3. Let the VMs reach Tramline.** VMs in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
 
