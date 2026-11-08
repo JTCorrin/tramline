@@ -366,6 +366,51 @@ More: [docs/adapters/aws.md](docs/adapters/aws.md)
 
 </details>
 
+<details>
+<summary><strong>Hetzner Cloud</strong>: cloud servers in Europe, the US and Singapore (about 5 minutes)</summary>
+
+<br>
+
+**You need:** a Hetzner Cloud account. There's no free tier, but a `cx23` costs a few euros a month, billed by the hour.
+
+**1. Create a token.** In the [Hetzner Console](https://console.hetzner.com/), create a project named `tramline` (or open one you have). Go to **Security → API tokens → Generate API token**, choose **Read & Write**, and copy the token. It's shown once.
+
+**2. Let the servers reach Tramline.** Servers in a cloud join over the internet, so they need a public address for Tramline. Pick the one that fits:
+
+- **Tramline runs at home or on a private network** (most people): use a Cloudflare tunnel. It needs a domain on Cloudflare; the free plan is fine.
+  1. In Cloudflare, go to **My Profile → API Tokens → Create Token → Create Custom Token**. Give it **Account → Cloudflare Tunnel → Edit** and **Zone → DNS → Edit**, limited to your domain.
+  2. In Tramline, go to **Nodes → Public access → Set up a Cloudflare tunnel**. Paste the token and click **Next**.
+  3. Choose a subdomain (e.g. `tramline`) and your domain.
+  4. Set **Run the connector on** to a node that's always on, and **Tramline's address for the connector** to where that node reaches Tramline (e.g. `http://192.168.1.20:3000`). Click **Create tunnel**.
+  5. Wait for the tunnel's badge to say **Connected**. Machines can't join until it does.
+
+  _I'll run it myself_ also works, but the command it shows has to keep running, e.g. as a service. If it stops, new machines can't join.
+
+- **Tramline already has a public HTTPS address:** set `TRAMLINE_AGENT_URL=https://<that address>` in `apps/web/.env`, then restart Tramline.
+
+Either way, **Public access** should now say _New nodes connect to https://…_.
+
+**3. Connect the account.** Go to **Nodes → Compute accounts → Connect an account → Hetzner Cloud**, and paste the token. That's all you need: **Image** can stay as Ubuntu 24.04.
+
+Click **Connect**, then **Test connection**.
+
+**4. Add a node.** Under **Add a node**, set **Machine** to _New machine on (your account)_, name it, pick a location such as **fsn1 (Falkenstein)** and **cx23**, then **Create machine**. Leave **Start cordoned** off. With it on, the node joins but runs nothing until you uncordon it.
+
+**Create machine** takes up to a minute while Hetzner creates it. The node then shows _Waiting to enroll_ for a few minutes while it boots, and moves to the node list once it joins. If it's still waiting after 5 minutes, check that the tunnel says **Connected**. In the console it appears under **Servers** with the label `tramline=node`, behind the firewall `tramline-mesh`, which lets in only UDP 51820 for Tramline's encrypted WireGuard network.
+
+**5. Clean up.** Click **Remove** on the node. Tramline deletes the server and its IPv4 address. The firewall `tramline-mesh` and the SSH key `tramline-no-login` stay; they cost nothing.
+
+**If it goes wrong**
+
+- _"rejected the API token":_ copy the whole token again, or generate a new one in the same project.
+- _"The token may be read-only":_ generate a new token with **Read & Write**, and edit the account.
+- _"reached a Hetzner Cloud limit":_ new accounts can run only a few servers. Pick a smaller size, or ask Hetzner to raise the limit.
+- _"isn't available in this location right now":_ that size is sold out there. Pick another size or location.
+
+More: [docs/adapters/hetzner.md](docs/adapters/hetzner.md)
+
+</details>
+
 ## Grow and shrink automatically
 
 On **Nodes → Node pools**, click **New pool** and pick a compute account, a region and a size, with a minimum and a maximum. When a deployment has nowhere to run, the pool creates a machine for it; once a machine has run nothing for 15 minutes, it's destroyed. A pool can serve every environment or just one, and a monthly cap keeps it from growing past what you want to spend. Tramline shows the cost and asks before a pool can grow.
