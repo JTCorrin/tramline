@@ -690,6 +690,13 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
 - **Agent:** the agent detects NVIDIA GPUs and the container toolkit, reports them, and passes requested GPUs to containers.
 - **Services:** a service can ask for GPUs (count, optional model, minimum VRAM), and the scheduler only places it on a node that has them free.
 - **Neocloud adapters:** for providers that hand you a machine (VM or bare metal), starting with **Lambda**, then Crusoe, Hyperstack, CoreWeave bare metal and Vast.ai VMs, alongside the hyperscalers' GPU instances.
+- **Lambda** (`@tramline/adapter-lambda`, guide in `docs/adapters/lambda.md`; unit-tested, not yet run against a real account):
+  - **Account:** an API key, sent as a bearer token. Requests that hit Lambda's rate limit (one a second, one launch every 12 seconds) are retried after the wait it asks for.
+  - **Sizes:** Lambda's instance types with room in the region right now, cheapest first, each with its hourly price and its GPUs (model, count and VRAM, read from Lambda's description by a linear-time parser). GH200 sizes are arm64.
+  - **Machines:** Lambda's default image (Ubuntu with Lambda Stack: NVIDIA driver, CUDA, Docker and the NVIDIA container toolkit), so cloud-init in `user_data` skips installing Docker and only enrolls. Lambda requires an SSH key, so each account gets a throwaway `tramline-no-login` key whose private half is never kept.
+  - **Mesh:** Lambda's firewall rules are one account-wide list, replaced on every write, so Tramline reads it, adds a UDP 51820 rule if none covers it, and writes back every rule it had. A node offers its interface's address as its mesh endpoint only when that port is open and the address is public. No edge nodes: the firewall can't open TCP 80 and 443 to one machine.
+  - **Safety:** instances carry the tag `tramline=node`, and only those (or ones launched with only the throwaway key) are listed or terminated.
+  - **Later:** per-instance firewall rulesets (attached at launch) could scope the mesh rule to Tramline's nodes and allow edge nodes; Lambda's docs don't yet say how they combine with the account-wide rules.
 - **Spending guardrails** matter more at GPU prices: a confirmation before provisioning, a spend cap per pool, idle shutdown, and opt-in spot for training and batch jobs with checkpoints to a volume or bucket.
 - **Later:** providers that run the container for you (RunPod pods and serverless, Modal, Vast.ai containers) can't run the agent, so they need a different "runtime adapter" contract. That waits until after Phase 8.
 
