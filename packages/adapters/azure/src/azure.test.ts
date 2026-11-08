@@ -443,6 +443,7 @@ describe('Azure adapter', () => {
 				};
 			};
 			securityProfile: unknown;
+			diagnosticsProfile: unknown;
 		};
 		expect(properties.hardwareProfile).toEqual({ vmSize: 'Standard_B1s' });
 		expect(properties.storageProfile.imageReference).toEqual({
@@ -456,6 +457,7 @@ describe('Azure adapter', () => {
 			deleteOption: 'Delete'
 		});
 		expect(properties.securityProfile).toMatchObject({ securityType: 'TrustedLaunch' });
+		expect(properties.diagnosticsProfile).toEqual({ bootDiagnostics: { enabled: true } });
 		const userData = Buffer.from(properties.osProfile.customData, 'base64').toString();
 		expect(userData).toMatch(/^#cloud-config/);
 		expect(userData).toContain("--token 'tljoin_abc'");

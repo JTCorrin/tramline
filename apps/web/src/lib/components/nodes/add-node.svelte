@@ -10,6 +10,7 @@
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
+	import { defaultOffer, formatMemory, tooSmall } from '#lib/offers.js';
 	import type {
 		AdapterAccount,
 		AdapterOffer,
@@ -100,7 +101,7 @@
 		offer = '';
 		try {
 			offers = await api().adapters.offers(source, value);
-			offer = offers[0]?.id ?? '';
+			offer = defaultOffer(offers);
 		} catch (error) {
 			reportError(error);
 		}
@@ -141,12 +142,11 @@
 		}
 	}
 
-	const gb = (mb: number) => `${Math.round(mb / 1024)} GB`;
 	const describe = (o: AdapterOffer) =>
 		[
 			o.name,
 			`${o.vcpus} vCPU`,
-			gb(o.memoryMb),
+			formatMemory(o.memoryMb),
 			o.gpu ? `${o.gpu.count}× ${o.gpu.model}` : null,
 			o.hourly !== null ? `$${o.hourly.toFixed(3)}/h` : null
 		]
@@ -245,6 +245,11 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
+					{#if tooSmall(offers.find((o) => o.id === offer))}
+						<Field.Description class="text-amber-600 dark:text-amber-400" data-testid="too-small"
+							>{tooSmall(offers.find((o) => o.id === offer))}</Field.Description
+						>
+					{/if}
 				</Field.Field>
 			{/if}
 			<label
@@ -294,7 +299,13 @@
 						{#if slow(pending)}
 							<span class="w-full text-xs text-muted-foreground" data-testid="slow">
 								Most machines join within 5 minutes. Check that Public access shows a connected
-								address the machine can reach; it keeps retrying until its token expires.
+								address the machine can reach. A size under 1 GB of memory may never finish
+								installing; destroy it and pick a bigger one. Otherwise it keeps retrying until its
+								token expires, an hour after it was created.
+							</span>
+						{:else if !pending.expired}
+							<span class="w-full text-xs text-muted-foreground" data-testid="expected-wait">
+								It boots, installs Docker and the agent, then joins. This usually takes 2–5 minutes.
 							</span>
 						{/if}
 						<Button class="ml-auto" size="sm" variant="ghost" onclick={() => cancel(pending)}

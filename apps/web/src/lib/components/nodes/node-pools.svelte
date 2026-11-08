@@ -8,6 +8,7 @@
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
+	import { defaultOffer, formatMemory, tooSmall } from '#lib/offers.js';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import type {
 		AdapterAccount,
@@ -109,7 +110,7 @@
 		offer = '';
 		try {
 			offers = await api().adapters.offers(account, value);
-			offer = offers[0]?.id ?? '';
+			offer = defaultOffer(offers);
 		} catch (error) {
 			reportError(error);
 		}
@@ -200,12 +201,11 @@
 		}
 	}
 
-	const gb = (mb: number) => `${Math.round(mb / 1024)} GB`;
 	const describe = (o: { name: string; vcpus: number; memoryMb: number; hourly: number | null }) =>
 		[
 			o.name,
 			`${o.vcpus} vCPU`,
-			gb(o.memoryMb),
+			formatMemory(o.memoryMb),
 			o.hourly !== null ? `$${o.hourly.toFixed(3)}/h` : null
 		]
 			.filter(Boolean)
@@ -369,6 +369,11 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
+					{#if tooSmall(chosen)}
+						<Field.Description class="text-amber-600 dark:text-amber-400" data-testid="too-small"
+							>{tooSmall(chosen)}</Field.Description
+						>
+					{/if}
 				</Field.Field>
 				<Field.Field>
 					<Field.Label for="pool-scope">For</Field.Label>
