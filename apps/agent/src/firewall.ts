@@ -85,8 +85,13 @@ export function firewallRules(config: FirewallConfig) {
 	egress(`-m conntrack --ctstate RELATED,ESTABLISHED ${tag} -j RETURN`);
 	egress('-m conntrack --ctstate DNAT -j RETURN');
 	for (const ip of config.exempt.filter(valid)) egress(`-s ${ip} -j RETURN`);
-	// before any opening, so no service's private ranges can include it
 	for (const subnet of [...workloads, ...metadataOnly]) {
+		// DNS first: on GCP the metadata server is the resolver, and on Azure its WireServer
+		// address is; Docker's embedded DNS asks them from inside the container. Port 53 hands
+		// out no credentials (the metadata service serves those over HTTP)
+		egress(`-s ${subnet} -p udp --dport 53 -j RETURN`);
+		egress(`-s ${subnet} -p tcp --dport 53 -j RETURN`);
+		// before any opening, so no service's private ranges can include it
 		for (const m of METADATA) egress(`-s ${subnet} -d ${m} -j DROP`);
 	}
 	for (const { source, destinations } of config.allow) {
@@ -96,9 +101,6 @@ export function firewallRules(config: FirewallConfig) {
 	for (const subnet of workloads) {
 		// its own environment: Docker filters bridged traffic too
 		egress(`-s ${subnet} -d ${subnet} -j RETURN`);
-		// the embedded DNS server asks the host's resolvers from inside the container
-		egress(`-s ${subnet} -p udp --dport 53 -j RETURN`);
-		egress(`-s ${subnet} -p tcp --dport 53 -j RETURN`);
 		for (const range of PRIVATE_RANGES) egress(`-s ${subnet} -d ${range} -j DROP`);
 	}
 

@@ -54,8 +54,18 @@ describe('firewall rules', () => {
 		for (const range of ['10.0.0.0/8', '192.168.0.0/16', '100.64.0.0/10']) {
 			expect(out).toContain(`-s 172.18.0.0/16 -d ${range} -j DROP`);
 		}
-		// builds only lose the metadata endpoint
-		expect(out.filter((r) => r.startsWith('-s 172.17.0.0/16'))).toHaveLength(2);
+		// DNS passes before the metadata drops: GCP's resolver is the metadata server, Azure's is
+		// its WireServer address
+		expect(at('-s 172.18.0.0/16 -p udp --dport 53 -j RETURN')).toBeLessThan(
+			at('-s 172.18.0.0/16 -d 169.254.169.254/32 -j DROP')
+		);
+		expect(at('-s 172.17.0.0/16 -p udp --dport 53 -j RETURN')).toBeLessThan(
+			at('-s 172.17.0.0/16 -d 168.63.129.16/32 -j DROP')
+		);
+		// builds only lose the metadata endpoint (and keep DNS)
+		expect(out.filter((r) => r.startsWith('-s 172.17.0.0/16') && r.endsWith('DROP'))).toHaveLength(
+			2
+		);
 
 		expect(rules).toContain('-A TL-INPUT -s 172.18.0.0/16 -j DROP');
 		expect(rules).not.toContain('-A TL-INPUT -s 172.17.0.0/16');
