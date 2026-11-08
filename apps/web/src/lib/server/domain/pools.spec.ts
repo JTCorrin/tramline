@@ -14,6 +14,7 @@ import * as adapters from './adapters';
 import * as changes from './changes';
 import type { Ctx } from './context';
 import * as environments from './environments';
+import * as nodes from './nodes';
 import * as pools from './pools';
 import * as projects from './projects';
 import * as services from './services';
@@ -315,5 +316,32 @@ describe('leftover machines', () => {
 		).rejects.toThrow('not found');
 		await adapters.destroyLeftover(ctx, account.id, stray.id);
 		expect([...fake.machines.keys()]).toEqual([pending.providerNodeId]);
+	});
+
+	it('finds the machine of a node whose create Tramline never heard back from', async () => {
+		const { ctx, account } = setup();
+		const machine = { account: account.id, region: 'fake-1', offer: 'small', cordoned: false };
+		await adapters.provision(ctx, { ...machine, name: 'web-1' }, 'http://tramline.test');
+		await adapters.provision(ctx, { ...machine, name: 'web-2' }, 'http://tramline.test');
+		// Tramline restarted while the adapter was still creating them
+		ctx.db.update(joinToken).set({ providerNodeId: null }).run();
+		const [one, two] = created.map((spec) => enroll(ctx, spec));
+		expect(one!.providerNodeId).toBeNull();
+
+		await nodes.remove(ctx, one!.id);
+		expect([...fake.machines.values()].map((m) => m.name)).toEqual(['web-2']);
+		// a machine that's gone already leaves nothing to destroy
+		fake.machines.clear();
+		await nodes.remove(ctx, two!.id);
+		expect(nodes.list(ctx).map((n) => n.name)).toEqual(['local']);
+	});
+
+	it('matches machine names the way providers spell node names', () => {
+		expect(adapters.namedFor('web-1', 'web-1')).toBe(true);
+		expect(adapters.namedFor('tl-1web', '1web')).toBe(true);
+		const long = 'a'.repeat(60);
+		expect(adapters.namedFor(long.slice(0, 50), long)).toBe(true);
+		expect(adapters.namedFor('web-10', 'web-1')).toBe(false);
+		expect(adapters.namedFor('web', 'web-1')).toBe(false);
 	});
 });
