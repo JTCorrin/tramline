@@ -67,6 +67,8 @@ export default defineConfig({
 				// builds into its own output directory, so a running `pnpm dev` is never disturbed
 				TRAMLINE_E2E: '1',
 				TRAMLINE_FAKE_ADAPTER: '1',
+				// a few made-up networks for the addresses tests come from, instead of downloading the real table
+				TRAMLINE_ASN_DATA_URL: `file://${import.meta.dirname}/e2e/fixtures/ip2asn.tsv`,
 				// with Docker, the install's own database is snapshotted to the test bucket
 				...(docker ? controlPlaneBackupEnv() : {})
 			}
