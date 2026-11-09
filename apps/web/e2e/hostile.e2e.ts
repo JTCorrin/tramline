@@ -26,6 +26,18 @@ test.setTimeout(600_000);
 
 const ATTACKER = 'busybox:1.37';
 const VICTIM = 'traefik/whoami';
+/** What Tramline tells a workload about itself; none of it opens anything. */
+const DESCRIBING = [
+	'TRAMLINE_ENVIRONMENT_ID',
+	'TRAMLINE_ENVIRONMENT_NAME',
+	'TRAMLINE_PRIVATE_DOMAIN',
+	'TRAMLINE_PUBLIC_DOMAIN',
+	'TRAMLINE_SERVICE_ID',
+	'TRAMLINE_SERVICE_NAME',
+	'TRAMLINE_VOLUME_MOUNT_PATH'
+];
+/** Node, join and API tokens. */
+const TOKEN = /\b(tlnode_|tljoin_|tl_)[A-Za-z0-9_-]{20,}/;
 
 async function addService(
 	page: Page,
@@ -140,7 +152,11 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 	const fetchFrom = (url: string) => run(`wget -T 3 -S -O /dev/null '${url}'`);
 
 	// 1. credentials in its environment and files: none of the platform's
-	expect(run('env')).not.toMatch(/TRAMLINE_|tlnode_|tljoin_/);
+	// only the variables that describe the service itself, and nothing shaped like a token
+	const env = run('env');
+	const names = [...env.matchAll(/^(TRAMLINE_[A-Z_]+)=/gm)].map((m) => m[1]);
+	for (const name of names) expect(DESCRIBING).toContain(name);
+	expect(env).not.toMatch(TOKEN);
 	expect(
 		run(
 			'for f in /var/run/docker.sock /run/docker.sock /var/lib/tramline /etc/tramline; do [ -e $f ] && echo found $f; done; grep docker.sock /proc/self/mountinfo'
