@@ -470,7 +470,9 @@ GPUs come from a node with NVIDIA GPUs and the NVIDIA container toolkit, such as
 
 ## Update a node's agent
 
-On **Nodes**, click **Update agent**. The agent pulls the latest image and, if there's a newer one, restarts on it. Deployments keep running, and the node shows how it went.
+Agents keep themselves up to date. Every 6 hours Tramline asks each node's agent to pull its image again, and the agent restarts only if there's a newer one. Deployments keep running; the mesh and TCP proxies on the node restart with it, which takes a few seconds. Nodes update one at a time, and never while a build or backup runs on them. If a node goes offline within an hour of updating, the others wait, so a broken image doesn't reach every node.
+
+To update a node now, click **Update agent** on **Nodes**. Set `TRAMLINE_AGENT_UPDATE_HOURS` to check more or less often, or to `0` to update only from that button.
 
 Agents installed before November 2026 can't update themselves yet. Run this once on the machine, and the button works from then on:
 

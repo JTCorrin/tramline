@@ -12,6 +12,8 @@ export interface PlatformSettings {
 	agentUrl?: string | null;
 	/** Who may create an account (TRAMLINE_SIGNUP): anyone, or only people with an invite. */
 	signup?: 'open' | 'invite';
+	/** TRAMLINE_AGENT_UPDATE_HOURS: how often agents are updated; 0 or absent: never automatically. */
+	agentUpdateHours?: number;
 	/** Access logs; absent in tests that don't need them. */
 	traffic?: TrafficSettings;
 }

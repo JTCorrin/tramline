@@ -582,7 +582,9 @@ export const NodeSummary = z.object({
 				detail: z.string().nullable(),
 				error: z.string().nullable(),
 				requestedAt: z.iso.datetime(),
-				finishedAt: z.iso.datetime().nullable()
+				finishedAt: z.iso.datetime().nullable(),
+				/** Started by the install's regular check rather than by someone. */
+				automatic: z.boolean()
 			})
 			.nullable()
 	}),

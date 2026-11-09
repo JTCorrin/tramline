@@ -134,7 +134,8 @@ function agentSummary(row: typeof node.$inferSelect): NodeSummary['agent'] {
 			detail: update.detail,
 			error: update.error,
 			requestedAt: update.requestedAt,
-			finishedAt: update.finishedAt
+			finishedAt: update.finishedAt,
+			automatic: update.requestedBy === null
 		}
 	};
 }
