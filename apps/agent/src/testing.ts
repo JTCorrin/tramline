@@ -105,13 +105,20 @@ export class FakeRuntime implements ContainerRuntime {
 		this.#guard(`connect ${container} ${network}`);
 		this.containers.get(container)?.networks.push(network);
 	}
+	async networkSubnet(name: string) {
+		if (name === 'bridge') return '172.17.0.0/16';
+		const i = [...this.networks].indexOf(name);
+		return i < 0 ? null : `172.${18 + i}.0.0/16`;
+	}
 	async addresses(container: string) {
 		const c = this.containers.get(container);
 		return Object.fromEntries((c?.networks ?? []).map((n, i) => [n, `172.30.${i}.2`]));
 	}
+	/** What an exec prints, by the command's last argument (e.g. a file `cat` reads). */
+	execOutput = new Map<string, string>();
 	async exec(container: string, cmd: string[]) {
 		this.#guard(`exec ${container} ${cmd.at(-1)}`);
-		return { exitCode: this.execExit, output: '' };
+		return { exitCode: this.execExit, output: this.execOutput.get(cmd.at(-1)!) ?? '' };
 	}
 	async execStream(container: string, cmd: string[], options: ExecStreamOptions) {
 		this.#guard(`exec ${container} ${cmd[0]}`);

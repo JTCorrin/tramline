@@ -98,6 +98,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 					vramMb: g.vramMb ?? (row.offerGpu?.vramGb ? row.offerGpu.vramGb * 1024 : null)
 				})),
 				gpuRuntime: row.info?.gpuRuntime ?? false,
+				containment: row.containment ?? null,
 				allocatedGpus: heldOn(here, row.id).size,
 				allocatedMemoryMb: reserved.reduce((sum, r) => sum + r.memoryMb, 0),
 				allocatedCpus: Math.round(reserved.reduce((sum, r) => sum + r.cpus, 0) * 100) / 100,

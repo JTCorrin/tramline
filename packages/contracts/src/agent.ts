@@ -105,6 +105,15 @@ export const DesiredContainer = z.object({
 		.array(z.string().regex(/^\d{1,2}$/))
 		.min(1)
 		.max(16)
+		.optional(),
+	/**
+	 * Private ranges (IPv4 CIDR) this container may reach despite containment,
+	 * e.g. a database on the LAN. Only sent when there are some.
+	 */
+	privateNetworks: z
+		.array(z.string().regex(/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/))
+		.min(1)
+		.max(50)
 		.optional()
 });
 
@@ -429,6 +438,12 @@ export const JobReport = z.object({
 
 export type JobReport = z.infer<typeof JobReport>;
 
+export const Containment = z.object({
+	state: z.enum(['active', 'starting', 'off', 'unsupported', 'error']),
+	detail: z.string().max(500).nullable()
+});
+export type Containment = z.infer<typeof Containment>;
+
 export const AgentReport = z.object({
 	containers: z.array(ActualContainer),
 	builds: z.array(BuildReport).default([]),
@@ -441,7 +456,12 @@ export const AgentReport = z.object({
 	volumes: z.array(z.string()).optional(),
 	/** The desired revision the agent last converged to. */
 	revision: z.string().nullable(),
-	dockerError: z.string().nullable().optional()
+	dockerError: z.string().nullable().optional(),
+	/**
+	 * Whether service containers are contained: no metadata endpoint, LAN,
+	 * mesh, other environments or host ports. Absent from older agents.
+	 */
+	containment: Containment.optional()
 });
 
 export type AgentReport = z.infer<typeof AgentReport>;
@@ -501,6 +521,8 @@ export const NodeSummary = z.object({
 	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),
 	/** Docker on the node can hand GPUs to containers. */
 	gpuRuntime: z.boolean(),
+	/** What the node's agent last said about containment; null for older agents. */
+	containment: Containment.nullable(),
 	/** GPUs held by the replicas placed here. */
 	allocatedGpus: z.number().int(),
 	/** Memory reserved by the replicas placed here (their requests, or else their limits). */

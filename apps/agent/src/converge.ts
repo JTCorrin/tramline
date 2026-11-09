@@ -1,4 +1,4 @@
-import type { DesiredContainer, DesiredState } from '@tramline/contracts';
+import type { Containment, DesiredContainer, DesiredState } from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
 import {
 	MESH_CONFIG_PATH,
@@ -13,6 +13,13 @@ import type { Certificate } from './tls';
 
 /** Where a database finds its TLS certificate and key. */
 export const TLS_DIR = '/etc/tramline/tls';
+import {
+	FIREWALL_CONFIG_PATH,
+	FIREWALL_STATUS_PATH,
+	firewallName,
+	type FirewallConfig,
+	type FirewallStatus
+} from './firewall';
 import { hash, toRunSpec } from './spec';
 
 export interface ConvergeOptions {
@@ -29,6 +36,11 @@ export interface ConvergeOptions {
 	mesh?: { image: string; privateKey: string; endpoint: string | null };
 	/** The agent's own image, which TCP proxies run; without it there are none. */
 	agentImage?: string;
+	/**
+	 * The image the firewall container runs (the agent's), which contains
+	 * service containers; without it they aren't contained.
+	 */
+	firewall?: { image: string };
 	/** A service's TLS certificate, created and kept on this node. */
 	certificates?: (id: string, names: string[]) => Certificate;
 }
@@ -76,6 +88,11 @@ export class Converger {
 	#retries = new Map<string, { at: number; attempts: number; spec: string }>();
 	/** The mesh config last written into the mesh container. */
 	#meshApplied: string | null = null;
+	/** The firewall config last written into the firewall container. */
+	#firewallApplied: string | null = null;
+	#firewallAsked = 0;
+	/** What the firewall container last said, for the report. */
+	containment: Containment = { state: 'starting', detail: null };
 
 	constructor(
 		private runtime: ContainerRuntime,
@@ -139,6 +156,10 @@ export class Converger {
 		const log = this.options.log ?? quiet;
 		const nodeId = this.#node();
 		for (const network of desired.networks) await this.runtime.ensureNetwork(network);
+		// before anything starts on a new network, so no container runs uncontained
+		await this.#ensureFirewall(desired).catch((error) =>
+			log(`containment failed: ${error instanceof Error ? error.message : String(error)}`)
+		);
 
 		const wanted = new Map(desired.containers.map((c) => [c.name, toRunSpec(c, nodeId)]));
 		const tls = new Map(desired.containers.map((c) => [c.name, c]));
@@ -225,6 +246,10 @@ export class Converger {
 		}
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
 		await this.#publishRoutes(desired);
+		// again, now the ingress, the mesh and new containers have addresses
+		await this.#ensureFirewall(desired).catch((error) =>
+			log(`containment failed: ${error instanceof Error ? error.message : String(error)}`)
+		);
 
 		// 3. only then drain and remove what is no longer wanted
 		const staleNames = new Set(stale.map((c) => c.name));
@@ -529,6 +554,123 @@ export class Converger {
 			// links reach the mesh container over the mesh network
 			await this.runtime.connect(linkName, network);
 		}
+	}
+
+	/**
+	 * The firewall container, and the config it keeps on the host: which
+	 * networks are contained, which of Tramline's own containers on them
+	 * aren't, and which private ranges a service may reach.
+	 */
+	async #ensureFirewall(desired: DesiredState) {
+		const name = firewallName(this.#node());
+		const image = this.options.firewall?.image;
+		if (!image) {
+			this.containment = {
+				state: 'off',
+				detail: 'TRAMLINE_CONTAINMENT=off, so service containers can reach the LAN and the host'
+			};
+			return;
+		}
+		const subnets = async (networks: string[]) =>
+			(await Promise.all(networks.map((n) => this.runtime.networkSubnet(n)))).filter(
+				(s): s is string => !!s
+			);
+		const addresses = (container: string) =>
+			this.runtime.addresses(container).catch((): Record<string, string> => ({}));
+		const onNetworks = async (container: string) =>
+			Object.entries(await addresses(container))
+				.filter(([network]) => environments.includes(network))
+				.map(([, ip]) => ip);
+		// the mesh network only carries Tramline's own containers: links, the ingress and the mesh
+		const environments = desired.networks.filter((n) => n !== meshNetworkName(this.#node()));
+		const config: FirewallConfig = {
+			workloads: await subnets(environments),
+			// builds run the repository's own steps on Docker's default network
+			metadataOnly: await subnets(['bridge']),
+			exempt: [
+				...(await onNetworks(this.ingressName)),
+				...(await onNetworks(meshContainerName(this.#node())))
+			].sort(),
+			allow: (
+				await Promise.all(
+					desired.containers
+						.filter((c) => c.privateNetworks?.length)
+						.map(async (c) => {
+							const ip = (await addresses(c.name))[c.network];
+							return ip ? { source: ip, destinations: c.privateNetworks! } : null;
+						})
+				)
+			).filter((a) => a !== null)
+		};
+
+		const containers = await this.runtime.list();
+		const current = containers.find((c) => c.name === name);
+		const spec: RunSpec = {
+			name,
+			image,
+			cmd: ['firewall'],
+			env: {},
+			network: 'host',
+			aliases: [],
+			restart: { name: 'always', maxRetries: 0 },
+			security: {
+				capabilities: ['NET_ADMIN', 'NET_RAW'],
+				pidsLimit: 64,
+				memoryMb: 128,
+				// iptables keeps a lock file under /run
+				readOnlyRootFilesystem: false
+			},
+			labels: {
+				[LABELS.managed]: 'true',
+				[LABELS.node]: this.#node(),
+				[LABELS.role]: 'firewall',
+				[LABELS.spec]: hash({ image, mode: 'firewall' })
+			}
+		};
+		if (current && current.labels[LABELS.spec] !== spec.labels[LABELS.spec]) {
+			await this.runtime.remove(name);
+		}
+		if (!current || current.labels[LABELS.spec] !== spec.labels[LABELS.spec]) {
+			if (!(await this.runtime.hasImage(image))) await this.runtime.pull(image);
+			await this.runtime.run(spec);
+			this.#firewallApplied = null;
+		}
+		const text = JSON.stringify(config);
+		if (text !== this.#firewallApplied) {
+			await this.runtime.putFile(name, FIREWALL_CONFIG_PATH, Buffer.from(text), 0o600);
+			this.#firewallApplied = text;
+		}
+		// what it said last, now and then; never in the way of converging
+		if (this.#now() - this.#firewallAsked > 30_000 || this.containment.state === 'starting') {
+			this.#firewallAsked = this.#now();
+			void this.#askFirewall(name);
+		}
+	}
+
+	#asking: Promise<void> | null = null;
+
+	/** Waits for a status read in progress (tests). */
+	settled() {
+		return this.#asking ?? Promise.resolve();
+	}
+
+	/** Reads the firewall's status file, one read at a time and never for long. */
+	#askFirewall(name: string) {
+		if (this.#asking) return this.#asking;
+		const read = this.runtime.exec(name, ['cat', FIREWALL_STATUS_PATH]);
+		const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000).unref());
+		this.#asking = Promise.race([read, timeout])
+			.then((said) => {
+				try {
+					const status = said?.exitCode === 0 ? (JSON.parse(said.output) as FirewallStatus) : null;
+					if (status) this.containment = { state: status.state, detail: status.detail };
+				} catch {
+					// not written yet
+				}
+			})
+			.catch(() => {})
+			.finally(() => (this.#asking = null));
+		return this.#asking;
 	}
 
 	/**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	CIDR,
+	PRIVATE_CIDR,
 	Hostname,
 	SaveBackupStorage,
 	VolumeConfig,
@@ -177,6 +178,21 @@ describe('Hostname', () => {
 			'Enter a domain like app.example.com'
 		);
 	});
+});
+
+describe('private networks a service may reach', () => {
+	it.each(['192.168.1.20', '10.0.5.0/24', ' 172.16.0.0/12 '])('accepts %s', (value) => {
+		expect(PRIVATE_CIDR.parse(value)).toBe(value.trim());
+	});
+	it.each(['169.254.169.254', '169.254.0.0/16', '168.63.129.16', 'fd00:ec2::254', '10.0.0.0/33'])(
+		'refuses %s',
+		(value) => {
+			expect(PRIVATE_CIDR.safeParse(value).success).toBe(false);
+			expect(
+				ServiceConfigPatch.safeParse({ networking: { privateNetworks: [value] } }).success
+			).toBe(false);
+		}
+	);
 });
 
 describe('TCP allowlist addresses', () => {

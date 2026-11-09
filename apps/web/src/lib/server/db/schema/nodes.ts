@@ -1,4 +1,4 @@
-import type { AgentHello, ScanResult } from '@tramline/contracts';
+import type { AgentHello, Containment, ScanResult } from '@tramline/contracts';
 import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { user } from './auth';
@@ -59,6 +59,8 @@ export const node = sqliteTable('node', {
 	meshAddress: text('mesh_address').unique(),
 	/** `host:port` other nodes reach it on (UDP); null behind NAT. */
 	meshEndpoint: text('mesh_endpoint'),
+	/** Whether service containers there are contained, as the agent last reported. */
+	containment: text('containment', { mode: 'json' }).$type<Containment>(),
 	/** The latest agent update asked for from the Nodes page, and how the agent says it went. */
 	agentUpdate: text('agent_update', { mode: 'json' }).$type<AgentUpdate>(),
 	...timestamps

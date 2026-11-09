@@ -238,7 +238,13 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 				.run();
 		}
 		tx.update(node)
-			.set({ lastSeenAt: new Date(), revision: report.revision, error: report.dockerError ?? null })
+			.set({
+				lastSeenAt: new Date(),
+				revision: report.revision,
+				error: report.dockerError ?? null,
+				// older agents don't say, which leaves it unknown
+				...(report.containment ? { containment: report.containment } : {})
+			})
 			.where(eq(node.id, nodeId))
 			.run();
 		if (report.agentUpdate) recordAgentUpdate(tx, nodeId, report.agentUpdate);

@@ -105,6 +105,15 @@ export const DeployConfig = z.object({
 	node: z.string().nullable()
 });
 
+/** An IPv4 address or block a service may reach past containment, e.g. 192.168.1.20 or 10.0.5.0/24. */
+export const PRIVATE_CIDR = z
+	.string()
+	.trim()
+	.pipe(z.union([z.ipv4(), z.cidrv4()]))
+	.refine((cidr) => !cidr.startsWith('169.254.') && !cidr.startsWith('168.63.129.16'), {
+		message: "The cloud metadata endpoint can't be opened"
+	});
+
 /** An IPv4 or IPv6 address or CIDR block, e.g. 203.0.113.7 or 198.51.100.0/24. */
 export const CIDR = z
 	.string()
@@ -120,7 +129,14 @@ export const NetworkingConfig = z.object({
 	 */
 	tcpProxy: z.boolean(),
 	/** Addresses allowed through the TCP proxy; it stays closed while this is empty. */
-	tcpAllowlist: z.array(CIDR).max(50)
+	tcpAllowlist: z.array(CIDR).max(50),
+	/**
+	 * Private IPv4 ranges the service may reach, e.g. `192.168.1.20/32` for a
+	 * NAS. Everything private (the LAN, the mesh, other environments, the host)
+	 * is blocked otherwise; the cloud metadata endpoint never opens. Missing on
+	 * services saved before containment, which means none.
+	 */
+	privateNetworks: z.array(PRIVATE_CIDR).max(50).optional()
 });
 
 /** Absolute path inside the container, e.g. `/var/lib/postgresql/data`. */
@@ -182,7 +198,13 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		readOnlyRootFilesystem: false,
 		node: null
 	},
-	networking: { port: null, publicDomain: false, tcpProxy: false, tcpAllowlist: [] },
+	networking: {
+		port: null,
+		publicDomain: false,
+		tcpProxy: false,
+		tcpAllowlist: [],
+		privateNetworks: []
+	},
 	volume: { mountPath: null }
 };
 
