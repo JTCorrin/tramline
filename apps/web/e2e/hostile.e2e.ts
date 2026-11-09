@@ -265,7 +265,8 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 	await expect.poll(() => openAlert('traffic_scanner', victim), { timeout: 90_000 }).toBe(true);
 
 	// and on the page: the Traffic tab lists the scanner's requests with its network's name
-	await page.goto(`/projects/${victimProject}`);
+	await page.goto('/');
+	await page.getByTestId('project-card').filter({ hasText: 'Victim' }).getByRole('link').click();
 	await page.getByTestId('service-node').filter({ hasText: 'whoami' }).click();
 	await page.getByTestId('service-panel').getByRole('tab', { name: 'Traffic' }).click();
 	await expect(
