@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { run as defaultRun, type Run } from './mesh-daemon';
 
 /**
@@ -47,6 +47,16 @@ export interface FirewallConfig {
 	exempt: string[];
 	/** Private ranges a service may reach, by its containers' addresses. */
 	allow: { source: string; destinations: string[] }[];
+	/** Service containers, by address, whose blocked attempts and new connections are counted. */
+	containers?: { name: string; ip: string }[];
+}
+
+/** What a container tried, as the firewall's counters say: packets dropped, and new connections. */
+export interface ContainerCounters {
+	metadata: number;
+	private: number;
+	host: number;
+	connections: number;
 }
 
 export interface FirewallStatus {
@@ -54,11 +64,19 @@ export interface FirewallStatus {
 	detail: string | null;
 	/** `nft` or `legacy`: which iptables Docker uses. */
 	backend: string | null;
+	/** This daemon's run: counters start again from zero when it changes (a restart). */
+	generation?: string;
+	/** Per container, since this daemon started, across rule replacements. */
+	counters?: Record<string, ContainerCounters>;
 	at: string;
 }
 
 const EGRESS = 'TL-EGRESS';
 const INPUT = 'TL-INPUT';
+/** Where each kind of blocked packet goes to be counted, by container, and dropped. */
+const BLOCKS = { metadata: 'TL-METADATA', private: 'TL-PRIVATE', host: 'TL-HOST' } as const;
+/** Docker container names; a name ends up inside a rule's comment. */
+const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/;
 /** Only plain IPv4 addresses and blocks reach the rules: nothing in a config can add an option. */
@@ -76,8 +94,12 @@ export const fingerprint = (config: FirewallConfig) =>
 export function firewallRules(config: FirewallConfig) {
 	const workloads = config.workloads.filter(valid);
 	const metadataOnly = config.metadataOnly.filter(valid);
+	const counted = (config.containers ?? []).filter(
+		(c) => valid(c.ip) && !c.ip.includes('/') && NAME.test(c.name)
+	);
 	const tag = `-m comment --comment "tramline ${fingerprint(config)}"`;
-	const lines = ['*filter', `:${EGRESS} - [0:0]`, `:${INPUT} - [0:0]`];
+	const chains = [EGRESS, INPUT, ...Object.values(BLOCKS)];
+	const lines = ['*filter', ...chains.map((c) => `:${c} - [0:0]`)];
 	const egress = (rule: string) => lines.push(`-A ${EGRESS} ${rule}`);
 	const input = (rule: string) => lines.push(`-A ${INPUT} ${rule}`);
 
@@ -91,8 +113,14 @@ export function firewallRules(config: FirewallConfig) {
 		// out no credentials (the metadata service serves those over HTTP)
 		egress(`-s ${subnet} -p udp --dport 53 -j RETURN`);
 		egress(`-s ${subnet} -p tcp --dport 53 -j RETURN`);
-		// before any opening, so no service's private ranges can include it
-		for (const m of METADATA) egress(`-s ${subnet} -d ${m} -j DROP`);
+	}
+	// counts each container's new connections (no target: the packet carries on), for scans
+	for (const c of counted) {
+		egress(`-s ${c.ip} -m conntrack --ctstate NEW -m comment --comment "n:${c.name}"`);
+	}
+	// before any opening, so no service's private ranges can include it
+	for (const subnet of [...workloads, ...metadataOnly]) {
+		for (const m of METADATA) egress(`-s ${subnet} -d ${m} -j ${BLOCKS.metadata}`);
 	}
 	for (const { source, destinations } of config.allow) {
 		if (!valid(source)) continue;
@@ -101,7 +129,7 @@ export function firewallRules(config: FirewallConfig) {
 	for (const subnet of workloads) {
 		// its own environment: Docker filters bridged traffic too
 		egress(`-s ${subnet} -d ${subnet} -j RETURN`);
-		for (const range of PRIVATE_RANGES) egress(`-s ${subnet} -d ${range} -j DROP`);
+		for (const range of PRIVATE_RANGES) egress(`-s ${subnet} -d ${range} -j ${BLOCKS.private}`);
 	}
 
 	input(`-m conntrack --ctstate RELATED,ESTABLISHED ${tag} -j RETURN`);
@@ -109,11 +137,42 @@ export function firewallRules(config: FirewallConfig) {
 	for (const subnet of workloads) {
 		input(`-s ${subnet} -p udp --dport 53 -j RETURN`);
 		input(`-s ${subnet} -p tcp --dport 53 -j RETURN`);
-		// the host's own ports: SSH, the agent, Tramline itself on the local node
-		input(`-s ${subnet} -j DROP`);
+		// the host's own ports: SSH, the agent, Docker's API, Tramline itself on the local node
+		input(`-s ${subnet} -j ${BLOCKS.host}`);
+	}
+
+	// each block chain counts by container, then drops whatever it's given
+	for (const chain of Object.values(BLOCKS)) {
+		for (const c of counted) {
+			lines.push(`-A ${chain} -s ${c.ip} -m comment --comment "c:${c.name}" -j DROP`);
+		}
+		lines.push(`-A ${chain} -j DROP`);
 	}
 	lines.push('COMMIT', '');
 	return lines.join('\n');
+}
+
+/**
+ * Reads the counters of Tramline's chains (`iptables -S -v` prints `-c
+ * packets bytes` on each rule) into per-container counts.
+ */
+export async function readCounters(backend: string, exec: Run = defaultRun) {
+	const counters: Record<string, ContainerCounters> = {};
+	const of = (name: string) =>
+		(counters[name] ??= { metadata: 0, private: 0, host: 0, connections: 0 });
+	const read = async (chain: string, each: (name: string, packets: number) => void) => {
+		const out = await exec(`iptables-${backend}`, ['-S', chain, '-v']).catch(() => '');
+		for (const line of out.split('\n')) {
+			const name = line.match(/--comment "?[cn]:([A-Za-z0-9_.-]+)"?/)?.[1];
+			const packets = line.match(/ -c (\d+) \d+/)?.[1];
+			if (name && packets) each(name, Number(packets));
+		}
+	};
+	for (const [kind, chain] of Object.entries(BLOCKS) as [keyof typeof BLOCKS, string][]) {
+		await read(chain, (name, packets) => (of(name)[kind] += packets));
+	}
+	await read(EGRESS, (name, packets) => (of(name).connections += packets));
+	return counters;
 }
 
 /** Which iptables Docker set up its chains with; the rules must go in the same one. */
@@ -156,6 +215,20 @@ export async function applyFirewall(
 	return true;
 }
 
+const add = (a: ContainerCounters | undefined, b: ContainerCounters): ContainerCounters => ({
+	metadata: (a?.metadata ?? 0) + b.metadata,
+	private: (a?.private ?? 0) + b.private,
+	host: (a?.host ?? 0) + b.host,
+	connections: (a?.connections ?? 0) + b.connections
+});
+
+/** What was carried over plus what the rules count now, per container. */
+function total(carried: Record<string, ContainerCounters>, now: Record<string, ContainerCounters>) {
+	const all = { ...carried };
+	for (const [name, counts] of Object.entries(now)) all[name] = add(all[name], counts);
+	return all;
+}
+
 export interface FirewallDaemonOptions {
 	intervalMs?: number;
 	exec?: Run;
@@ -180,6 +253,10 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 	let lastError = '';
 	let applied = '';
 	let checked = 0;
+	let counted = 0;
+	// counters since this daemon started, across rule replacements; a new daemon starts again
+	const carried: Record<string, ContainerCounters> = {};
+	const instance = randomBytes(6).toString('hex');
 	const interval = options.intervalMs ?? 1_000;
 	log('[firewall] waiting for config');
 	while (!options.signal?.aborted) {
@@ -196,7 +273,14 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 			} else if (text && (text !== applied || Date.now() - checked > 15 * interval)) {
 				// a new config at once; otherwise a check now and then that nothing removed the rules
 				const config = JSON.parse(text) as FirewallConfig;
+				// replacing the rules zeroes their counters: keep what they held
+				const before = await readCounters(backend, options.exec);
 				if (await applyFirewall(config, backend, options.exec)) {
+					const kept = new Set((config.containers ?? []).map((c) => c.name));
+					for (const [name, counts] of Object.entries(before)) {
+						if (kept.has(name)) carried[name] = add(carried[name], counts);
+					}
+					for (const name of Object.keys(carried)) if (!kept.has(name)) delete carried[name];
 					log(
 						`[firewall] containing ${config.workloads.length} networks (${backend}), ${config.allow.length} containers with private ranges open`
 					);
@@ -204,7 +288,18 @@ export async function runFirewallDaemon(file: string, options: FirewallDaemonOpt
 				applied = text;
 				checked = Date.now();
 				lastError = '';
-				status({ state: 'active', backend, detail: null });
+				counted = 0;
+			}
+			// what each container tried, every ten checks or so
+			if (backend && applied && Date.now() - counted > 10 * interval) {
+				counted = Date.now();
+				status({
+					state: 'active',
+					backend,
+					detail: null,
+					generation: instance,
+					counters: total(carried, await readCounters(backend, options.exec))
+				});
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

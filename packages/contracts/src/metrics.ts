@@ -83,7 +83,13 @@ export type ServiceMetrics = z.infer<typeof ServiceMetrics>;
 export const NodeMetrics = MetricSeries(NodeMetricPoint);
 export type NodeMetrics = z.infer<typeof NodeMetrics>;
 
-export const ALERT_KINDS = ['node_offline', 'node_disk', 'node_memory', 'service_memory'] as const;
+export const ALERT_KINDS = [
+	'node_offline',
+	'node_disk',
+	'node_memory',
+	'service_memory',
+	'service_security'
+] as const;
 export const AlertKind = z.enum(ALERT_KINDS);
 export type AlertKind = z.infer<typeof AlertKind>;
 
@@ -100,3 +106,15 @@ export const Alert = z.object({
 	resolvedAt: z.iso.datetime().nullable()
 });
 export type Alert = z.infer<typeof Alert>;
+
+/** What a service's containers tried that containment blocked, in one minute. */
+export const SecurityEvent = z.object({
+	deploymentId: z.string(),
+	nodeId: z.string().nullable(),
+	nodeName: z.string().nullable(),
+	kind: z.enum(['metadata', 'private', 'host', 'scan']),
+	count: z.number().int(),
+	/** The start of the minute. */
+	at: z.iso.datetime()
+});
+export type SecurityEvent = z.infer<typeof SecurityEvent>;

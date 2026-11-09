@@ -42,6 +42,11 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['metrics.node', (c) => c.metrics.node('n'), 'GET /nodes/n/metrics?range=1h'],
 	['metrics.alerts', (c) => c.metrics.alerts(), 'GET /alerts'],
 	[
+		'metrics.security',
+		(c) => c.metrics.security('s', 'e'),
+		'GET /services/s/security?environmentId=e'
+	],
+	[
 		'variables.getAll (service)',
 		(c) => c.variables.getAll({ environmentId: 'e', serviceId: 's' }),
 		'GET /variables?environmentId=e&serviceId=s'

@@ -1,11 +1,19 @@
 import type { AgentHello, AgentJoined, AgentReportInput } from '@tramline/contracts';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DbOrTx } from '../db/client';
 import { AppError } from '../api/errors';
-import { adapterAccount, build, container, deployment, joinToken, node } from '../db/schema';
+import {
+	adapterAccount,
+	build,
+	container,
+	deployment,
+	joinToken,
+	node,
+	securityEvent
+} from '../db/schema';
 import type { AgentUpdate } from '../db/schema/nodes';
 import { newId } from '../ids';
 import { notifyNodes } from './bus';
@@ -188,7 +196,9 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 				.select({
 					id: deployment.id,
 					nodeId: deployment.nodeId,
-					replicaNodes: deployment.replicaNodes
+					replicaNodes: deployment.replicaNodes,
+					serviceId: deployment.serviceId,
+					environmentId: deployment.environmentId
 				})
 				.from(deployment)
 				.where(onNode(nodeId))
@@ -248,6 +258,27 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 			.where(eq(node.id, nodeId))
 			.run();
 		if (report.agentUpdate) recordAgentUpdate(tx, nodeId, report.agentUpdate);
+		// what its service containers tried, counted by the minute; only for its own deployments
+		const bucket = new Date(Math.floor(Date.now() / 60_000) * 60_000);
+		for (const s of report.security ?? []) {
+			const dep = placed.get(s.deploymentId);
+			if (!dep) continue;
+			tx.insert(securityEvent)
+				.values({
+					deploymentId: dep.id,
+					serviceId: dep.serviceId,
+					environmentId: dep.environmentId,
+					nodeId,
+					kind: s.kind,
+					bucket,
+					count: s.count
+				})
+				.onConflictDoUpdate({
+					target: [securityEvent.deploymentId, securityEvent.kind, securityEvent.bucket],
+					set: { count: sql`${securityEvent.count} + excluded.count` }
+				})
+				.run();
+		}
 	});
 }
 

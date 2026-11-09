@@ -6,6 +6,7 @@
 	import AlertList from './alert-list.svelte';
 	import MetricPanel from './metric-panel.svelte';
 	import RangePicker from './range-picker.svelte';
+	import SecurityEvents from './security-events.svelte';
 
 	let { serviceId, environmentId }: { serviceId: string; environmentId: string } = $props();
 
@@ -57,6 +58,7 @@
 	</div>
 
 	<AlertList alerts={alerts.filter((a) => !a.resolvedAt)} />
+	<SecurityEvents {serviceId} {environmentId} />
 
 	{#if data}
 		<MetricPanel

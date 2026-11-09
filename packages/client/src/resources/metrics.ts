@@ -1,4 +1,10 @@
-import type { Alert, MetricRange, NodeMetrics, ServiceMetrics } from '@tramline/contracts';
+import type {
+	Alert,
+	MetricRange,
+	NodeMetrics,
+	SecurityEvent,
+	ServiceMetrics
+} from '@tramline/contracts';
 import type { Http } from '../http';
 
 export const metrics = (http: Http) => ({
@@ -7,6 +13,9 @@ export const metrics = (http: Http) => ({
 		http.get<ServiceMetrics>(`/services/${serviceId}/metrics`, { environmentId, range }),
 	node: (nodeId: string, range: MetricRange = '1h') =>
 		http.get<NodeMetrics>(`/nodes/${nodeId}/metrics`, { range }),
+	/** What the service's containers tried that containment blocked, over the last week. */
+	security: (serviceId: string, environmentId: string) =>
+		http.get<SecurityEvent[]>(`/services/${serviceId}/security`, { environmentId }),
 	/** Open alerts, and those resolved in the last day. */
 	alerts: () => http.get<Alert[]>('/alerts')
 });

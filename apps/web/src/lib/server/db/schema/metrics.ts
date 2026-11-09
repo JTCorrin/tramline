@@ -77,7 +77,7 @@ export const alert = sqliteTable(
 	{
 		id: text('id').primaryKey(),
 		kind: text('kind', {
-			enum: ['node_offline', 'node_disk', 'node_memory', 'service_memory']
+			enum: ['node_offline', 'node_disk', 'node_memory', 'service_memory', 'service_security']
 		}).notNull(),
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'cascade' }),
 		serviceId: text('service_id').references(() => service.id, { onDelete: 'cascade' }),
@@ -89,4 +89,33 @@ export const alert = sqliteTable(
 		resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' })
 	},
 	(table) => [index('alert_open').on(table.resolvedAt, table.kind)]
+);
+
+/**
+ * What a service container tried that containment blocked, per deployment,
+ * kind and minute: packets to the metadata endpoint, a private range or the
+ * host, or a scan (new connections, counted only past a scan's rate).
+ */
+export const securityEvent = sqliteTable(
+	'security_event',
+	{
+		deploymentId: text('deployment_id')
+			.notNull()
+			.references(() => deployment.id, { onDelete: 'cascade' }),
+		serviceId: text('service_id')
+			.notNull()
+			.references(() => service.id, { onDelete: 'cascade' }),
+		environmentId: text('environment_id')
+			.notNull()
+			.references(() => environment.id, { onDelete: 'cascade' }),
+		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		kind: text('kind', { enum: ['metadata', 'private', 'host', 'scan'] }).notNull(),
+		/** The start of the minute, in ms. */
+		bucket: integer('bucket', { mode: 'timestamp_ms' }).notNull(),
+		count: integer('count').notNull()
+	},
+	(table) => [
+		primaryKey({ columns: [table.deploymentId, table.kind, table.bucket] }),
+		index('security_event_service').on(table.serviceId, table.environmentId, table.bucket)
+	]
 );
