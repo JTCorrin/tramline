@@ -151,23 +151,26 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 	/** What a wget got: an HTTP status line, or only an error. */
 	const fetchFrom = (url: string) => run(`wget -T 3 -S -O /dev/null '${url}'`);
 
+	// each step is checked softly, so one run reports every step that got through
 	// 1. credentials in its environment and files: none of the platform's
 	// only the variables that describe the service itself, and nothing shaped like a token
 	const variables = run('env');
 	const names = [...variables.matchAll(/^(TRAMLINE_[A-Z_]+)=/gm)].map((m) => m[1]);
-	for (const name of names) expect(DESCRIBING).toContain(name);
-	expect(variables).not.toMatch(TOKEN);
-	expect(
-		run(
-			'for f in /var/run/docker.sock /run/docker.sock /var/lib/tramline /etc/tramline; do [ -e $f ] && echo found $f; done; grep docker.sock /proc/self/mountinfo'
+	for (const name of names) expect.soft(DESCRIBING).toContain(name);
+	expect.soft(variables).not.toMatch(TOKEN);
+	expect
+		.soft(
+			run(
+				'for f in /var/run/docker.sock /run/docker.sock /var/lib/tramline /etc/tramline; do [ -e $f ] && echo found $f; done; grep docker.sock /proc/self/mountinfo'
+			)
 		)
-	).toBe('');
-	expect(run("grep -rlsE 'tlnode_|tljoin_' /etc /root /home /tmp /var /run /opt")).toBe('');
+		.toBe('');
+	expect.soft(run("grep -rlsE 'tlnode_|tljoin_' /etc /root /home /tmp /var /run /opt")).toBe('');
 
 	// 2. the cloud metadata endpoints (on a cloud node they would answer)
-	expect(fetchFrom('http://169.254.169.254/computeMetadata/v1/')).not.toContain('HTTP/');
-	expect(fetchFrom('http://169.254.169.254/latest/meta-data/')).not.toContain('HTTP/');
-	expect(fetchFrom('http://168.63.129.16/machine?comp=goalstate')).not.toContain('HTTP/');
+	expect.soft(fetchFrom('http://169.254.169.254/computeMetadata/v1/')).not.toContain('HTTP/');
+	expect.soft(fetchFrom('http://169.254.169.254/latest/meta-data/')).not.toContain('HTTP/');
+	expect.soft(fetchFrom('http://168.63.129.16/machine?comp=goalstate')).not.toContain('HTTP/');
 
 	// 3. Tramline, the agent and Docker on the host: the control plane runs on this machine
 	const gateway = run("ip route | awk '/default/ {print $3}'");
@@ -179,38 +182,40 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 		`http://${gateway}:7172/`,
 		`http://${gateway}:2375/version`
 	]) {
-		expect(fetchFrom(url), url).not.toContain('HTTP/');
+		expect.soft(fetchFrom(url), url).not.toContain('HTTP/');
 	}
-	expect(run(`nc -w 2 ${gateway} 22 </dev/null && echo open`)).not.toContain('open');
+	expect.soft(run(`nc -w 2 ${gateway} 22 </dev/null && echo open`)).not.toContain('open');
 	// and, had it got there, nothing it could present would pass
 	for (const authorization of [undefined, 'Bearer tlnode_forged', 'Bearer tljoin_forged']) {
 		const response = await page.request.get('/api/agent/v1/desired', {
 			headers: { authorization: authorization ?? '' }
 		});
-		expect(response.status(), authorization).toBe(401);
+		expect.soft(response.status(), authorization).toBe(401);
 	}
 
 	// 4. the other project's service: its name doesn't resolve, and its address gets nothing
 	for (const name of ['whoami.production.tramline.internal', 'whoami', 'postgres', 'redis']) {
-		expect(run(`nslookup ${name}`), name).not.toMatch(/Name:\s+\S/);
+		expect.soft(run(`nslookup ${name}`), name).not.toMatch(/Name:\s+\S/);
 	}
 	const victimIp = containerIp(victimEnv, VICTIM);
 	expect(victimIp).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
-	expect(fetchFrom(`http://${victimIp}/`)).not.toContain('HTTP/');
+	expect.soft(fetchFrom(`http://${victimIp}/`)).not.toContain('HTTP/');
 
 	// 5. a scan of the mesh, LAN and CGNAT (Tailscale) ranges, 50 connections at a time
-	expect(
-		run(
-			[
-				// the mesh is 10.231.0.0/16
-				'for net in 10.231.0 10.231.1 10.231.2 10.231.3 10.0.0 10.0.1 10.0.2 10.0.3 192.168.0 192.168.1 192.168.2 192.168.3 100.64.0 100.64.1 100.64.2 100.64.3; do',
-				'  for i in $(seq 1 50); do',
-				'    nc -w 1 $net.$i 80 </dev/null >/dev/null 2>&1 &',
-				'  done; wait',
-				'done; echo scanned'
-			].join('\n')
+	expect
+		.soft(
+			run(
+				[
+					// the mesh is 10.231.0.0/16
+					'for net in 10.231.0 10.231.1 10.231.2 10.231.3 10.0.0 10.0.1 10.0.2 10.0.3 192.168.0 192.168.1 192.168.2 192.168.3 100.64.0 100.64.1 100.64.2 100.64.3; do',
+					'  for i in $(seq 1 50); do',
+					'    nc -w 1 $net.$i 80 </dev/null >/dev/null 2>&1 &',
+					'  done; wait',
+					'done; echo scanned'
+				].join('\n')
+			)
 		)
-	).toContain('scanned');
+		.toContain('scanned');
 
 	// every step shows on the attacker's service, with an alert
 	await expect
