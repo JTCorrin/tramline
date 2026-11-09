@@ -54,21 +54,19 @@ test('deploy a Docker image, reach it through the ingress, then remove it', asyn
 	expect((await custom()).text).toContain('Hostname:');
 
 	// what came in shows on the Traffic tab: Caddy's access log, read and shipped by the agent
+	// (whoami answers every path, so the probe gets a 200)
 	const probe = await request.get(`http://127.0.0.1:${INGRESS_PORT}/.env?probe=1`, {
 		headers: { host: url.hostname, 'user-agent': 'tramline-e2e-probe' }
 	});
-	expect(probe.status()).toBe(404);
+	expect(probe.status()).toBe(200);
+	const probed = page.getByTestId('traffic-entry').filter({ hasText: '/.env?probe=1' });
 	await expect(async () => {
 		// the tab reads afresh each time it opens
 		await panel.getByRole('tab', { name: 'Metrics' }).click();
 		await panel.getByRole('tab', { name: 'Traffic' }).click();
-		await expect(
-			page.getByTestId('traffic-entry').filter({ hasText: '/.env?probe=1' })
-		).toContainText('404', { timeout: 2_000 });
+		await expect(probed).toContainText('200', { timeout: 2_000 });
 	}).toPass({ timeout: 60_000 });
-	await expect(
-		page.getByTestId('traffic-entry').filter({ hasText: '/.env?probe=1' })
-	).toContainText('tramline-e2e-probe');
+	await expect(probed).toContainText('tramline-e2e-probe');
 
 	// logs stream into the deployments tab
 	await panel.getByRole('tab', { name: 'Deployments' }).click();
