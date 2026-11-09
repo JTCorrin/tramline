@@ -5,7 +5,8 @@
 	import { formatBytes, timeAgo } from '#lib/format.js';
 	import { reportError } from '#lib/forms.js';
 	import { cn } from '#lib/utils.js';
-	import type { Traffic, TrafficQuery } from '@tramline/contracts';
+	import type { Alert, Traffic, TrafficQuery } from '@tramline/contracts';
+	import AlertList from './alert-list.svelte';
 	import XIcon from '@lucide/svelte/icons/x';
 
 	/**
@@ -27,6 +28,7 @@
 	let path = $state('');
 	let data = $state<Traffic | null>(null);
 	let forbidden = $state(false);
+	let alerts = $state<Alert[]>([]);
 
 	const load = () =>
 		client.metrics
@@ -38,7 +40,16 @@
 				asn,
 				path: path || undefined
 			})
-			.then((result) => (data = result))
+			.then(async (result) => {
+				data = result;
+				alerts = (await client.metrics.alerts()).filter(
+					(a) =>
+						a.kind.startsWith('traffic_') &&
+						!a.resolvedAt &&
+						a.serviceId === serviceId &&
+						a.environmentId === environmentId
+				);
+			})
 			.catch((error) => {
 				if (error instanceof ApiError && error.status === 403) forbidden = true;
 				else reportError(error);
@@ -132,6 +143,8 @@
 				</Button>
 			{/if}
 		</div>
+
+		<AlertList {alerts} />
 
 		{#if data}
 			<div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">

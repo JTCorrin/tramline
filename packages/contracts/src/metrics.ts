@@ -88,7 +88,10 @@ export const ALERT_KINDS = [
 	'node_disk',
 	'node_memory',
 	'service_memory',
-	'service_security'
+	'service_security',
+	'traffic_errors',
+	'traffic_scanner',
+	'traffic_new_network'
 ] as const;
 export const AlertKind = z.enum(ALERT_KINDS);
 export type AlertKind = z.infer<typeof AlertKind>;

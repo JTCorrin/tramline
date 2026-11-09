@@ -1,3 +1,4 @@
+import { ALERT_KINDS } from '@tramline/contracts';
 import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { node } from './nodes';
 import { deployment, environment, service } from './services';
@@ -77,7 +78,7 @@ export const alert = sqliteTable(
 	{
 		id: text('id').primaryKey(),
 		kind: text('kind', {
-			enum: ['node_offline', 'node_disk', 'node_memory', 'service_memory', 'service_security']
+			enum: ALERT_KINDS
 		}).notNull(),
 		nodeId: text('node_id').references(() => node.id, { onDelete: 'cascade' }),
 		serviceId: text('service_id').references(() => service.id, { onDelete: 'cascade' }),
