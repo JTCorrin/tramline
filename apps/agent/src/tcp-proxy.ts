@@ -89,7 +89,11 @@ const readExactly = (socket: net.Socket, length: number) =>
  * cancel requests (they carry a secret key and nothing else), and refuses
  * a plain startup message.
  */
-async function postgresHandshake(client: net.Socket, connect: () => net.Socket) {
+async function postgresHandshake(
+	client: net.Socket,
+	connect: () => net.Socket,
+	outcome: (o: Outcome) => void
+) {
 	for (;;) {
 		const head = await readExactly(client, 8);
 		if (!head) return client.destroy();
@@ -108,6 +112,7 @@ async function postgresHandshake(client: net.Socket, connect: () => net.Socket) 
 			return client.end();
 		}
 		if (length !== 8 || code !== SSL_REQUEST) {
+			outcome('plaintext');
 			client.end(
 				postgresError(
 					'Tramline only accepts TLS here. Connect with sslmode=require (or verify-full).'
@@ -124,6 +129,7 @@ async function postgresHandshake(client: net.Socket, connect: () => net.Socket) 
 			upstream.destroy();
 			return client.end(postgresError('The database did not offer TLS'));
 		}
+		outcome('proxied');
 		client.write(answer);
 		client.pipe(upstream).pipe(client);
 		client.resume();
@@ -132,6 +138,23 @@ async function postgresHandshake(client: net.Socket, connect: () => net.Socket) 
 	}
 }
 
+type Outcome = 'proxied' | 'refused' | 'plaintext';
+
+/**
+ * One line per connection, read by the agent for the service's traffic (see
+ * access.ts). Connections that send nothing aren't logged: there is nothing
+ * to tell them from a port check.
+ */
+export const accessLine = (entry: {
+	port: number;
+	client: string;
+	outcome: Outcome;
+	durationMs: number;
+	bytesIn: number;
+	bytesOut: number;
+	ts?: string;
+}) => JSON.stringify({ access: 'tcp', ts: entry.ts ?? new Date().toISOString(), ...entry });
+
 export function createTcpProxy(config: ProxyConfig, log: (line: string) => void = console.log) {
 	const allowed = allowlist(config.allow);
 	const separator = config.target.lastIndexOf(':');
@@ -139,17 +162,38 @@ export function createTcpProxy(config: ProxyConfig, log: (line: string) => void 
 	const port = Number(config.target.slice(separator + 1));
 	return net.createServer({ pauseOnConnect: true }, (client) => {
 		const address = client.remoteAddress ?? '';
+		const started = Date.now();
+		const record = (outcome: Outcome, bytes = { bytesIn: 0, bytesOut: 0 }) =>
+			log(
+				accessLine({
+					port: config.listen,
+					client: address,
+					outcome,
+					durationMs: Date.now() - started,
+					...bytes
+				})
+			);
 		if (!allowed(address)) {
 			log(`[proxy] refused ${address}: not on the allowlist`);
+			record('refused');
 			return client.destroy();
 		}
-		client.on('error', () => client.destroy());
-		void postgresHandshake(client, () => {
-			const upstream = net.connect(port, host);
-			upstream.on('close', () => client.destroy());
-			client.on('close', () => upstream.destroy());
-			return upstream;
+		let outcome: Outcome | null = null;
+		// logged once the connection is over, with what crossed it
+		client.on('close', () => {
+			if (outcome) record(outcome, { bytesIn: client.bytesRead, bytesOut: client.bytesWritten });
 		});
+		client.on('error', () => client.destroy());
+		void postgresHandshake(
+			client,
+			() => {
+				const upstream = net.connect(port, host);
+				upstream.on('close', () => client.destroy());
+				client.on('close', () => upstream.destroy());
+				return upstream;
+			},
+			(o) => (outcome = o)
+		);
 	});
 }
 

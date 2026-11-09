@@ -18,4 +18,5 @@ export * as projects from './projects';
 export * as publicAccess from './public-access';
 export * as services from './services';
 export * as tokens from './tokens';
+export * as traffic from './traffic';
 export * as variables from './variables';

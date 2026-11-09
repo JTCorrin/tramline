@@ -118,3 +118,66 @@ export const SecurityEvent = z.object({
 	at: z.iso.datetime()
 });
 export type SecurityEvent = z.infer<typeof SecurityEvent>;
+
+/** Requests from the last hour, day or week; the Traffic tab's filters. */
+export const TrafficQuery = z.object({
+	environmentId: z.string(),
+	range: z.enum(['1h', '24h', '7d']).default('24h'),
+	/** e.g. `4xx`, or `tcp` for connections to the TCP proxy. */
+	status: z.enum(['2xx', '3xx', '4xx', '5xx', 'tcp']).optional(),
+	client: z.string().max(64).optional(),
+	asn: z.coerce.number().int().optional(),
+	/** Paths containing this. */
+	path: z.string().max(256).optional()
+});
+export type TrafficQuery = z.infer<typeof TrafficQuery>;
+
+/** One request to a service's public domain, or one connection to its TCP proxy. */
+export const TrafficEntry = z.object({
+	at: z.iso.datetime(),
+	kind: z.enum(['http', 'tcp']),
+	host: z.string().nullable(),
+	method: z.string().nullable(),
+	path: z.string().nullable(),
+	/** HTTP status; null for TCP. */
+	status: z.number().int().nullable(),
+	/** TCP: proxied, refused (not on the allowlist) or plaintext (didn't start TLS). */
+	outcome: z.string().nullable(),
+	durationMs: z.number(),
+	bytes: z.number().int(),
+	/** The visitor's address; ends in .0 (or ::) when addresses are anonymised. */
+	client: z.string(),
+	asn: z.number().int().nullable(),
+	/** Who the address belongs to, e.g. "GOOGLE-CLOUD-PLATFORM"; null when unknown. */
+	network: z.string().nullable(),
+	userAgent: z.string().nullable(),
+	nodeName: z.string().nullable(),
+	/** How many requests this one stands for: more than 1 when successes were sampled. */
+	weight: z.number().int()
+});
+export type TrafficEntry = z.infer<typeof TrafficEntry>;
+
+export const Traffic = z.object({
+	/** Requests and connections matching the filters, counting sampled ones at their weight. */
+	total: z.number().int(),
+	statuses: z.array(z.object({ status: z.string(), count: z.number().int() })),
+	topClients: z.array(
+		z.object({ client: z.string(), network: z.string().nullable(), count: z.number().int() })
+	),
+	topNetworks: z.array(
+		z.object({
+			asn: z.number().int().nullable(),
+			network: z.string().nullable(),
+			count: z.number().int()
+		})
+	),
+	/** The newest 200. */
+	entries: z.array(TrafficEntry),
+	settings: z.object({
+		retentionDays: z.number().int(),
+		anonymised: z.boolean(),
+		/** Whether network names are available (the IP-to-ASN data is loaded). */
+		networks: z.boolean()
+	})
+});
+export type Traffic = z.infer<typeof Traffic>;

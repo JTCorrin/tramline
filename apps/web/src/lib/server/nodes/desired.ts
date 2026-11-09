@@ -310,6 +310,10 @@ export function buildDesiredState(
 			httpPort: settings.ingressPort,
 			tls: usesTls(settings),
 			routes,
+			// only when set, so other installs' desired states don't change
+			...(settings.traffic?.trustedProxies.length
+				? { trustedProxies: settings.traffic.trustedProxies }
+				: {}),
 			...(servesTunnel && tunnelRoutes.length
 				? { tunnel: { port: TUNNEL_INGRESS_PORT, routes: tunnelRoutes } }
 				: {})

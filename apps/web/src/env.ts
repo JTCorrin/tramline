@@ -1,4 +1,5 @@
 import { defineEnvVars } from '@sveltejs/kit/env';
+import { CIDR } from '@tramline/contracts';
 
 const optional = (value: string | undefined) => value || undefined;
 
@@ -75,6 +76,57 @@ export const variables = defineEnvVars({
 				throw new Error('TRAMLINE_ALERT_WEBHOOK_URL must be an http(s) URL');
 			}
 			return value;
+		}
+	},
+	TRAMLINE_ACCESS_LOG_DAYS: {
+		description:
+			'How many days of access logs (requests to public domains and connections to TCP proxies) to keep (default 14; 0 keeps none).',
+		schema: (value) => {
+			const days = Number(value ?? 14);
+			if (!Number.isInteger(days) || days < 0)
+				throw new Error('TRAMLINE_ACCESS_LOG_DAYS must be a whole number');
+			return days;
+		}
+	},
+	TRAMLINE_ACCESS_LOG_MAX_ROWS: {
+		description:
+			'The most access log entries kept across the install; the oldest go first (default 2000000, roughly 1 GB).',
+		schema: (value) => {
+			const rows = Number(value ?? 2_000_000);
+			if (!Number.isInteger(rows) || rows < 1000)
+				throw new Error('TRAMLINE_ACCESS_LOG_MAX_ROWS must be a whole number of at least 1000');
+			return rows;
+		}
+	},
+	TRAMLINE_ANONYMIZE_IPS: {
+		description:
+			'Store visitors’ addresses without their last part (the last number of an IPv4 address, all but the first 48 bits of an IPv6 one). Their network is looked up first. Off unless set to true.',
+		schema: (value) => value === 'true' || value === '1'
+	},
+	TRAMLINE_TRUSTED_PROXIES: {
+		description:
+			'Comma-separated addresses or CIDRs of proxies in front of the ingress (e.g. a load balancer), whose X-Forwarded-For header names the visitor in access logs. The Cloudflare tunnel needs nothing here.',
+		schema: (value) => {
+			const list = (value ?? '')
+				.split(',')
+				.map((entry) => entry.trim())
+				.filter(Boolean);
+			for (const entry of list) {
+				if (!CIDR.safeParse(entry).success)
+					throw new Error(`TRAMLINE_TRUSTED_PROXIES: ${entry} is not an address or CIDR`);
+			}
+			return list;
+		}
+	},
+	TRAMLINE_ASN_DATA_URL: {
+		description:
+			'Where to download the IP-to-network data that names who each visitor’s address belongs to (default https://iptoasn.com/data/ip2asn-combined.tsv.gz, public domain; refreshed weekly). Addresses are looked up locally and never sent anywhere. `off` turns network names off.',
+		schema: (value) => {
+			if (value === 'off') return null;
+			const url = value || 'https://iptoasn.com/data/ip2asn-combined.tsv.gz';
+			if (!/^(https?|file):\/\//.test(url))
+				throw new Error('TRAMLINE_ASN_DATA_URL must be an http(s) or file URL, or off');
+			return url;
 		}
 	},
 	TRAMLINE_FAKE_ADAPTER: {

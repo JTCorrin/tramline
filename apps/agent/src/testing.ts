@@ -105,6 +105,10 @@ export class FakeRuntime implements ContainerRuntime {
 		this.#guard(`connect ${container} ${network}`);
 		this.containers.get(container)?.networks.push(network);
 	}
+	async networkGateway(name: string) {
+		const subnet = await this.networkSubnet(name);
+		return subnet ? subnet.replace(/0\/16$/, '1') : null;
+	}
 	async networkSubnet(name: string) {
 		if (name === 'bridge') return '172.17.0.0/16';
 		const i = [...this.networks].indexOf(name);

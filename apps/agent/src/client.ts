@@ -1,5 +1,6 @@
 import {
 	DesiredState,
+	type AccessEntry,
 	type AgentHello,
 	type AgentReportInput,
 	type QueryResult,
@@ -75,6 +76,11 @@ export class ControlPlane {
 
 	async logs(lines: LogLine[]) {
 		await this.#request('/logs', { method: 'POST', body: JSON.stringify({ lines }) });
+	}
+
+	/** Requests and connections that came in through this node's ingress and TCP proxies. */
+	async access(entries: AccessEntry[]) {
+		await this.#request('/access', { method: 'POST', body: JSON.stringify({ entries }) });
 	}
 
 	async metrics(batch: MetricsBatch) {

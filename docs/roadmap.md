@@ -736,7 +736,8 @@ What a hostile workload tries, from a published account of one on another platfo
   - Name guessing: a burst of failed lookups for private names.
   - Docker or agent API attempts from a workload.
   - Each shows the service, deployment and node, and can stop the deployment.
-- **Access logs (for traffic coming in):**
+- **Access logs ✅** (unit-tested; the e2e test reads a request back from the Traffic tab): what is stored, who sees it, how addresses are resolved and named, and the retention and privacy settings are in SECURITY.md under Access logs. Still to do: the alerts below, failed SSH logins, and traffic to addresses no service owns (a scanner trying a node's IP is dropped today).
+- **Access logs (as planned):**
   - **HTTP:** Caddy's JSON access log on every ingress (time, host, method, path, status, duration, client IP, user agent), shipped by the agent like deployment logs.
   - **TCP:** the TCP proxy logs connections (source, port, duration, bytes).
   - **Who:** each IP is looked up in an offline IP-to-ASN database, so each request shows the network it came from, e.g. "Google Cloud" or a hosting provider, and no lookup leaves the install.

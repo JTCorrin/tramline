@@ -21,6 +21,10 @@ import * as helloRoute from './hello/+server';
 import * as joinRoute from './join/+server';
 import * as installRoute from '../../../install.sh/+server';
 import * as logsRoute from './logs/+server';
+import * as accessRoute from './access/+server';
+import * as trafficRoute from '../../v1/services/[id]/traffic/+server';
+import { schema } from '#lib/server/db/index.js';
+import { and, eq } from 'drizzle-orm';
 import * as reportRoute from './report/+server';
 
 type Handler = (event: never) => Response | Promise<Response>;
@@ -306,6 +310,62 @@ describe('agent API', () => {
 				})
 			).status
 		).toBe(404);
+	});
+
+	it('records traffic for the service a host belongs to, for its owners to see', async () => {
+		const { user, token, dep } = await deployed();
+		const host = `traffic-${dep.id}.localhost`.toLowerCase();
+		db.update(schema.serviceInstance)
+			.set({ domain: host })
+			.where(
+				and(
+					eq(schema.serviceInstance.serviceId, dep.serviceId),
+					eq(schema.serviceInstance.environmentId, dep.environmentId)
+				)
+			)
+			.run();
+		const entry = {
+			kind: 'http',
+			ts: new Date().toISOString(),
+			host,
+			method: 'GET',
+			path: '/.git/config',
+			status: 404,
+			durationMs: 1.5,
+			bytes: 10,
+			client: '198.51.100.7',
+			userAgent: 'scanner',
+			tunnel: false
+		};
+		expect(
+			(
+				await call(accessRoute.POST as Handler, {
+					path: '/api/agent/v1/access',
+					method: 'POST',
+					token,
+					body: { entries: [entry, { ...entry, host: 'nobody.localhost' }] }
+				})
+			).status
+		).toBe(204);
+		expect(
+			(
+				await call(accessRoute.POST as Handler, {
+					path: '/api/agent/v1/access',
+					method: 'POST',
+					token,
+					body: { entries: [{ ...entry, kind: 'smtp' }] }
+				})
+			).status
+		).toBe(422);
+
+		const seen = await call(trafficRoute.GET as Handler, {
+			path: `/api/v1/services/${dep.serviceId}/traffic?environmentId=${dep.environmentId}&status=4xx`,
+			params: { id: dep.serviceId },
+			user
+		});
+		expect(seen.status).toBe(200);
+		expect(seen.body.total).toBe(1);
+		expect(seen.body.entries[0]).toMatchObject({ path: '/.git/config', client: '198.51.100.7' });
 	});
 
 	it('redeploys and removes through the API', async () => {
