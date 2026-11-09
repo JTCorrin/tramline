@@ -153,10 +153,10 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 
 	// 1. credentials in its environment and files: none of the platform's
 	// only the variables that describe the service itself, and nothing shaped like a token
-	const env = run('env');
-	const names = [...env.matchAll(/^(TRAMLINE_[A-Z_]+)=/gm)].map((m) => m[1]);
+	const variables = run('env');
+	const names = [...variables.matchAll(/^(TRAMLINE_[A-Z_]+)=/gm)].map((m) => m[1]);
 	for (const name of names) expect(DESCRIBING).toContain(name);
-	expect(env).not.toMatch(TOKEN);
+	expect(variables).not.toMatch(TOKEN);
 	expect(
 		run(
 			'for f in /var/run/docker.sock /run/docker.sock /var/lib/tramline /etc/tramline; do [ -e $f ] && echo found $f; done; grep docker.sock /proc/self/mountinfo'
