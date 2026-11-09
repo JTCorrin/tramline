@@ -798,6 +798,25 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
   - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
 - **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set. An AI sandbox runs its first command within a second of being asked for, the 7.5 hostile-tenant suite run inside one is blocked at every step, and a GPU sandbox sees its GPU with `nvidia-smi`.
 
+### Phase 8.7: Storage nodes (S3-compatible buckets)
+
+A storage node is a bucket rather than a machine: S3-compatible object storage on a provider, added from the Nodes page like any other node and used by services, backups and templates. It works on every provider except GPU-only clouds like Lambda.
+
+- **Where the bucket comes from:**
+  - **AWS:** S3.
+  - **GCP:** Cloud Storage through its S3-compatible XML API, with HMAC keys.
+  - **Hetzner:** Object Storage, which is S3-compatible.
+  - **Azure:** Blob Storage doesn't speak S3. Either run an S3 server (e.g. Garage) on a small VM with a managed disk, or add a Blob driver behind the same interface. To be decided.
+  - **Proxmox and other machines:** an S3 server (e.g. Garage) on a node of the user's own, its data on a volume.
+- **Adapter SDK:** an optional storage capability on adapters: create and delete a bucket, and issue and revoke credentials scoped to it. Adapters without it don't offer storage nodes.
+- **Using one:**
+  - **From a service:** a bucket is a canvas resource. A service that references it gets `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION` and its own access key as variables (`${{Bucket.S3_ENDPOINT}}`). Each service gets its own key, limited to that bucket (or a prefix of it), and the key is revoked when the reference goes.
+  - **For backups:** a storage node can be chosen as the backup target instead of typing in a bucket. Phase 4b's encryption and presigned URLs stay as they are.
+  - **In templates:** Supabase Storage and other stacks that need object storage are wired to a bucket at install.
+- **Secure by default:** buckets are private, public access is blocked, encryption at rest is on, keys are stored encrypted and are write-only in the API, and deleting a storage node that still has objects needs confirmation.
+- **Cost:** the price engine (Phase 8) includes $/GB-month and egress per provider, and each bucket's size and cost are shown.
+- **Exit:** a storage node on AWS, GCP and Hetzner (and a self-hosted one on Proxmox) is created from the Nodes page. A service referencing it writes and reads an object with the variables it was given, and can't reach another bucket with its key. Backups run to it, and removing it deletes the bucket and its keys.
+
 ### Phase 9: Production readiness and ecosystem
 
 - PR preview environments, `tram` CLI (`login`, `link`, `up`, `logs`, `vars`, `run`) on the Phase 5 tokens, RBAC roles, notifications.
