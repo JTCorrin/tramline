@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import {
+	closeSync,
+	fstatSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	writeSync
+} from 'node:fs';
 import { isIPv4, isIPv6 } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,36 +181,71 @@ export class AsnData {
 		return this.#busy;
 	}
 
+	/** Loads the file unless it is the one already loaded; one handle, so what's read is what was checked. */
+	async #load(file: string) {
+		const fd = openFileOrNull(file);
+		if (fd === null) return false;
+		try {
+			const { mtimeMs } = fstatSync(fd);
+			if (this.#table && mtimeMs === this.#loadedMtime) return true;
+			this.#table = await parseAsnTable(await decode(readFileSync(fd), file));
+			this.#loadedMtime = mtimeMs;
+			return true;
+		} finally {
+			closeSync(fd);
+		}
+	}
+
 	async #refresh(now: number) {
 		const url = this.url!;
 		if (url.startsWith('file:')) {
 			const source = fileURLToPath(url);
-			const mtime = statSync(source).mtimeMs;
-			if (this.#table && mtime === this.#loadedMtime) return;
-			this.#table = await parseAsnTable(await decode(readFileSync(source), source));
-			this.#loadedMtime = mtime;
+			if (!(await this.#load(source))) throw new Error(`${source} doesn't exist`);
 			return;
 		}
 		const file = this.#file;
-		const age = existsSync(file) ? now - statSync(file).mtimeMs : Infinity;
-		if (age >= REFRESH_MS) {
-			const response = await this.fetcher(url, { signal: AbortSignal.timeout(120_000) });
-			if (!response.ok) throw new Error(`downloading ${url} failed: HTTP ${response.status}`);
-			const data = Buffer.from(await response.arrayBuffer());
-			// check it reads before replacing the copy we have
-			const table = await parseAsnTable(await decode(data, file));
-			if (!table.size) throw new Error(`${url} has no address ranges`);
-			mkdirSync(path.dirname(file), { recursive: true });
-			writeFileSync(`${file}.tmp`, data);
-			renameSync(`${file}.tmp`, file);
-			this.#table = table;
-			this.#loadedMtime = statSync(file).mtimeMs;
+		if (now - modified(file) < REFRESH_MS) {
+			await this.#load(file);
 			return;
 		}
-		const mtime = statSync(file).mtimeMs;
-		if (this.#table && mtime === this.#loadedMtime) return;
-		this.#table = await parseAsnTable(await decode(readFileSync(file), file));
-		this.#loadedMtime = mtime;
+		const response = await this.fetcher(url, { signal: AbortSignal.timeout(120_000) });
+		if (!response.ok) throw new Error(`downloading ${url} failed: HTTP ${response.status}`);
+		const data = Buffer.from(await response.arrayBuffer());
+		// check it reads before replacing the copy we have
+		const table = await parseAsnTable(await decode(data, file));
+		if (!table.size) throw new Error(`${url} has no address ranges`);
+		mkdirSync(path.dirname(file), { recursive: true });
+		const fd = openSync(`${file}.tmp`, 'w');
+		let mtimeMs: number;
+		try {
+			writeSync(fd, data);
+			mtimeMs = fstatSync(fd).mtimeMs;
+		} finally {
+			closeSync(fd);
+		}
+		renameSync(`${file}.tmp`, file);
+		this.#table = table;
+		this.#loadedMtime = mtimeMs;
+	}
+}
+
+function openFileOrNull(file: string) {
+	try {
+		return openSync(file, 'r');
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+		throw error;
+	}
+}
+
+/** When the file was last written, or 0 when there's none. */
+function modified(file: string) {
+	const fd = openFileOrNull(file);
+	if (fd === null) return 0;
+	try {
+		return fstatSync(fd).mtimeMs;
+	} finally {
+		closeSync(fd);
 	}
 }
 
