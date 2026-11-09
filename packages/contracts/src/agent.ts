@@ -372,6 +372,11 @@ export const DesiredState = z.object({
 		tls: z.boolean(),
 		routes: z.array(IngressRoute),
 		/**
+		 * Proxies in front of the ingress (TRAMLINE_TRUSTED_PROXIES), whose
+		 * X-Forwarded-For the access log believes. Absent: none.
+		 */
+		trustedProxies: z.array(z.string()).optional(),
+		/**
 		 * Domains served through the Cloudflare tunnel, on the node running its
 		 * connector: plain HTTP on `127.0.0.1:<port>`, where the connector (on the
 		 * host's network) delivers them. Cloudflare terminates TLS.
@@ -501,6 +506,56 @@ export type LogLine = z.infer<typeof LogLine>;
 
 export const LogBatch = z.object({ lines: z.array(LogLine).max(5000) });
 export type LogBatch = z.infer<typeof LogBatch>;
+
+/** Longest path (with its query) and user agent an access entry keeps; the agent cuts longer ones. */
+export const ACCESS_PATH_MAX = 1024;
+export const ACCESS_AGENT_MAX = 256;
+
+/**
+ * Traffic coming in, as the agent read it from the ingress's and the TCP
+ * proxies' logs. `client` is the visitor's address: the connecting address,
+ * unless that is a trusted proxy (the tunnel connector, or one listed in
+ * `ingress.trustedProxies`), in which case it is the address the proxy
+ * passed on.
+ */
+export const AccessEntry = z.discriminatedUnion('kind', [
+	/** One request the ingress served. */
+	z.object({
+		kind: z.literal('http'),
+		ts: z.iso.datetime(),
+		host: z.string().max(253),
+		method: z.string().max(16),
+		/** With the query string. */
+		path: z.string().max(ACCESS_PATH_MAX + 16),
+		status: z.number().int().min(0).max(999),
+		durationMs: z.number().min(0),
+		/** Response body bytes. */
+		bytes: z.number().int().min(0),
+		client: z.string().max(64),
+		userAgent: z
+			.string()
+			.max(ACCESS_AGENT_MAX + 16)
+			.nullable(),
+		/** Came in through the Cloudflare tunnel. */
+		tunnel: z.boolean()
+	}),
+	/** One connection to a TCP proxy's public port. */
+	z.object({
+		kind: z.literal('tcp'),
+		ts: z.iso.datetime(),
+		port: z.number().int().min(1).max(65535),
+		client: z.string().max(64),
+		/** proxied: reached the database; refused: not on the allowlist; plaintext: didn't start TLS. */
+		outcome: z.enum(['proxied', 'refused', 'plaintext']),
+		durationMs: z.number().min(0),
+		bytesIn: z.number().int().min(0),
+		bytesOut: z.number().int().min(0)
+	})
+]);
+export type AccessEntry = z.infer<typeof AccessEntry>;
+
+export const AccessBatch = z.object({ entries: z.array(AccessEntry).max(5000) });
+export type AccessBatch = z.infer<typeof AccessBatch>;
 
 export const NodeSummary = z.object({
 	id: z.string(),

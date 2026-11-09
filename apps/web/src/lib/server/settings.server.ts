@@ -4,7 +4,12 @@ import {
 	TRAMLINE_DATA_DIR,
 	TRAMLINE_INGRESS_PORT,
 	TRAMLINE_URL,
-	TRAMLINE_AGENT_URL
+	TRAMLINE_AGENT_URL,
+	TRAMLINE_ACCESS_LOG_DAYS,
+	TRAMLINE_ACCESS_LOG_MAX_ROWS,
+	TRAMLINE_ANONYMIZE_IPS,
+	TRAMLINE_TRUSTED_PROXIES,
+	TRAMLINE_ASN_DATA_URL
 } from '$app/env/private';
 import type { PlatformSettings } from './settings';
 
@@ -14,5 +19,12 @@ export const settings: PlatformSettings = {
 	dataDir: TRAMLINE_DATA_DIR,
 	publicUrl: TRAMLINE_URL ?? null,
 	agentUrl: TRAMLINE_AGENT_URL ?? null,
-	signup: TRAMLINE_SIGNUP
+	signup: TRAMLINE_SIGNUP,
+	traffic: {
+		retentionDays: TRAMLINE_ACCESS_LOG_DAYS,
+		maxRows: TRAMLINE_ACCESS_LOG_MAX_ROWS,
+		anonymize: TRAMLINE_ANONYMIZE_IPS,
+		trustedProxies: TRAMLINE_TRUSTED_PROXIES,
+		asnUrl: TRAMLINE_ASN_DATA_URL
+	}
 };

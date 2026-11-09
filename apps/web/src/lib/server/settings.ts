@@ -12,7 +12,30 @@ export interface PlatformSettings {
 	agentUrl?: string | null;
 	/** Who may create an account (TRAMLINE_SIGNUP): anyone, or only people with an invite. */
 	signup?: 'open' | 'invite';
+	/** Access logs; absent in tests that don't need them. */
+	traffic?: TrafficSettings;
 }
+
+export interface TrafficSettings {
+	/** TRAMLINE_ACCESS_LOG_DAYS: 0 keeps none. */
+	retentionDays: number;
+	/** TRAMLINE_ACCESS_LOG_MAX_ROWS */
+	maxRows: number;
+	/** TRAMLINE_ANONYMIZE_IPS */
+	anonymize: boolean;
+	/** TRAMLINE_TRUSTED_PROXIES */
+	trustedProxies: string[];
+	/** TRAMLINE_ASN_DATA_URL; null turns network names off. */
+	asnUrl: string | null;
+}
+
+export const DEFAULT_TRAFFIC: TrafficSettings = {
+	retentionDays: 14,
+	maxRows: 2_000_000,
+	anonymize: false,
+	trustedProxies: [],
+	asnUrl: null
+};
 
 /** GitHub can only deliver webhooks to an address it can reach. */
 export const reachableFromInternet = (settings: PlatformSettings) => {

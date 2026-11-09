@@ -28,6 +28,8 @@ export interface ContainerRuntime {
 	addresses(container: string): Promise<Record<string, string>>;
 	/** A network's IPv4 subnet, e.g. `172.18.0.0/16`; null when it doesn't exist. */
 	networkSubnet(name: string): Promise<string | null>;
+	/** A network's IPv4 gateway, which is the host itself on that network; null when it has none. */
+	networkGateway(name: string): Promise<string | null>;
 	exec(container: string, cmd: string[]): Promise<{ exitCode: number; output: string }>;
 	/**
 	 * Runs a command and streams its output. `env` is given to that process only

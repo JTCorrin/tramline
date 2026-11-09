@@ -16,6 +16,7 @@
 	import ServiceSettings from './service-settings.svelte';
 	import VariablesEditor from './variables-editor.svelte';
 	import ServiceMetrics from '#lib/components/metrics/service-metrics.svelte';
+	import Traffic from '#lib/components/metrics/traffic.svelte';
 
 	let {
 		workspace,
@@ -121,6 +122,7 @@
 				<Tabs.Trigger value="backups">Backups</Tabs.Trigger>
 			{/if}
 			<Tabs.Trigger value="metrics">Metrics</Tabs.Trigger>
+			<Tabs.Trigger value="traffic">Traffic</Tabs.Trigger>
 			<Tabs.Trigger value="settings">Settings</Tabs.Trigger>
 		</Tabs.List>
 		<div class="min-h-0 flex-1 overflow-y-auto">
@@ -155,6 +157,12 @@
 			</Tabs.Content>
 			<Tabs.Content value="metrics" class="p-4">
 				<ServiceMetrics serviceId={service.id} environmentId={workspace.environmentId} />
+			</Tabs.Content>
+			<Tabs.Content value="traffic" class="p-4">
+				<!-- mounted only while open, so it doesn't poll in the background -->
+				{#if tab === 'traffic'}
+					<Traffic serviceId={service.id} environmentId={workspace.environmentId} />
+				{/if}
 			</Tabs.Content>
 			<Tabs.Content value="settings">
 				{#if view}

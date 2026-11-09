@@ -253,6 +253,13 @@
       "when": 1794160108346,
       "tag": "0035_security_events",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1794225615146,
+      "tag": "0036_access_log",
+      "breakpoints": true
     }
   ]
 }

@@ -241,6 +241,16 @@ export class DockerRuntime implements ContainerRuntime {
 		}
 	}
 
+	async networkGateway(name: string) {
+		try {
+			const info = await this.docker.getNetwork(name).inspect();
+			const configs = (info.IPAM?.Config ?? []) as { Gateway?: string }[];
+			return configs.map((c) => c.Gateway).find((g) => g && !g.includes(':')) ?? null;
+		} catch {
+			return null;
+		}
+	}
+
 	async addresses(container: string) {
 		const info = await this.docker.getContainer(container).inspect();
 		return Object.fromEntries(

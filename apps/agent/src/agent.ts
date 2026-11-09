@@ -17,6 +17,7 @@ import { detectGpus } from './gpus';
 import { JobCancelled, JobQueue } from './jobs';
 import { meshKeys } from './mesh';
 import { serviceCertificate } from './tls';
+import { AccessShipper } from './access';
 import { HealthChecker } from './health';
 import { LogShipper } from './logs';
 import { MetricsSampler } from './metrics';
@@ -27,7 +28,7 @@ import { observe } from './state';
 export interface AgentOptions {
 	runtime: ContainerRuntime;
 	client: Pick<ControlPlane, 'hello' | 'desired' | 'report' | 'logs'> &
-		Partial<Pick<ControlPlane, 'answer' | 'metrics'>>;
+		Partial<Pick<ControlPlane, 'answer' | 'metrics' | 'access'>>;
 	stateDir: string;
 	version: string;
 	reportIntervalMs?: number;
@@ -77,6 +78,7 @@ const errorMessage = (error: unknown) => (error instanceof Error ? error.message
  * - sync: long-polls the control plane for desired state and converges to it
  * - report: observes containers, runs healthchecks, reports actual state
  * - logs: ships container logs in batches
+ * - access: ships what the ingress and TCP proxies logged about incoming traffic
  * - metrics: samples the node and its workloads, and sends the samples
  */
 export class Agent {
@@ -85,6 +87,8 @@ export class Agent {
 	readonly converger: Converger;
 	readonly health: HealthChecker;
 	readonly logs: LogShipper;
+	/** null when the control plane client can't take access logs. */
+	readonly access: AccessShipper | null;
 	readonly builder: Builder;
 	readonly metrics: MetricsSampler;
 	/** Builds this agent has started, by deployment, until the control plane stops asking for them. */
@@ -128,6 +132,8 @@ export class Agent {
 		});
 		this.health = new HealthChecker(options.runtime, () => this.converger.ingressName);
 		this.logs = new LogShipper(options.runtime, (lines) => options.client.logs(lines));
+		const sendAccess = options.client.access?.bind(options.client);
+		this.access = sendAccess ? new AccessShipper(options.runtime, sendAccess) : null;
 		this.metrics = new MetricsSampler(options.runtime, {
 			procDir: options.procDir,
 			diskDir: options.stateDir
@@ -175,6 +181,7 @@ export class Agent {
 		void this.#loop('sync', () => this.sync(), 100);
 		void this.#loop('report', () => this.tick(), this.options.reportIntervalMs ?? 2_000);
 		void this.#loop('logs', () => this.logs.flush(), 500);
+		if (this.access) void this.#loop('access', () => this.access!.flush(), 1_000);
 		const metricsEvery = this.options.metricsIntervalMs ?? 15_000;
 		if (metricsEvery && this.options.client.metrics) {
 			void this.#loop('metrics', () => this.sendMetrics(), metricsEvery);
@@ -190,6 +197,7 @@ export class Agent {
 	stop() {
 		this.#abort.abort();
 		this.logs.stop();
+		this.access?.stop();
 	}
 
 	async #loop(name: string, step: () => Promise<unknown>, every: number) {
@@ -466,6 +474,7 @@ export class Agent {
 			}
 			await this.health.check(desired, containers);
 			this.logs.sync(containers);
+			await this.access?.sync(containers, desired.ingress.trustedProxies);
 			this.#startBuilds(desired);
 			this.#startJobs('backup', desired.backups, (job) => this.backups.backup(job));
 			this.#startJobs('restore', desired.restores, (job) => this.backups.restore(job));

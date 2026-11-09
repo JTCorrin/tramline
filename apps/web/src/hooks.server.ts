@@ -22,6 +22,9 @@ import { pruneLogs } from '#lib/server/nodes/logs.js';
 import { controlPlaneBackups } from '#lib/server/backups/config.server.js';
 import { runControlPlaneBackups } from '#lib/server/backups/control-plane-jobs.js';
 import { runMetricsJobs } from '#lib/server/metrics/alerts.js';
+import { DEFAULT_TRAFFIC } from '#lib/server/settings.js';
+import { asnData } from '#lib/server/traffic/asn.server.js';
+import { pruneAccessLogs } from '#lib/server/traffic/store.js';
 import {
 	TRAMLINE_ALERT_WEBHOOK_URL,
 	TRAMLINE_FAKE_ADAPTER,
@@ -88,12 +91,17 @@ export const init: ServerInit = () => {
 			.finally(() => (scheduling = false));
 	}, BACKUP_SCHEDULE_INTERVAL_MS);
 
+	// the IP-to-network table for access logs: loaded now, downloaded again once a week
+	void asnData.refresh();
+	const asnRefresh = setInterval(() => void asnData.refresh(), METRICS_INTERVAL_MS);
+
 	// metric rollups and retention, then alerts
 	let measuring = false;
 	const metricJobs = setInterval(async () => {
 		if (measuring) return;
 		measuring = true;
 		await runMetricsJobs(db, TRAMLINE_ALERT_WEBHOOK_URL)
+			.then(() => pruneAccessLogs(db, settings.traffic ?? DEFAULT_TRAFFIC))
 			.catch((error) => console.error('[metrics]', error))
 			.finally(() => (measuring = false));
 	}, METRICS_INTERVAL_MS);
@@ -114,6 +122,7 @@ export const init: ServerInit = () => {
 		clearInterval(poll);
 		clearInterval(schedules);
 		clearInterval(metricJobs);
+		clearInterval(asnRefresh);
 		unsubscribe();
 	};
 };

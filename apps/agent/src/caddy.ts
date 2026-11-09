@@ -1,4 +1,5 @@
 import type { DesiredState } from '@tramline/contracts';
+import { TUNNEL_LOGGER } from './access';
 
 /** One ingress per node, so several agents can share a Docker host (e.g. dev and e2e). */
 export const ingressName = (nodeId: string) => `tramline-ingress-${nodeId}`;
@@ -52,16 +53,32 @@ function routesFor(list: Route[], https: boolean, { behindTls = false } = {}) {
 	return routes;
 }
 
-/** Caddy JSON config routing each public hostname to its live deployment. */
+/**
+ * Caddy JSON config routing each public hostname to its live deployment.
+ * Every request is logged, as JSON on stdout, where the agent reads it (see
+ * access.ts); Caddy's own messages stay on stderr. The tunnel server logs
+ * under its own name, so the agent knows which requests the connector made.
+ */
 export function caddyConfig(ingress: DesiredState['ingress']) {
 	const tunnel = ingress.tunnel ?? null;
 	return {
+		logging: {
+			logs: {
+				default: { exclude: ['http.log.access'] },
+				access: {
+					writer: { output: 'stdout' },
+					encoder: { format: 'json' },
+					include: ['http.log.access']
+				}
+			}
+		},
 		apps: {
 			http: {
 				servers: {
 					tramline: {
 						listen: ingress.tls ? [':443'] : [':80'],
 						routes: routesFor(ingress.routes, ingress.tls),
+						logs: { default_logger_name: 'ingress' },
 						...(ingress.tls ? {} : { automatic_https: { disable: true } })
 					},
 					// Cloudflare terminates TLS and the connector delivers plain HTTP here, so
@@ -73,6 +90,7 @@ export function caddyConfig(ingress: DesiredState['ingress']) {
 								tunnel: {
 									listen: [`:${tunnel.port}`],
 									routes: routesFor(tunnel.routes, true, { behindTls: true }),
+									logs: { default_logger_name: TUNNEL_LOGGER },
 									automatic_https: { disable: true }
 								}
 							}

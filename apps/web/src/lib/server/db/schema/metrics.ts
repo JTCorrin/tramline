@@ -119,3 +119,42 @@ export const securityEvent = sqliteTable(
 		index('security_event_service').on(table.serviceId, table.environmentId, table.bucket)
 	]
 );
+
+/**
+ * Traffic coming in: one row per request to a service's public domains, or
+ * connection to its TCP proxy. `weight` is how many requests a row stands
+ * for: successes on a busy service are sampled. Kept for
+ * TRAMLINE_ACCESS_LOG_DAYS (14 by default), within a row cap.
+ */
+export const accessLog = sqliteTable(
+	'access_log',
+	{
+		id: integer('id').primaryKey({ autoIncrement: true }),
+		at: integer('at', { mode: 'timestamp_ms' }).notNull(),
+		serviceId: text('service_id')
+			.notNull()
+			.references(() => service.id, { onDelete: 'cascade' }),
+		environmentId: text('environment_id')
+			.notNull()
+			.references(() => environment.id, { onDelete: 'cascade' }),
+		nodeId: text('node_id').references(() => node.id, { onDelete: 'set null' }),
+		kind: text('kind', { enum: ['http', 'tcp'] }).notNull(),
+		host: text('host'),
+		method: text('method'),
+		path: text('path'),
+		status: integer('status'),
+		/** TCP: proxied, refused or plaintext. */
+		outcome: text('outcome'),
+		durationMs: real('duration_ms').notNull(),
+		bytes: integer('bytes').notNull(),
+		client: text('client').notNull(),
+		asn: integer('asn'),
+		network: text('network'),
+		userAgent: text('user_agent'),
+		weight: integer('weight').notNull().default(1)
+	},
+	(table) => [
+		index('access_log_service').on(table.serviceId, table.environmentId, table.at),
+		index('access_log_at').on(table.at)
+	]
+);
