@@ -162,7 +162,7 @@ test('a hostile tenant gets nothing, and its owner sees every step', async ({ pa
 			'for f in /var/run/docker.sock /run/docker.sock /var/lib/tramline /etc/tramline; do [ -e $f ] && echo found $f; done; grep docker.sock /proc/self/mountinfo'
 		)
 	).toBe('');
-	expect(run("grep -rlE 'tlnode_|tljoin_' /etc /root /home /tmp /var /run /opt")).toBe('');
+	expect(run("grep -rlsE 'tlnode_|tljoin_' /etc /root /home /tmp /var /run /opt")).toBe('');
 
 	// 2. the cloud metadata endpoints (on a cloud node they would answer)
 	expect(fetchFrom('http://169.254.169.254/computeMetadata/v1/')).not.toContain('HTTP/');
