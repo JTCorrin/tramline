@@ -8,6 +8,7 @@ import {
 	clientAddress,
 	parseCaddyLine,
 	parseProxyLine,
+	parseSshWatchLine,
 	type ClientContext
 } from './access';
 import { caddyConfig } from './caddy';
@@ -391,5 +392,53 @@ describe('AccessShipper', () => {
 		await shipper.sync([ingress]);
 		expect(lookups).toHaveBeenCalledTimes(2);
 		expect(MAX_QUEUED_ENTRIES).toBeGreaterThan(1000);
+	});
+});
+
+describe('the SSH watcher', () => {
+	it('reads its status and failed logins', () => {
+		expect(parseSshWatchLine('{"ssh":"watching","file":"auth.log"}')).toEqual({
+			status: 'watching'
+		});
+		expect(parseSshWatchLine('{"ssh":"unavailable"}')).toEqual({ status: 'unavailable' });
+		expect(
+			parseSshWatchLine(
+				'{"ssh":"failed","ts":"2027-01-15T08:00:00.000Z","client":"::ffff:203.0.113.9","user":"root"}'
+			)
+		).toEqual({
+			entry: { kind: 'ssh', ts: '2027-01-15T08:00:00.000Z', client: '203.0.113.9', user: 'root' }
+		});
+		expect(parseSshWatchLine('{"ssh":"failed","client":"nope"}')).toBeNull();
+		expect(parseSshWatchLine('{"ssh":"failed","client":"203.0.113.9","user":7}')).toMatchObject({
+			entry: { user: null }
+		});
+		expect(parseSshWatchLine('[sshwatch] oops')).toBeNull();
+		expect(parseSshWatchLine('{oops')).toBeNull();
+		expect(parseSshWatchLine('{"other":true}')).toBeNull();
+	});
+
+	it("is read from the start for its status, without resending the last agent's failures", async () => {
+		const runtime = new FakeRuntime();
+		const send = vi.fn(async (_entries: AccessEntry[]) => {});
+		const shipper = new AccessShipper(runtime, send, {
+			now: () => Date.parse('2027-01-15T08:00:00Z')
+		});
+		expect(shipper.sshWatch).toBe('off');
+		const watcher = container('tramline-sshwatch-n', 'sshwatch', { networks: [] });
+		await shipper.sync([watcher]);
+		const follower = runtime.followers.get('tramline-sshwatch-n')!;
+		expect(follower.since).toBe(0);
+		const failure = (ts: string) =>
+			JSON.stringify({ ssh: 'failed', ts, client: '203.0.113.9', user: 'root' });
+		follower.onLine('stdout', '2027-01-14T00:00:00Z', '{"ssh":"watching","file":"auth.log"}');
+		follower.onLine('stdout', '2027-01-14T00:00:01Z', failure('2027-01-14T00:00:01Z'));
+		follower.onLine('stdout', '2027-01-15T08:00:01Z', failure('2027-01-15T08:00:01Z'));
+		expect(shipper.sshWatch).toBe('watching');
+		await shipper.flush();
+		expect(send.mock.calls[0]![0]).toEqual([
+			{ kind: 'ssh', ts: '2027-01-15T08:00:01.000Z', client: '203.0.113.9', user: 'root' }
+		]);
+		await shipper.sync([]);
+		expect(shipper.sshWatch).toBe('off');
 	});
 });

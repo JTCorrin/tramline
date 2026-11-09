@@ -1,4 +1,9 @@
-import { ACCESS_AGENT_MAX, ACCESS_PATH_MAX, type AccessEntry } from '@tramline/contracts';
+import {
+	ACCESS_AGENT_MAX,
+	ACCESS_PATH_MAX,
+	type AccessEntry,
+	type SshWatch
+} from '@tramline/contracts';
 import { isIP } from 'node:net';
 import { ControlPlaneError } from './client';
 import { LABELS, type ContainerRuntime, type ManagedContainer } from './runtime';
@@ -145,7 +150,26 @@ export function parseProxyLine(line: string): AccessEntry | null {
 	};
 }
 
-const ROLES = new Set(['ingress', 'tcp-proxy']);
+/** What the SSH watcher printed (see sshwatch.ts): a failed login, or whether it can read the log. */
+export function parseSshWatchLine(
+	line: string
+): { entry: AccessEntry } | { status: SshWatch } | null {
+	if (!line.startsWith('{')) return null;
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (parsed?.ssh === 'watching' || parsed?.ssh === 'unavailable') return { status: parsed.ssh };
+	if (parsed?.ssh !== 'failed') return null;
+	const client = unmap(String(parsed.client ?? ''));
+	if (!isIP(client)) return null;
+	const user = typeof parsed.user === 'string' ? parsed.user.slice(0, 64) : null;
+	return { entry: { kind: 'ssh', ts: timestamp(parsed.ts), client, user } };
+}
+
+const ROLES = new Set(['ingress', 'tcp-proxy', 'sshwatch']);
 
 /**
  * Follows the ingress and the TCP proxies and ships what they log about
@@ -162,7 +186,9 @@ export class AccessShipper {
 	#trustedKey = '';
 	#gateways = new Map<string, string | null>();
 	#unsupportedUntil = 0;
+	#sshWatch: SshWatch = 'off';
 	readonly #startedAt: number;
+	readonly #startedIso: string;
 
 	constructor(
 		private runtime: ContainerRuntime,
@@ -170,6 +196,7 @@ export class AccessShipper {
 		private options: { maxBatch?: number; maxQueued?: number; now?: () => number } = {}
 	) {
 		this.#startedAt = Math.floor(this.#now() / 1000) - 5;
+		this.#startedIso = new Date(this.#startedAt * 1000).toISOString();
 	}
 
 	#now() {
@@ -178,6 +205,11 @@ export class AccessShipper {
 
 	get queued() {
 		return this.#buffer.length;
+	}
+
+	/** What the SSH watcher last said; `off` while there's none running. */
+	get sshWatch() {
+		return this.#sshWatch;
 	}
 
 	/** Who to believe about client addresses; the ingress's gateways are looked up once per network. */
@@ -203,6 +235,7 @@ export class AccessShipper {
 			(c) => ROLES.has(c.labels[LABELS.role] ?? '') && c.status === 'running'
 		);
 		const names = new Set(followed.map((c) => c.name));
+		if (!followed.some((c) => c.labels[LABELS.role] === 'sshwatch')) this.#sshWatch = 'off';
 		for (const [name, stop] of this.#followers) {
 			if (names.has(name)) continue;
 			stop();
@@ -215,12 +248,21 @@ export class AccessShipper {
 	}
 
 	#attach(container: ManagedContainer) {
+		const role = container.labels[LABELS.role];
 		const parse =
-			container.labels[LABELS.role] === 'ingress'
+			role === 'ingress'
 				? (line: string) => parseCaddyLine(line, this.#context)
-				: parseProxyLine;
+				: role === 'sshwatch'
+					? (line: string) => {
+							const read = parseSshWatchLine(line);
+							if (read && 'status' in read) this.#sshWatch = read.status;
+							return read && 'entry' in read ? read.entry : null;
+						}
+					: parseProxyLine;
+		// the watcher's status lines come first in its log, so it's read from the start
+		const from = role === 'sshwatch' ? 0 : this.#startedAt;
 		const last = this.#lastTs.get(container.name);
-		const since = last ? Math.floor(Date.parse(last) / 1000) : this.#startedAt;
+		const since = last ? Math.floor(Date.parse(last) / 1000) : from;
 		const stop = this.runtime.logs(
 			container.name,
 			since,
@@ -228,7 +270,8 @@ export class AccessShipper {
 				if (stream !== 'stdout' || (last && ts <= last)) return;
 				if (ts > (this.#lastTs.get(container.name) ?? '')) this.#lastTs.set(container.name, ts);
 				const entry = parse(line);
-				if (entry) this.#push(entry);
+				// read from the start for its status, but what came before this agent was sent by the last one
+				if (entry && (last || role !== 'sshwatch' || ts >= this.#startedIso)) this.#push(entry);
 			},
 			() => this.#followers.delete(container.name)
 		);

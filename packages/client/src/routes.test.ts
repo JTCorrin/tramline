@@ -46,6 +46,7 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.metrics.security('s', 'e'),
 		'GET /services/s/security?environmentId=e'
 	],
+	['metrics.ssh', (c) => c.metrics.ssh('n'), 'GET /nodes/n/ssh'],
 	[
 		'metrics.traffic',
 		(c) => c.metrics.traffic('s', { environmentId: 'e', range: '1h', status: '4xx', path: '' }),

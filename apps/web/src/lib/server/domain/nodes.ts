@@ -99,6 +99,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				})),
 				gpuRuntime: row.info?.gpuRuntime ?? false,
 				containment: row.containment ?? null,
+				sshWatch: row.sshWatch ?? null,
 				allocatedGpus: heldOn(here, row.id).size,
 				allocatedMemoryMb: reserved.reduce((sum, r) => sum + r.memoryMb, 0),
 				allocatedCpus: Math.round(reserved.reduce((sum, r) => sum + r.cpus, 0) * 100) / 100,

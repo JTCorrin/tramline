@@ -1,8 +1,11 @@
 import { TrafficQuery } from '@tramline/contracts';
-import { validationFailed } from '../api/errors';
+import { eq } from 'drizzle-orm';
+import { notFound, validationFailed } from '../api/errors';
+import { node } from '../db/schema';
 import { DEFAULT_TRAFFIC } from '../settings';
-import { traffic } from '../traffic/store';
+import { sshFailures, traffic } from '../traffic/store';
 import { requireInstance, requireManager } from './access';
+import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 
 /**
@@ -22,4 +25,13 @@ export function serviceTraffic(
 	requireManager(ctx, 'see who reached a service');
 	const settings = ctx.settings.traffic ?? DEFAULT_TRAFFIC;
 	return traffic(ctx.db, serviceId, parsed.data, { ...settings, ...options }, now);
+}
+
+/** Failed SSH logins on a node over the last day. Nodes belong to the install, and so do these. */
+export function nodeSshFailures(ctx: Ctx, nodeId: string, now = Date.now()) {
+	requireInstallAdmin(ctx, "see a node's failed SSH logins");
+	if (!ctx.db.select({ id: node.id }).from(node).where(eq(node.id, nodeId)).get()) {
+		throw notFound('Node');
+	}
+	return sshFailures(ctx.db, nodeId, now);
 }

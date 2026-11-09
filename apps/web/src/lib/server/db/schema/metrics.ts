@@ -159,3 +159,28 @@ export const accessLog = sqliteTable(
 		index('access_log_at').on(table.at)
 	]
 );
+
+/**
+ * Failed SSH logins on a node, from its auth log: one row per address and
+ * minute, counting connections. Kept as long as access logs.
+ */
+export const sshFailure = sqliteTable(
+	'ssh_failure',
+	{
+		nodeId: text('node_id')
+			.notNull()
+			.references(() => node.id, { onDelete: 'cascade' }),
+		/** The start of the minute. */
+		bucket: integer('bucket', { mode: 'timestamp_ms' }).notNull(),
+		client: text('client').notNull(),
+		count: integer('count').notNull(),
+		/** The last user name tried from there in that minute. */
+		user: text('user'),
+		asn: integer('asn'),
+		network: text('network')
+	},
+	(table) => [
+		primaryKey({ columns: [table.nodeId, table.bucket, table.client] }),
+		index('ssh_failure_bucket').on(table.bucket)
+	]
+);

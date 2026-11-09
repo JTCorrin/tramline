@@ -8,6 +8,7 @@
 	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
 	import NodePools from '#lib/components/nodes/node-pools.svelte';
 	import PublicAccess from '#lib/components/nodes/public-access.svelte';
+	import SshFailures from '#lib/components/nodes/ssh-failures.svelte';
 	import AlertList from '#lib/components/metrics/alert-list.svelte';
 	import NodeMetrics from '#lib/components/metrics/node-metrics.svelte';
 	import { Input } from '#lib/components/ui/input/index.js';
@@ -395,6 +396,7 @@
 					{#if charted[node.id]}
 						<div class="mt-2"><NodeMetrics nodeId={node.id} /></div>
 					{/if}
+					{#if data.canManage}<SshFailures {node} />{/if}
 				</div>
 				{#if data.canManage}
 					<div class="mt-3 flex flex-wrap gap-2">

@@ -60,6 +60,8 @@ export interface AgentOptions {
 	mesh?: { image: string; endpoint: string | null };
 	/** The image the firewall container runs, which contains service containers; absent turns it off. */
 	firewall?: { image: string };
+	/** The image the SSH watcher runs (see sshwatch.ts); absent turns it off. */
+	sshWatch?: { image: string };
 	/** Updates the agent when the control plane asks; absent where it can't (outside a container). */
 	selfUpdate?: SelfUpdater;
 }
@@ -127,6 +129,7 @@ export class Agent {
 			log: this.#log,
 			agentImage: options.mesh?.image,
 			firewall: options.firewall,
+			sshWatch: options.sshWatch,
 			certificates: (id, names) => serviceCertificate(options.stateDir, id, names),
 			mesh: options.mesh && keys ? { ...options.mesh, privateKey: keys.privateKey } : undefined
 		});
@@ -496,7 +499,8 @@ export class Agent {
 			revision: desired?.revision ?? null,
 			dockerError: this.dockerError,
 			containment: this.converger.containment,
-			security: this.converger.takeSecurity()
+			security: this.converger.takeSecurity(),
+			sshWatch: this.access?.sshWatch ?? 'off'
 		});
 	}
 }

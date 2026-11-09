@@ -418,3 +418,44 @@ describe('Converger retries', () => {
 		expect(runtime.calls).toContain('pull traefik/whoami:v2');
 	});
 });
+
+describe('the SSH watcher', () => {
+	const watcher = (image?: string) => {
+		const runtime = new FakeRuntime();
+		const converger = new Converger(runtime, {
+			nodeId: 'node_1',
+			sshWatch: image ? { image } : undefined
+		});
+		return { runtime, converger };
+	};
+
+	it('runs with the host log read-only, no network and nothing else', async () => {
+		const { runtime, converger } = watcher('tramline-agent:1');
+		await converger.run(desiredState());
+		const spec = runtime.containers.get('tramline-sshwatch-node_1')!.spec;
+		expect(spec).toMatchObject({
+			image: 'tramline-agent:1',
+			cmd: ['sshwatch'],
+			network: 'none',
+			binds: ['/var/log:/host/log:ro'],
+			security: { capabilities: [], readOnlyRootFilesystem: true }
+		});
+		expect(spec.labels[LABELS.role]).toBe('sshwatch');
+		const runs = () => runtime.calls.filter((c) => c.startsWith('run tramline-sshwatch')).length;
+		await converger.run(desiredState());
+		expect(runs()).toBe(1);
+	});
+
+	it('moves to a new image, and goes when turned off', async () => {
+		const runtime = new FakeRuntime();
+		await new Converger(runtime, { nodeId: 'node_1', sshWatch: { image: 'a' } }).run(
+			desiredState()
+		);
+		await new Converger(runtime, { nodeId: 'node_1', sshWatch: { image: 'b' } }).run(
+			desiredState()
+		);
+		expect(runtime.containers.get('tramline-sshwatch-node_1')!.spec.image).toBe('b');
+		await new Converger(runtime, { nodeId: 'node_1' }).run(desiredState());
+		expect(runtime.containers.has('tramline-sshwatch-node_1')).toBe(false);
+	});
+});
