@@ -801,6 +801,26 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
   - A template can't ask for anything a hand-built service couldn't: no host mounts, no privileges.
 - **Exit:** "Supabase" from the gallery deploys a working stack. Its Auth and REST endpoints answer on the gateway's domain, an app on the canvas reaches it through references, and the data survives a redeploy. "Mailcow" deploys on a node with a static IP, sends and receives a test message that passes SPF, DKIM and DMARC, and refuses to install where port 25 is blocked and no relay is set. An AI sandbox runs its first command within a second of being asked for, the 7.5 hostile-tenant suite run inside one is blocked at every step, and a GPU sandbox sees its GPU with `nvidia-smi`.
 
+### Phase 8.7: Storage services (S3-compatible buckets)
+
+A bucket you put on the canvas, like a database: S3-compatible object storage, added from the command palette (**Bucket**) and wired to other services with references. You choose which provider it lives on: any provider except GPU-only clouds like Lambda. Like a database, it exists once per environment, so production and a PR preview each get their own.
+
+- **Where the bucket comes from:**
+  - **AWS:** S3.
+  - **GCP:** Cloud Storage through its S3-compatible XML API, with HMAC keys.
+  - **Hetzner:** Object Storage, which is S3-compatible.
+  - **Azure:** Blob Storage doesn't speak S3. Either run an S3 server (e.g. Garage) as a service, its data on a managed disk, or add a Blob driver behind the same interface. To be decided.
+  - **Proxmox, or any node:** an S3 server (e.g. Garage) run as an ordinary service on a node, its data on a volume. Here the bucket is a container, placed and backed up like any other.
+- **Adapter SDK:** an optional storage capability on adapters: create and delete a bucket, and issue and revoke credentials scoped to it. Adapters without it only offer the self-hosted kind.
+- **Using one:**
+  - **References:** a service that references the bucket gets `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION` and its own access key as variables (`${{Bucket.S3_ENDPOINT}}`). Each service gets its own key, limited to that bucket (or a prefix of it), and the key is revoked when the reference goes.
+  - **On the canvas:** the bucket's panel shows its size, object count and cost, and has a simple object browser.
+  - **For backups:** a bucket on the canvas can be chosen as the backup target instead of typing one in. Phase 4b's encryption and presigned URLs stay as they are.
+  - **In templates:** Supabase Storage and other stacks that need object storage come with a bucket wired in.
+- **Secure by default:** buckets are private, public access is blocked, encryption at rest is on, keys are stored encrypted and are write-only in the API, and deleting a bucket that still has objects needs confirmation.
+- **Cost:** the price engine (Phase 8) includes $/GB-month and egress per provider.
+- **Exit:** a bucket is added to the canvas on AWS, GCP and Hetzner, and a self-hosted one on Proxmox. A service referencing it writes and reads an object with the variables it was given, and can't reach another bucket with its key. Backups run to it, and deleting it from the canvas deletes the bucket and its keys.
+
 ### Phase 9: Production readiness and ecosystem
 
 - PR preview environments, `tram` CLI (`login`, `link`, `up`, `logs`, `vars`, `run`) on the Phase 5 tokens, RBAC roles, notifications.
