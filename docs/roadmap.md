@@ -759,9 +759,13 @@ What a hostile workload tries, from a published account of one on another platfo
   - **Catalog:** `price_offer` keeps each account's sizes and prices per region, from `listOffers`. A region is kept while a node pool uses it or someone compared it in the last 30 days. It's refreshed daily, a few regions every 10 minutes; a failed refresh is retried after an hour and keeps the old prices.
   - **Placement:** for vCPUs, memory, architecture and GPUs (matched the way the scheduler matches them), it lists nodes with room first, then every size that fits across accounts and regions, by monthly price (730 hours). It can rank by spot prices, and sizes without a price come last.
   - **UI:** **Where should this run?** on the Nodes page, with regions added per account and **Create node** on each size.
+- **$/mo per service and project ✅** (unit-tested; the e2e test enters a node's cost and sees a service's share):
+  - **Node costs:** a machine an account created keeps its region and size, and is priced from the catalog (or its pool's price). Any node can have a monthly cost entered on the Nodes page, which wins.
+  - **Service costs:** a service pays for the larger of the CPU, memory and GPU share it reserves on each node it runs on. What nothing reserves isn't charged.
+  - **Where:** the project header shows the environment's monthly cost with a breakdown per service. The API has `GET /environments/:id/costs` and `GET /projects/:id/costs`, per environment.
   - **Not yet:**
     - an egress estimate for traffic between groups;
-    - $/mo per service and project, and tracking what's actually spent;
+    - tracking what's actually spent;
     - opt-in spot for stateless services (no adapter creates spot machines yet);
     - converting Hetzner's prices, which are in euros, to dollars.
 - **As planned:**

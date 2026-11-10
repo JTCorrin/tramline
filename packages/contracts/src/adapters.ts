@@ -184,3 +184,49 @@ export const Placement = z.object({
 	)
 });
 export type Placement = z.infer<typeof Placement>;
+
+/** One service's share of what the nodes it runs on cost. */
+export const ServiceCost = z.object({
+	serviceId: z.string(),
+	name: z.string(),
+	/** US dollars a month; null when a node it runs on has no price. */
+	monthly: z.number().nullable(),
+	/** It reserves no CPU, memory or GPU, so it costs nothing on a node it shares. */
+	unreserved: z.boolean(),
+	nodes: z.array(
+		z.object({
+			nodeId: z.string(),
+			name: z.string(),
+			/** The part of the node it reserves, 0 to 1. */
+			share: z.number(),
+			monthly: z.number().nullable()
+		})
+	)
+});
+export type ServiceCost = z.infer<typeof ServiceCost>;
+
+/** What an environment's running services cost a month, from what they reserve on their nodes. */
+export const EnvironmentCosts = z.object({
+	environmentId: z.string(),
+	/** US dollars a month, over the services with a price. */
+	monthly: z.number(),
+	/** Every node its services run on has a price. */
+	complete: z.boolean(),
+	services: z.array(ServiceCost)
+});
+export type EnvironmentCosts = z.infer<typeof EnvironmentCosts>;
+
+export const ProjectCosts = z.object({
+	projectId: z.string(),
+	monthly: z.number(),
+	complete: z.boolean(),
+	environments: z.array(
+		z.object({
+			environmentId: z.string(),
+			name: z.string(),
+			monthly: z.number(),
+			complete: z.boolean()
+		})
+	)
+});
+export type ProjectCosts = z.infer<typeof ProjectCosts>;

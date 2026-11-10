@@ -30,6 +30,7 @@ import { requireInstallAdmin } from './admins';
 import type { Ctx } from './context';
 import { getAdapter } from '../adapters/registry';
 import { destroyMachine, opensEdgePorts, setMachineEdge } from './adapters';
+import { nodeCosts } from '../prices/costs';
 import { copyDeployment } from './deployments';
 import { agentUrl } from './public-access';
 
@@ -52,6 +53,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 		.where(inArray(deployment.status, [...LIVE]))
 		.all();
 	const members = meshMembers(ctx.db);
+	const costs = nodeCosts(ctx.db);
 	const pools = new Map(
 		ctx.db
 			.select({ id: nodePool.id, name: nodePool.name })
@@ -104,6 +106,7 @@ export function list(ctx: Ctx): NodeSummary[] {
 				allocatedMemoryMb: reserved.reduce((sum, r) => sum + r.memoryMb, 0),
 				allocatedCpus: Math.round(reserved.reduce((sum, r) => sum + r.cpus, 0) * 100) / 100,
 				deployments: here.length,
+				cost: costs.get(row.id) ?? { monthly: null, source: null },
 				cordoned: row.cordoned,
 				draining: row.draining,
 				edge: row.edge,
@@ -232,7 +235,8 @@ export async function update(ctx: Ctx, id: string, input: UpdateNode) {
 		...(input.cordoned === true ? { cordoned: true } : {}),
 		...(input.cordoned === false ? { cordoned: false, draining: false } : {}),
 		...(input.edge !== undefined ? { edge: input.edge } : {}),
-		...(input.meshEndpoint !== undefined ? { meshEndpoint: input.meshEndpoint } : {})
+		...(input.meshEndpoint !== undefined ? { meshEndpoint: input.meshEndpoint } : {}),
+		...(input.monthlyCost !== undefined ? { monthlyCost: input.monthlyCost } : {})
 	};
 	if (Object.keys(changes).length) {
 		ctx.db.update(node).set(changes).where(eq(node.id, id)).run();

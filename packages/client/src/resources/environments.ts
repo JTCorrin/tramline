@@ -2,6 +2,7 @@ import type {
 	Canvas,
 	CreateEnvironment,
 	Deployment,
+	EnvironmentCosts,
 	Environment,
 	StagedChanges,
 	UpdateEnvironment
@@ -20,6 +21,8 @@ export const environments = (http: Http) => ({
 	...base(http),
 	/** Service nodes and reference edges for the project canvas. */
 	canvas: (id: string) => http.get<Canvas>(`/environments/${id}/canvas`),
+	/** What its running services cost a month. */
+	costs: (id: string) => http.get<EnvironmentCosts>(`/environments/${id}/costs`),
 	/** Staged, not yet deployed changes. */
 	changes: (id: string) => http.get<StagedChanges>(`/environments/${id}/changes`),
 	discard: (id: string) => http.delete<void>(`/environments/${id}/changes`),

@@ -34,6 +34,15 @@ export const node = sqliteTable('node', {
 	 * where a GPU's memory comes from, since the driver doesn't say.
 	 */
 	offerGpu: text('offer_gpu', { mode: 'json' }).$type<OfferGpu>(),
+	/** For a machine an adapter created: the region and size it was created in, to price it. */
+	region: text('region'),
+	offer: text('offer'),
+	/**
+	 * What the machine costs a month in US dollars, as someone entered it: for
+	 * machines no provider prices (a box at home, a Proxmox VM), or to correct
+	 * a provider's list price. Wins over the price catalog.
+	 */
+	monthlyCost: real('monthly_cost'),
 	/** The pool that created it; the pool destroys it once it's idle. */
 	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
 	/** When a pool node was last seen running nothing; null while it runs something. */

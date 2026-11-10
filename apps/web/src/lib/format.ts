@@ -41,3 +41,7 @@ export const formatPercent = (value: number) =>
 
 /** Bytes per second as "1.4 MB/s". */
 export const formatRate = (bytesPerSecond: number) => `${formatBytes(bytesPerSecond)}/s`;
+
+/** US dollars: cents under $10, whole dollars above. */
+export const money = (n: number) =>
+	n < 10 ? `$${n.toFixed(2)}` : `$${Math.round(n).toLocaleString('en-US')}`;

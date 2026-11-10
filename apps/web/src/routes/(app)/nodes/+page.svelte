@@ -15,7 +15,7 @@
 	import { Input } from '#lib/components/ui/input/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
-	import { timeAgo } from '#lib/format.js';
+	import { money, timeAgo } from '#lib/format.js';
 	import { cn } from '#lib/utils.js';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import ServerIcon from '@lucide/svelte/icons/server';
@@ -322,6 +322,11 @@
 					{#if node.dockerVersion}· Docker {node.dockerVersion}{/if}
 					{#if node.agent.version}· agent {agentVersion(node.agent.version)}{/if}
 					{#if node.account}· on {node.account.name}{/if}
+					{#if node.cost.monthly !== null}<span data-testid="node-cost"
+							>· {money(node.cost.monthly)}/mo{node.cost.source === 'entered'
+								? ' (entered)'
+								: ''}</span
+						>{/if}
 					{#if node.lastSeenAt && node.status !== 'online'}· last seen {timeAgo(
 							node.lastSeenAt
 						)}{/if}
@@ -487,6 +492,29 @@
 								value={node.mesh?.endpoint ?? ''}
 							/>
 							<Button size="sm" variant="outline" type="submit">Save</Button>
+						</form>
+						<form
+							class="flex items-center gap-2"
+							onsubmit={(event) => {
+								event.preventDefault();
+								const value = String(new FormData(event.currentTarget).get('cost') ?? '').trim();
+								configure(node, { monthlyCost: value === '' ? null : Number(value) });
+							}}
+						>
+							<Input
+								name="cost"
+								type="number"
+								min="0"
+								step="0.01"
+								class="h-8 w-40 text-xs"
+								placeholder={node.cost.source === 'provider' && node.cost.monthly !== null
+									? `${money(node.cost.monthly)}/mo from provider`
+									: '$ a month'}
+								aria-label="Monthly cost"
+								title="What this machine costs a month, in US dollars. Leave empty to use the provider's price."
+								value={node.cost.source === 'entered' ? String(node.cost.monthly) : ''}
+							/>
+							<Button size="sm" variant="outline" type="submit">Save cost</Button>
 						</form>
 					</div>
 				{/if}

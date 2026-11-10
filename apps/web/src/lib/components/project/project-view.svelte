@@ -4,6 +4,7 @@
 	import ChangesBar from '#lib/components/canvas/changes-bar.svelte';
 	import CommandPalette from '#lib/components/canvas/command-palette.svelte';
 	import EnvironmentSwitcher from '#lib/components/canvas/environment-switcher.svelte';
+	import EnvironmentCost from '#lib/components/canvas/environment-cost.svelte';
 	import NodeStatus from '#lib/components/canvas/node-status.svelte';
 	import ProjectCanvas from '#lib/components/canvas/project-canvas.svelte';
 	import SourceDialog from '#lib/components/canvas/source-dialog.svelte';
@@ -105,6 +106,7 @@
 		<div class="flex h-12 shrink-0 items-center gap-2 border-b px-4">
 			<EnvironmentSwitcher {workspace} />
 			<div class="ml-auto flex items-center gap-2">
+				<EnvironmentCost environmentId={workspace.environmentId} version={workspace.version} />
 				<NodeStatus version={workspace.version} />
 				<Button variant="ghost" size="sm" onclick={() => (sharedOpen = true)}>
 					<VariableIcon /> Shared variables
