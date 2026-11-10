@@ -253,7 +253,8 @@ export function recordReport(db: DbOrTx, nodeId: string, report: AgentReportInpu
 				revision: report.revision,
 				error: report.dockerError ?? null,
 				// older agents don't say, which leaves it unknown
-				...(report.containment ? { containment: report.containment } : {})
+				...(report.containment ? { containment: report.containment } : {}),
+				...(report.sshWatch ? { sshWatch: report.sshWatch } : {})
 			})
 			.where(eq(node.id, nodeId))
 			.run();

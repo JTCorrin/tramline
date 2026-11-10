@@ -33,6 +33,12 @@ if (process.argv[2] === 'firewall') {
 	await runFirewallDaemon(FIREWALL_CONFIG_PATH);
 }
 
+// the SSH watcher runs this same program in sshwatch mode
+if (process.argv[2] === 'sshwatch') {
+	const { runSshWatch } = await import('./sshwatch');
+	await runSshWatch();
+}
+
 // the helper that swaps in a newer agent runs this same program in update mode
 if (process.argv[2] === 'update') {
 	try {
@@ -110,6 +116,11 @@ const agent = new Agent({
 	// TRAMLINE_CONTAINMENT=off leaves service containers able to reach the LAN, the mesh and the host
 	firewall:
 		process.env.TRAMLINE_CONTAINMENT === 'off'
+			? undefined
+			: { image: self?.id ?? process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE },
+	// TRAMLINE_SSH_WATCH=off stops reading failed SSH logins from the host's auth log
+	sshWatch:
+		process.env.TRAMLINE_SSH_WATCH === 'off'
 			? undefined
 			: { image: self?.id ?? process.env.TRAMLINE_MESH_IMAGE ?? DEFAULT_MESH_IMAGE },
 	selfUpdate: self ? new SelfUpdater(runtime, { stateDir, image: self }) : undefined

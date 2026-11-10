@@ -6,6 +6,7 @@ import type {
 	SecurityKind
 } from '@tramline/contracts';
 import { INGRESS_CONFIG_PATH, INGRESS_IMAGE, caddyConfig, ingressName } from './caddy';
+import { HOST_LOG_DIR, sshWatchName } from './sshwatch';
 import {
 	MESH_CONFIG_PATH,
 	meshAlias,
@@ -48,6 +49,8 @@ export interface ConvergeOptions {
 	 * service containers; without it they aren't contained.
 	 */
 	firewall?: { image: string };
+	/** The image the SSH watcher runs, which reads failed logins from the host's auth log. */
+	sshWatch?: { image: string };
 	/** A service's TLS certificate, created and kept on this node. */
 	certificates?: (id: string, names: string[]) => Certificate;
 }
@@ -267,6 +270,9 @@ export class Converger {
 		}
 		if (desired.networks.length) await this.#ensureIngress(desired, existing);
 		await this.#publishRoutes(desired);
+		await this.#ensureSshWatch(existing).catch((error) =>
+			log(`the SSH watcher failed: ${error instanceof Error ? error.message : String(error)}`)
+		);
 		// again, now the ingress, the mesh and new containers have addresses
 		await this.#ensureFirewall(desired).catch((error) =>
 			log(`containment failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -582,6 +588,44 @@ export class Converger {
 	 * networks are contained, which of Tramline's own containers on them
 	 * aren't, and which private ranges a service may reach.
 	 */
+	/**
+	 * The SSH watcher: the agent's image in sshwatch mode, with the host's
+	 * /var/log read-only, no network, no capabilities and a read-only root.
+	 */
+	async #ensureSshWatch(existing: ManagedContainer[]) {
+		const image = this.options.sshWatch?.image;
+		const name = sshWatchName(this.#node());
+		const current = existing.find((c) => c.labels[LABELS.role] === 'sshwatch');
+		const label = image ? hash({ image, mode: 'sshwatch' }) : null;
+		if (current && current.labels[LABELS.spec] === label) return;
+		if (current) await this.runtime.remove(current.name);
+		if (!image) return;
+		if (!(await this.runtime.hasImage(image))) await this.runtime.pull(image);
+		await this.runtime.run({
+			name,
+			image,
+			cmd: ['sshwatch'],
+			env: {},
+			network: 'none',
+			aliases: [],
+			restart: { name: 'always', maxRetries: 0 },
+			binds: [`/var/log:${HOST_LOG_DIR}:ro`],
+			security: {
+				capabilities: [],
+				pidsLimit: 32,
+				memoryMb: 64,
+				readOnlyRootFilesystem: true
+			},
+			labels: {
+				[LABELS.managed]: 'true',
+				[LABELS.node]: this.#node(),
+				[LABELS.role]: 'sshwatch',
+				[LABELS.spec]: label!
+			}
+		});
+		(this.options.log ?? quiet)(`started the SSH watcher ${name}`);
+	}
+
 	async #ensureFirewall(desired: DesiredState) {
 		const name = firewallName(this.#node());
 		const image = this.options.firewall?.image;

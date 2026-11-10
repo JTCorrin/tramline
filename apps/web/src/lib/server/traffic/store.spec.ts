@@ -5,15 +5,22 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildDesiredState } from '../nodes/desired';
-import { ensureLocalNode } from '../nodes/registry';
-import { accessLog, customDomain, member, node, serviceInstance } from '../db/schema';
+import { ensureLocalNode, recordReport } from '../nodes/registry';
+import { accessLog, customDomain, member, node, serviceInstance, sshFailure } from '../db/schema';
 import * as environments from '../domain/environments';
 import * as projects from '../domain/projects';
 import * as services from '../domain/services';
 import * as traffic from '../domain/traffic';
 import { DEFAULT_TRAFFIC, type PlatformSettings } from '../settings';
-import { seedCtx, testSecrets, testSettings } from '../testing';
-import { pruneAccessLogs, recordAccess, Sampler, SAMPLE_AFTER, SAMPLE_EVERY } from './store';
+import { grantInstallAdmin, seedCtx, testSecrets, testSettings } from '../testing';
+import {
+	pruneAccessLogs,
+	recordAccess,
+	Sampler,
+	SAMPLE_AFTER,
+	SAMPLE_EVERY,
+	sshFailures
+} from './store';
 
 const NOW = Date.UTC(2027, 0, 15, 8, 30);
 const at = (msAgo = 0) => new Date(NOW - msAgo).toISOString();
@@ -282,5 +289,77 @@ describe('trusted proxies', () => {
 				traffic: { ...DEFAULT_TRAFFIC, trustedProxies: ['10.0.0.0/8'] }
 			}).trustedProxies
 		).toEqual(['10.0.0.0/8']);
+	});
+});
+
+describe('failed SSH logins', () => {
+	const ssh = (client: string, msAgo = 0, user: string | null = 'root'): AccessEntry => ({
+		kind: 'ssh',
+		ts: at(msAgo),
+		client,
+		user
+	});
+
+	it('are counted per node, address and minute, with their network', () => {
+		const { ctx, record } = setup();
+		record([ssh('203.0.113.9'), ssh('203.0.113.9', 0, 'admin'), ssh('8.8.8.8', 5 * 60_000)]);
+		record([ssh('203.0.113.9', 0, 'oracle'), ssh('203.0.113.9', 15 * 86_400_000)]);
+		const summary = sshFailures(ctx.db, 'node_edge', NOW);
+		expect(summary).toEqual({
+			total: 4,
+			addresses: 2,
+			top: [
+				{
+					client: '203.0.113.9',
+					network: 'EXAMPLE-HOSTING',
+					count: 3,
+					user: 'oracle',
+					lastAt: new Date(Math.floor(NOW / 60_000) * 60_000).toISOString()
+				},
+				expect.objectContaining({ client: '8.8.8.8', network: 'GOOGLE', count: 1 })
+			]
+		});
+		// a day back only, and nothing for other nodes
+		expect(sshFailures(ctx.db, 'node_edge', NOW + 2 * 86_400_000).total).toBe(0);
+		expect(sshFailures(ctx.db, 'node_other', NOW)).toEqual({ total: 0, addresses: 0, top: [] });
+	});
+
+	it('are anonymised like traffic, and pruned with it', () => {
+		const { ctx, record } = setup();
+		record([ssh('203.0.113.9', 3 * 86_400_000)], { anonymize: true });
+		record([ssh('203.0.113.9')], { anonymize: true });
+		expect(
+			ctx.db
+				.select()
+				.from(sshFailure)
+				.all()
+				.map((r) => r.client)
+		).toEqual(['203.0.113.0', '203.0.113.0']);
+		pruneAccessLogs(ctx.db, { retentionDays: 2, maxRows: 10 }, NOW);
+		expect(ctx.db.select().from(sshFailure).all()).toHaveLength(1);
+	});
+
+	it('are for install admins only', () => {
+		const { ctx, record } = setup();
+		record([ssh('203.0.113.9')]);
+		expect(() => traffic.nodeSshFailures(ctx, 'node_edge', NOW)).toThrow(
+			"Only this install's admins can see a node's failed SSH logins"
+		);
+		grantInstallAdmin(ctx);
+		expect(traffic.nodeSshFailures(ctx, 'node_edge', NOW).total).toBe(1);
+		expect(() => traffic.nodeSshFailures(ctx, 'node_missing', NOW)).toThrow('Node not found');
+	});
+
+	it("store the node's watcher status from its report", () => {
+		const ctx = seedCtx();
+		const dataDir = mkdtempSync(path.join(tmpdir(), 'tramline-traffic-'));
+		const { node: local } = ensureLocalNode(ctx.db, dataDir);
+		const status = () =>
+			ctx.db.select({ s: node.sshWatch }).from(node).where(eq(node.id, local.id)).get()!.s;
+		recordReport(ctx.db, local.id, { revision: null, containers: [], sshWatch: 'unavailable' });
+		expect(status()).toBe('unavailable');
+		// older agents don't say, which leaves it as it was
+		recordReport(ctx.db, local.id, { revision: null, containers: [] });
+		expect(status()).toBe('unavailable');
 	});
 });

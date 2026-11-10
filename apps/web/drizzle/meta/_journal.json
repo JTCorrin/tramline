@@ -260,6 +260,13 @@
       "when": 1794225615146,
       "tag": "0036_access_log",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1794227197456,
+      "tag": "0037_ssh_failures",
+      "breakpoints": true
     }
   ]
 }

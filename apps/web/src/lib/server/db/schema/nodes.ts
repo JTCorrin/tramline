@@ -61,6 +61,8 @@ export const node = sqliteTable('node', {
 	meshEndpoint: text('mesh_endpoint'),
 	/** Whether service containers there are contained, as the agent last reported. */
 	containment: text('containment', { mode: 'json' }).$type<Containment>(),
+	/** Whether failed SSH logins are read from its auth log, as the agent last reported. */
+	sshWatch: text('ssh_watch', { enum: ['watching', 'unavailable', 'off'] }),
 	/** The latest agent update asked for from the Nodes page, and how the agent says it went. */
 	agentUpdate: text('agent_update', { mode: 'json' }).$type<AgentUpdate>(),
 	...timestamps

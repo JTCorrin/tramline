@@ -443,6 +443,14 @@ export const JobReport = z.object({
 
 export type JobReport = z.infer<typeof JobReport>;
 
+/**
+ * Reading failed SSH logins from the node's auth log: `watching`; `unavailable`
+ * when there's no auth.log or secure (a host that only keeps the systemd
+ * journal); `off` when the agent can't run the watcher.
+ */
+export const SshWatch = z.enum(['watching', 'unavailable', 'off']);
+export type SshWatch = z.infer<typeof SshWatch>;
+
 export const Containment = z.object({
 	state: z.enum(['active', 'starting', 'off', 'unsupported', 'error']),
 	detail: z.string().max(500).nullable()
@@ -487,7 +495,9 @@ export const AgentReport = z.object({
 	 */
 	containment: Containment.optional(),
 	/** What service containers tried since the last report. */
-	security: z.array(SecurityCount).max(1000).optional()
+	security: z.array(SecurityCount).max(1000).optional(),
+	/** Whether failed SSH logins on the node are being read. Absent from older agents. */
+	sshWatch: SshWatch.optional()
 });
 
 export type AgentReport = z.infer<typeof AgentReport>;
@@ -538,6 +548,14 @@ export const AccessEntry = z.discriminatedUnion('kind', [
 			.nullable(),
 		/** Came in through the Cloudflare tunnel. */
 		tunnel: z.boolean()
+	}),
+	/** A failed SSH login on the node (one per connection), from its auth log. */
+	z.object({
+		kind: z.literal('ssh'),
+		ts: z.iso.datetime(),
+		client: z.string().max(64),
+		/** The user name it tried; anything, including made-up ones. */
+		user: z.string().max(64).nullable()
 	}),
 	/** One connection to a TCP proxy's public port. */
 	z.object({
@@ -599,6 +617,8 @@ export const NodeSummary = z.object({
 	gpuRuntime: z.boolean(),
 	/** What the node's agent last said about containment; null for older agents. */
 	containment: Containment.nullable(),
+	/** Whether its failed SSH logins are read; null for older agents. */
+	sshWatch: SshWatch.nullable(),
 	/** GPUs held by the replicas placed here. */
 	allocatedGpus: z.number().int(),
 	/** Memory reserved by the replicas placed here (their requests, or else their limits). */

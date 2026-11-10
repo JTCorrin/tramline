@@ -184,3 +184,21 @@ export const Traffic = z.object({
 	})
 });
 export type Traffic = z.infer<typeof Traffic>;
+
+/** Failed SSH logins on a node over the last day; install admins only. */
+export const SshFailures = z.object({
+	/** Failed connections. */
+	total: z.number().int(),
+	addresses: z.number().int(),
+	top: z.array(
+		z.object({
+			client: z.string(),
+			network: z.string().nullable(),
+			count: z.number().int(),
+			/** The last user name it tried. */
+			user: z.string().nullable(),
+			lastAt: z.iso.datetime()
+		})
+	)
+});
+export type SshFailures = z.infer<typeof SshFailures>;

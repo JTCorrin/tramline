@@ -4,6 +4,7 @@ import type {
 	NodeMetrics,
 	SecurityEvent,
 	ServiceMetrics,
+	SshFailures,
 	Traffic,
 	TrafficQuery
 } from '@tramline/contracts';
@@ -28,6 +29,8 @@ export const metrics = (http: Http) => ({
 					.map(([key, value]) => [key, String(value)])
 			)
 		),
+	/** Failed SSH logins on a node over the last day; install admins only. */
+	ssh: (nodeId: string) => http.get<SshFailures>(`/nodes/${nodeId}/ssh`),
 	/** Open alerts, and those resolved in the last day. */
 	alerts: () => http.get<Alert[]>('/alerts')
 });
