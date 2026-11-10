@@ -215,7 +215,7 @@ test('enroll a second node, reach it over the mesh, then move off it and remove 
 		{ encoding: 'utf8' }
 	).trim();
 	await row.getByLabel('Mesh endpoint').fill(`${ip}:51820`);
-	await row.getByRole('button', { name: 'Save' }).click();
+	await row.getByRole('button', { name: 'Save', exact: true }).click();
 	await expect(row.getByTestId('node-mesh')).toContainText(`reachable at ${ip}:51820`);
 	await expect(row).not.toContainText("Can't reach");
 
