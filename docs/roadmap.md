@@ -654,6 +654,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Machines:** Canonical's latest Ubuntu 24.04 AMI in the region's default VPC, with a public address, an encrypted gp3 disk, and no IAM role or key pair. Sizes: t3, t3a, m6i, m7i, m7i-flex, m7a, c7i and r7i up to 16 vCPUs.
   - **Metadata:** IMDSv2 only, with a hop limit of 1, so containers on Docker's bridge network can't reach the metadata service (or the user data with the join token).
   - **Placement:** the region's first availability zone with room, trying the next when one is out of capacity.
+  - **Prices:** on-demand Linux prices per size from the Price List Query API (`GetProducts`, one query per region for every size, cached in the process for a day; a failure is retried after 10 minutes), and $0.09/GB egress, AWS's published first-tier rate. Without `pricing:GetProducts` in the policy, prices are unknown and nothing else changes. No spot prices, since the adapter doesn't launch spot.
   - **Mesh:** a `tramline-mesh` security group allowing UDP 51820, and each instance offers its public address from the metadata service as its mesh endpoint.
   - **Safety:** instances and volumes carry the `tramline` tag, and only tagged instances are listed or terminated. The policy in the guide limits termination to tagged instances too.
 - **Hetzner** (`@tramline/adapter-hetzner`, guide in `docs/adapters/hetzner.md`; unit-tested against a fake API, not yet verified on a real account):
@@ -753,7 +754,7 @@ What a hostile workload tries, from a published account of one on another platfo
 
 ### Phase 8: Price engine and placement
 
-- Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List bulk API, GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
+- Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
 - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
 - UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
 - **Exit:** for a given set of service requirements, Tramline shows a ranked provider/region/instance list with monthly cost and provisions the chosen option in one click.

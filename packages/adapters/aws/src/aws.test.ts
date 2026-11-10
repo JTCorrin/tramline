@@ -8,6 +8,7 @@ import {
 	METADATA_ADDRESS,
 	type AwsCredentials
 } from './index';
+import { EGRESS_PER_GB, parseProduct, PRICING_URL } from './pricing';
 import { parseXml, text } from './xml';
 
 /**
@@ -15,11 +16,13 @@ import { parseXml, text } from './xml';
  * its own, not with the client's code) and keeps instances, security groups
  * and their rules. Instances go pending → running, and shutting-down →
  * terminated, one describe at a time; terminated ones stay listed, as in EC2.
+ * A fake Price List API answers GetProducts, checking its signature too.
  */
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE';
 const SECRET = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
 const NOW = new Date('2026-11-03T12:00:00Z');
+let clock: Date;
 
 const creds = (overrides: Partial<AwsCredentials> = {}): AwsCredentials => ({
 	accessKeyId: KEY,
@@ -45,6 +48,8 @@ let full: Set<string>;
 let denied: Set<string>;
 let noDefaultVpc: boolean;
 let seq: number;
+let pricing: { body: Record<string, unknown>; target: string | null }[];
+let pricingReply: (() => Response | Promise<Response>) | null;
 
 function reset() {
 	instances = [
@@ -63,6 +68,9 @@ function reset() {
 	denied = new Set();
 	noDefaultVpc = false;
 	seq = 0;
+	clock = NOW;
+	pricing = [];
+	pricingReply = null;
 }
 
 const xml = (action: string, body: string) =>
@@ -78,13 +86,24 @@ const awsError = (status: number, code: string, message: string) =>
 const items = (list: string[]) => list.map((item) => `<item>${item}</item>`).join('');
 
 /** SigV4 on its own, from the AWS documentation's steps. */
-function expectedSignature(headers: Headers, body: string, host: string, region: string) {
+function expectedSignature(
+	headers: Headers,
+	body: string,
+	host: string,
+	region: string,
+	service = 'ec2',
+	signed = ['content-type', 'host', 'x-amz-date']
+) {
 	const sha = (v: string) => createHash('sha256').update(v).digest('hex');
 	const mac = (k: string | Buffer, v: string) => createHmac('sha256', k).update(v).digest();
 	const date = headers.get('x-amz-date')!;
-	const canonical = `POST\n/\n\ncontent-type:${headers.get('content-type')}\nhost:${host}\nx-amz-date:${date}\n\ncontent-type;host;x-amz-date\n${sha(body)}`;
-	const scope = `${date.slice(0, 8)}/${region}/ec2/aws4_request`;
-	const key = mac(mac(mac(mac(`AWS4${SECRET}`, date.slice(0, 8)), region), 'ec2'), 'aws4_request');
+	const lines = signed.map((name) => `${name}:${name === 'host' ? host : headers.get(name)}`);
+	const canonical = `POST\n/\n\n${lines.join('\n')}\n\n${signed.join(';')}\n${sha(body)}`;
+	const scope = `${date.slice(0, 8)}/${region}/${service}/aws4_request`;
+	const key = mac(
+		mac(mac(mac(`AWS4${SECRET}`, date.slice(0, 8)), region), service),
+		'aws4_request'
+	);
 	return createHmac('sha256', key)
 		.update(`AWS4-HMAC-SHA256\n${date}\n${scope}\n${sha(canonical)}`)
 		.digest('hex');
@@ -116,13 +135,117 @@ const instanceXml = (i: Instance) =>
 	`<vpcId>vpc-1</vpcId><groupSet>${items(i.groups.map((g) => `<groupId>${g}</groupId><groupName>${groups.find((x) => x.id === g)?.name ?? 'other'}</groupName>`))}</groupSet>` +
 	`<tagSet>${items(Object.entries(i.tags).map(([k, v]) => `<key>${k}</key><value>${v}</value>`))}</tagSet>`;
 
+const day = () => clock.toISOString().slice(0, 10).replace(/-/g, '');
+
+/**
+ * A product as GetProducts gives it: each PriceList entry is a JSON string
+ * (trimmed from a real t3.micro answer, with its Reserved terms kept so
+ * they're shown to be ignored).
+ */
+const product = (instanceType: string, usd: string) => {
+	const sku = `SKU${instanceType.replace(/\W/g, '').toUpperCase()}`;
+	return JSON.stringify({
+		product: {
+			productFamily: 'Compute Instance',
+			attributes: {
+				instanceType,
+				regionCode: 'us-east-1',
+				operatingSystem: 'Linux',
+				tenancy: 'Shared',
+				preInstalledSw: 'NA',
+				capacitystatus: 'Used',
+				licenseModel: 'No License required',
+				usagetype: `BoxUsage:${instanceType}`,
+				operation: 'RunInstances',
+				servicecode: 'AmazonEC2'
+			},
+			sku
+		},
+		serviceCode: 'AmazonEC2',
+		terms: {
+			OnDemand: {
+				[`${sku}.JRTCKXETXF`]: {
+					priceDimensions: {
+						[`${sku}.JRTCKXETXF.6YS6EN2CT7`]: {
+							unit: 'Hrs',
+							endRange: 'Inf',
+							description: `$${usd} per On Demand Linux ${instanceType} Instance Hour`,
+							appliesTo: [],
+							rateCode: `${sku}.JRTCKXETXF.6YS6EN2CT7`,
+							beginRange: '0',
+							pricePerUnit: { USD: usd }
+						}
+					},
+					sku,
+					effectiveDate: '2026-10-01T00:00:00Z',
+					offerTermCode: 'JRTCKXETXF',
+					termAttributes: {}
+				}
+			},
+			Reserved: {
+				[`${sku}.4NA7Y494T4`]: {
+					priceDimensions: {
+						[`${sku}.4NA7Y494T4.6YS6EN2CT7`]: {
+							unit: 'Hrs',
+							pricePerUnit: { USD: '0.0001000000' }
+						}
+					},
+					termAttributes: { LeaseContractLength: '1yr', PurchaseOption: 'No Upfront' }
+				}
+			}
+		},
+		version: '20261015000000',
+		publicationDate: '2026-10-15T00:00:00Z'
+	});
+};
+
+/** The Price List Query API: JSON 1.1, signed for pricing in us-east-1. */
+async function handlePricing(url: URL, init: RequestInit): Promise<Response> {
+	const body = String(init.body);
+	const headers = new Headers(init.headers);
+	const auth = headers.get('authorization')!;
+	expect(auth).toContain(`Credential=${KEY}/${day()}/us-east-1/pricing/aws4_request,`);
+	expect(auth).toContain('SignedHeaders=content-type;host;x-amz-date;x-amz-target,');
+	expect(auth.split('Signature=')[1]).toBe(
+		expectedSignature(headers, body, url.host, 'us-east-1', 'pricing', [
+			'content-type',
+			'host',
+			'x-amz-date',
+			'x-amz-target'
+		])
+	);
+	expect(headers.get('content-type')).toBe('application/x-amz-json-1.1');
+	const request = JSON.parse(body) as Record<string, unknown>;
+	pricing.push({ body: request, target: headers.get('x-amz-target') });
+	if (pricingReply) return pricingReply();
+	const json = (value: unknown) =>
+		new Response(JSON.stringify(value), {
+			headers: { 'content-type': 'application/x-amz-json-1.1' }
+		});
+	if (!request.NextToken) {
+		return json({
+			FormatVersion: 'aws_v1',
+			NextToken: 'page-2',
+			PriceList: [
+				product('t3.nano', '0.0052000000'),
+				'{not json',
+				// not one of the offered sizes
+				product('t3.2xlarge', '0.3328000000'),
+				product('m7i.large', '0.1008000000')
+			]
+		});
+	}
+	return json({ FormatVersion: 'aws_v1', PriceList: [product('t3.micro', '0.0104000000')] });
+}
+
 async function handle(url: URL, init: RequestInit): Promise<Response> {
+	if (url.hostname === new URL(PRICING_URL).hostname) return handlePricing(url, init);
 	const region = url.hostname.match(/^ec2\.([a-z0-9-]+)\.amazonaws\.com$/)![1]!;
 	const body = String(init.body);
 	const headers = new Headers(init.headers);
 	const auth = headers.get('authorization')!;
 	const credential = auth.match(/Credential=([^/]+)\/(\d{8})\/([^/]+)\/ec2\/aws4_request/)!;
-	expect(credential[2]).toBe('20261103');
+	expect(credential[2]).toBe(day());
 	expect(credential[3]).toBe(region);
 	if (credential[1] !== KEY) {
 		return awsError(
@@ -294,7 +417,15 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 const fetcher = (async (input: string | URL, init: RequestInit = {}) =>
 	handle(new URL(String(input)), init)) as typeof fetch;
 
-const adapter = awsAdapter({ fetch: fetcher, now: () => NOW });
+const adapter = awsAdapter({ fetch: fetcher, now: () => clock });
+/** An adapter with a price cache of its own. */
+const fresh = () => awsAdapter({ fetch: fetcher, now: () => clock });
+const later = (ms: number) => (clock = new Date(clock.getTime() + ms));
+const MINUTE = 60_000;
+const hourly = async (a = fresh(), c = creds()) =>
+	Object.fromEntries((await a.listOffers(c, 'us-east-1')).map((o) => [o.id, o.hourly]));
+const PRICED = { 't3.nano': 0.0052, 't3.micro': 0.0104, 'm7i.large': 0.1008, 'c7i.xlarge': null };
+const UNPRICED = { 't3.nano': null, 't3.micro': null, 'm7i.large': null, 'c7i.xlarge': null };
 
 const spec = (overrides: Partial<NodeSpec> = {}): NodeSpec => ({
 	name: 'aws-node',
@@ -365,6 +496,131 @@ describe('AWS adapter', () => {
 		expect(offers.map((o) => o.id)).toEqual(['t3.nano', 't3.micro', 'm7i.large', 'c7i.xlarge']);
 		expect(offers[1]).toMatchObject({ vcpus: 2, memoryMb: 1024, diskGb: 20, arch: 'amd64' });
 		await expect(adapter.listOffers(creds(), 'moon-1')).rejects.toThrow(/no region called moon-1/);
+	});
+
+	it('prices offers from the Price List API, in one query for every size', async () => {
+		const offers = await fresh().listOffers(creds(), 'us-east-1');
+		expect(Object.fromEntries(offers.map((o) => [o.id, o.hourly]))).toEqual(PRICED);
+		expect(offers.every((o) => o.egressPerGb === EGRESS_PER_GB)).toBe(true);
+		expect(EGRESS_PER_GB).toBe(0.09);
+
+		// both pages of the same query
+		expect(pricing).toHaveLength(2);
+		const [first, second] = pricing;
+		expect(first!.target).toBe('AWSPriceListService.GetProducts');
+		expect(first!.body).toMatchObject({
+			ServiceCode: 'AmazonEC2',
+			FormatVersion: 'aws_v1',
+			MaxResults: 100
+		});
+		expect(first!.body.NextToken).toBeUndefined();
+		expect(second!.body).toEqual({ ...first!.body, NextToken: 'page-2' });
+		const byField = Object.fromEntries(
+			(first!.body.Filters as { Type: string; Field: string; Value: string }[]).map((f) => [
+				f.Field,
+				`${f.Type} ${f.Value}`
+			])
+		);
+		expect(byField).toEqual({
+			regionCode: 'TERM_MATCH us-east-1',
+			operatingSystem: 'TERM_MATCH Linux',
+			tenancy: 'TERM_MATCH Shared',
+			preInstalledSw: 'TERM_MATCH NA',
+			capacitystatus: 'TERM_MATCH Used',
+			licenseModel: 'TERM_MATCH No License required',
+			instanceType: 'ANY_OF t3.nano,t3.micro,m7i.large,c7i.xlarge'
+		});
+	});
+
+	it('has no spot prices, since it only launches on-demand instances', async () => {
+		expect(adapter.capabilities.spot).toBe(false);
+		const offers = await fresh().listOffers(creds(), 'us-east-1');
+		expect(offers.map((o) => o.spotHourly)).toEqual([null, null, null, null]);
+		expect(actions.some((a) => a.endsWith('DescribeSpotPriceHistory'))).toBe(false);
+	});
+
+	it('reads only hourly, non-zero on-demand USD prices from a product', () => {
+		const micro = product('t3.micro', '0.0104000000');
+		expect(parseProduct(micro)).toEqual({ type: 't3.micro', hourly: 0.0104 });
+		expect(parseProduct(JSON.parse(micro))).toEqual({ type: 't3.micro', hourly: 0.0104 });
+		expect(parseProduct(product('t3.micro', '0.0000000000'))).toBeNull();
+		expect(parseProduct(product('t3.micro', 'n/a'))).toBeNull();
+		expect(parseProduct(micro.replace('"unit":"Hrs"', '"unit":"GB"'))).toBeNull();
+		expect(parseProduct('{"product":{}}')).toBeNull();
+		expect(parseProduct('[')).toBeNull();
+		expect(parseProduct(42)).toBeNull();
+	});
+
+	it('leaves prices unknown when the policy lacks pricing:GetProducts, and asks again after 10 minutes', async () => {
+		const priced = fresh();
+		pricingReply = () =>
+			new Response(
+				JSON.stringify({
+					__type: 'AccessDeniedException',
+					Message:
+						'User: arn:aws:iam::123:user/tramline is not authorized to perform: pricing:GetProducts'
+				}),
+				{ status: 400 }
+			);
+		const offers = await priced.listOffers(creds(), 'us-east-1');
+		expect(offers.map((o) => o.id)).toEqual(['t3.nano', 't3.micro', 'm7i.large', 'c7i.xlarge']);
+		expect(offers.map((o) => o.hourly)).toEqual([null, null, null, null]);
+		expect(offers[0]!.egressPerGb).toBe(EGRESS_PER_GB);
+		await expect(priced.validate(creds())).resolves.toBeUndefined();
+
+		// the failure is remembered for 10 minutes
+		pricingReply = null;
+		later(9 * MINUTE);
+		expect(await hourly(priced)).toEqual(UNPRICED);
+		expect(pricing).toHaveLength(1);
+		later(2 * MINUTE);
+		expect(await hourly(priced)).toEqual(PRICED);
+		expect(pricing).toHaveLength(3);
+	});
+
+	it('leaves prices unknown on a timeout, junk, or a page it can’t read', async () => {
+		for (const reply of [
+			() => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
+			() => new Response('<html>busy</html>', { status: 503 }),
+			() => new Response('not json'),
+			() => new Response(JSON.stringify({ PriceList: 'nope' })),
+			() => new Response(JSON.stringify({ message: 'Rate exceeded' }), { status: 429 })
+		]) {
+			pricingReply = reply;
+			expect(await hourly()).toEqual(UNPRICED);
+		}
+		expect(pricing).toHaveLength(5);
+	});
+
+	it('keeps prices for a day, per region', async () => {
+		const priced = fresh();
+		expect(await hourly(priced)).toEqual(PRICED);
+		expect(pricing).toHaveLength(2);
+		later(23 * 60 * MINUTE);
+		expect(await hourly(priced, creds({ diskGb: 40 }))).toEqual(PRICED);
+		expect(pricing).toHaveLength(2);
+		// another region is a query of its own
+		await priced.listOffers(creds(), 'eu-west-2');
+		expect(pricing).toHaveLength(4);
+		expect(pricing[2]!.body.Filters).toContainEqual({
+			Type: 'TERM_MATCH',
+			Field: 'regionCode',
+			Value: 'eu-west-2'
+		});
+		later(2 * 60 * MINUTE);
+		expect(await hourly(priced)).toEqual(PRICED);
+		expect(pricing).toHaveLength(6);
+	});
+
+	it('keeps the last prices when a refresh fails', async () => {
+		const priced = fresh();
+		expect(await hourly(priced)).toEqual(PRICED);
+		later(25 * 60 * MINUTE);
+		pricingReply = () => new Response('{"__type":"ThrottlingException"}', { status: 400 });
+		expect(await hourly(priced)).toEqual(PRICED);
+		expect(await hourly(priced)).toEqual(PRICED);
+		// the failure is remembered, so the second call didn't ask
+		expect(pricing).toHaveLength(3);
 	});
 
 	it('runs a tagged instance with no role, IMDSv2 one hop only, an encrypted disk and the mesh port', async () => {
