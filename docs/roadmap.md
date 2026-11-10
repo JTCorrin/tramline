@@ -689,6 +689,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Outcome:** kept in the state volume, so whichever agent runs afterwards reports it: up to date, updated from one image to another, or failed and why. One that doesn't finish within 15 minutes counts as failed.
   - **Moving with it:** the mesh container and TCP proxies run the agent's exact image ID, so they restart on the new image too. The spent join token is dropped from the new container.
   - **Versions:** published images carry their commit, which the Nodes page shows.
+  - **Automatic ✅** (unit-tested): every `TRAMLINE_AGENT_UPDATE_HOURS` (default 6; 0 turns it off), the control plane makes the same request for each node that can update itself, so nobody has to. One node at a time, the longest waiting first, skipping nodes with a build, scan, backup, restore, drill or query running. The rollout waits while a node it updated in the last hour is offline. Checks that find nothing new don't show on the Nodes page.
   - **Older agents** (and ones not in a container) can't replace themselves. `install.sh --update` updates one once on the machine, keeping its identity and settings, and the Nodes page shows that command for them.
 
 **7d: GPU nodes**

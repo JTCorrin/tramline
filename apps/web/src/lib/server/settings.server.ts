@@ -9,7 +9,8 @@ import {
 	TRAMLINE_ACCESS_LOG_MAX_ROWS,
 	TRAMLINE_ANONYMIZE_IPS,
 	TRAMLINE_TRUSTED_PROXIES,
-	TRAMLINE_ASN_DATA_URL
+	TRAMLINE_ASN_DATA_URL,
+	TRAMLINE_AGENT_UPDATE_HOURS
 } from '$app/env/private';
 import type { PlatformSettings } from './settings';
 
@@ -20,6 +21,7 @@ export const settings: PlatformSettings = {
 	publicUrl: TRAMLINE_URL ?? null,
 	agentUrl: TRAMLINE_AGENT_URL ?? null,
 	signup: TRAMLINE_SIGNUP,
+	agentUpdateHours: TRAMLINE_AGENT_UPDATE_HOURS,
 	traffic: {
 		retentionDays: TRAMLINE_ACCESS_LOG_DAYS,
 		maxRows: TRAMLINE_ACCESS_LOG_MAX_ROWS,

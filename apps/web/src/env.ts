@@ -118,6 +118,16 @@ export const variables = defineEnvVars({
 			return list;
 		}
 	},
+	TRAMLINE_AGENT_UPDATE_HOURS: {
+		description:
+			'How often to check each node for a newer agent image and update it (default 6). Nodes update one at a time, never while a build or backup runs on them; an agent only restarts when its image changed. 0 turns automatic updates off.',
+		schema: (value) => {
+			const hours = Number(value ?? 6);
+			if (!Number.isFinite(hours) || hours < 0)
+				throw new Error('TRAMLINE_AGENT_UPDATE_HOURS must be a number of hours, or 0');
+			return hours;
+		}
+	},
 	TRAMLINE_ASN_DATA_URL: {
 		description:
 			'Where to download the IP-to-network data that names who each visitor’s address belongs to (default https://iptoasn.com/data/ip2asn-combined.tsv.gz, public domain; refreshed weekly). Addresses are looked up locally and never sent anywhere. `off` turns network names off.',

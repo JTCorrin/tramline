@@ -5,6 +5,7 @@ import { auth } from '#lib/server/auth.js';
 import { db } from '#lib/server/db/index.js';
 import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
+import { autoUpdateAgents } from '#lib/server/nodes/auto-update.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { ensureSetupToken } from '#lib/server/domain/admins.js';
 import { securityHeaders } from '#lib/server/security.js';
@@ -106,6 +107,15 @@ export const init: ServerInit = () => {
 			.finally(() => (measuring = false));
 	}, METRICS_INTERVAL_MS);
 
+	// agents on the latest image, one node at a time
+	const agentUpdates = setInterval(() => {
+		try {
+			autoUpdateAgents(db, secrets, settings);
+		} catch (error) {
+			console.error('[agent updates]', error);
+		}
+	}, METRICS_INTERVAL_MS);
+
 	// node pools: add machines for waiting work, remove idle ones
 	let scaling = false;
 	const scaler = setInterval(async () => {
@@ -123,6 +133,7 @@ export const init: ServerInit = () => {
 		clearInterval(schedules);
 		clearInterval(metricJobs);
 		clearInterval(asnRefresh);
+		clearInterval(agentUpdates);
 		unsubscribe();
 	};
 };

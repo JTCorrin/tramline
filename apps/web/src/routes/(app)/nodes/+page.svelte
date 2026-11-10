@@ -112,7 +112,13 @@
 	/** Only fresh outcomes are worth a line; old ones would sit there forever. */
 	const recentlyFinished = (node: NodeSummary) =>
 		!!node.agent.update?.finishedAt &&
-		Date.now() - Date.parse(node.agent.update.finishedAt) < 3600_000;
+		Date.now() - Date.parse(node.agent.update.finishedAt) < 3600_000 &&
+		// the regular check finding nothing new isn't news
+		!(
+			node.agent.update.automatic &&
+			node.agent.update.state === 'succeeded' &&
+			node.agent.update.detail?.startsWith('Already up to date')
+		);
 
 	const updateCommand = () =>
 		`curl -fsSL ${publicAccess?.agentUrl ?? location.origin}/install.sh | sudo sh -s -- --update`;
