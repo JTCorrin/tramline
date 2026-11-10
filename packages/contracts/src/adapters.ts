@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NODE_NAME } from './agent';
+import { GpuRequest } from './services';
 
 /**
  * Compute adapters and the accounts that connect them. Accounts belong to the
@@ -130,3 +131,56 @@ export const ProviderNodeCreated = z.object({
 	})
 });
 export type ProviderNodeCreated = z.infer<typeof ProviderNodeCreated>;
+
+/** What a workload needs, to see where it could run and what that costs. */
+export const PlacementRequest = z.object({
+	vcpus: z.number().positive().max(512),
+	memoryMb: z.number().int().min(64).max(4_194_304),
+	/** Any architecture when absent. */
+	arch: z.enum(['amd64', 'arm64']).optional(),
+	gpus: GpuRequest.nullable().default(null),
+	/** Rank by spot prices where there are any: cheaper, but the provider may take the machine back. */
+	spot: z.boolean().default(false),
+	/** Regions to price now, besides the ones already kept. */
+	regions: z
+		.array(z.object({ account: z.string().min(1), region: z.string().min(1).max(64) }))
+		.max(20)
+		.default([])
+});
+export type PlacementRequest = z.input<typeof PlacementRequest>;
+
+/** Where a workload could run: free room on nodes first, then machine sizes, cheapest first. */
+export const Placement = z.object({
+	/** Nodes with room for it now, which costs nothing more. */
+	existing: z.array(
+		z.object({
+			nodeId: z.string(),
+			name: z.string(),
+			freeCpus: z.number(),
+			freeMemoryMb: z.number().int(),
+			freeGpus: z.number().int()
+		})
+	),
+	offers: z.array(
+		z.object({
+			account: z.object({ id: z.string(), name: z.string(), adapter: z.string() }),
+			offer: AdapterOffer,
+			/** The price ranked by: spot when asked for and offered, else on-demand. */
+			hourly: z.number().nullable(),
+			/** `hourly` over an average month (730 hours). */
+			monthly: z.number().nullable(),
+			spot: z.boolean(),
+			fetchedAt: z.iso.datetime()
+		})
+	),
+	/** The regions compared, and how their last price refresh went. */
+	regions: z.array(
+		z.object({
+			account: z.object({ id: z.string(), name: z.string() }),
+			region: z.string(),
+			fetchedAt: z.iso.datetime().nullable(),
+			error: z.string().nullable()
+		})
+	)
+});
+export type Placement = z.infer<typeof Placement>;

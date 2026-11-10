@@ -6,6 +6,7 @@ import { db } from '#lib/server/db/index.js';
 import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { autoUpdateAgents } from '#lib/server/nodes/auto-update.js';
+import { syncPrices } from '#lib/server/prices/catalog.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { ensureSetupToken } from '#lib/server/domain/admins.js';
 import { securityHeaders } from '#lib/server/security.js';
@@ -38,6 +39,7 @@ const RECONCILE_INTERVAL_MS = 2_000;
 const BACKUP_SCHEDULE_INTERVAL_MS = 60_000;
 const METRICS_INTERVAL_MS = 60_000;
 const AUTOSCALE_INTERVAL_MS = 30_000;
+const PRICE_SYNC_INTERVAL_MS = 10 * 60_000;
 const THEME_SCRIPT = createInitialModeExpression({ defaultMode: 'dark' });
 
 export const init: ServerInit = () => {
@@ -107,6 +109,16 @@ export const init: ServerInit = () => {
 			.finally(() => (measuring = false));
 	}, METRICS_INTERVAL_MS);
 
+	// machine prices for comparisons, a few regions at a time
+	let pricing = false;
+	const prices = setInterval(async () => {
+		if (pricing) return;
+		pricing = true;
+		await syncPrices(db, secrets)
+			.catch((error) => console.error('[prices]', error))
+			.finally(() => (pricing = false));
+	}, PRICE_SYNC_INTERVAL_MS);
+
 	// agents on the latest image, one node at a time
 	const agentUpdates = setInterval(() => {
 		try {
@@ -134,6 +146,7 @@ export const init: ServerInit = () => {
 		clearInterval(metricJobs);
 		clearInterval(asnRefresh);
 		clearInterval(agentUpdates);
+		clearInterval(prices);
 		unsubscribe();
 	};
 };

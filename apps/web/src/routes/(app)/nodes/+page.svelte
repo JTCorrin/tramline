@@ -5,6 +5,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
 	import AddNode from '#lib/components/nodes/add-node.svelte';
+	import ComparePrices from '#lib/components/nodes/compare-prices.svelte';
 	import ComputeAccounts from '#lib/components/nodes/compute-accounts.svelte';
 	import NodePools from '#lib/components/nodes/node-pools.svelte';
 	import PublicAccess from '#lib/components/nodes/public-access.svelte';
@@ -234,6 +235,14 @@
 
 	{#if data.canManage}
 		<AddNode accounts={computeAccounts} bind:provisioning access={publicAccess} />
+		<ComparePrices
+			accounts={computeAccounts}
+			oncreated={() =>
+				api()
+					.adapters.provisioning()
+					.then((list) => (provisioning = list))
+					.catch(reportError)}
+		/>
 		<NodePools accounts={computeAccounts} bind:pools={nodePools} />
 		<ComputeAccounts adapters={data.adapters} bind:accounts={computeAccounts} />
 		{#if publicAccess}

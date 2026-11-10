@@ -86,3 +86,68 @@ test('a cloud-init seed answers without a session, and only with a valid ID', as
 	expect(res.status()).toBe(404);
 	expect(res.headers()['content-type']).toContain('text/plain');
 });
+
+test('compare where a workload could run, then create the cheapest machine for it', async ({
+	page
+}) => {
+	await becomeInstallAdmin(page);
+	const connected = await page.request.post('/api/v1/adapter-accounts', {
+		data: {
+			adapter: 'fake',
+			name: 'Fake prices',
+			credentials: { apiToken: 'fake-token', project: 'prices' }
+		}
+	});
+	expect(connected.ok(), await connected.text()).toBe(true);
+	const { id: accountId } = (await connected.json()) as { id: string };
+	await page.reload();
+
+	const compare = page.getByTestId('compare-prices');
+	await compare.getByLabel('GPUs').fill('1');
+	await compare.getByRole('combobox', { name: 'Account' }).click();
+	await page.getByRole('option', { name: 'Fake prices' }).click();
+	await compare.getByRole('combobox', { name: 'Region' }).click();
+	await page.getByRole('option', { name: 'Fake Region 1' }).click();
+	await compare.getByRole('button', { name: 'Add', exact: true }).click();
+	await expect(compare.getByTestId('compared-regions')).toContainText('Fake prices · fake-1');
+
+	// only the GPU size fits, at its monthly price; no node has a GPU free
+	const offers = compare.getByTestId('placement-offer');
+	await expect(offers).toHaveCount(1);
+	await expect(offers.first()).toContainText('GPU');
+	await expect(offers.first().getByTestId('placement-monthly')).toHaveText('$584/mo');
+	await expect(compare.getByTestId('placement-existing')).toHaveCount(0);
+
+	// without the GPU the small size is cheapest, and cheaper still at spot prices
+	await compare.getByLabel('GPUs').fill('0');
+	await compare.getByRole('button', { name: 'Compare' }).click();
+	await expect(offers.first()).toContainText('Small');
+	await expect(offers.first().getByTestId('placement-monthly')).toHaveText('$7.30/mo');
+	await compare.getByRole('switch', { name: 'Spot prices' }).click();
+	await compare.getByRole('button', { name: 'Compare' }).click();
+	await expect(offers.first().getByTestId('placement-monthly')).toContainText('$2.92/mo');
+
+	// one click (and a name) creates it, after saying what it costs
+	await offers.first().getByRole('button', { name: 'Create node' }).click();
+	await compare.getByLabel('Node name').fill('cheap-e2e');
+	const asked = new Promise<string>((resolve) =>
+		page.once('dialog', (dialog) => {
+			resolve(dialog.message());
+			void dialog.accept();
+		})
+	);
+	await compare.getByRole('button', { name: 'Create', exact: true }).click();
+	expect(await asked).toContain('about $2.92 a month');
+	const pending = page
+		.getByTestId('add-node')
+		.getByTestId('provisioning-node')
+		.filter({ hasText: 'cheap-e2e' });
+	await expect(pending).toContainText('Fake prices · small');
+
+	// tidy up: the machine, then the account
+	page.once('dialog', (dialog) => dialog.accept());
+	await pending.getByRole('button', { name: 'Destroy' }).click();
+	await expect(pending).toHaveCount(0);
+	const removed = await page.request.delete(`/api/v1/adapter-accounts/${accountId}`);
+	expect(removed.ok(), await removed.text()).toBe(true);
+});
