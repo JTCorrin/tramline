@@ -641,6 +641,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Machines:** Ubuntu 24.04 VMs with cloud-init user data, a public address, no service account, the `tramline` label and network tag. Sizes: e2, n2, n2d, n4, c3 and c4 general-purpose types up to 16 vCPUs.
   - **Placement:** a region, and the first zone that has the size and room for it.
   - **Mesh:** a firewall rule for UDP 51820, and each VM offers the public address from the metadata server as its mesh endpoint.
+  - **Prices:** hourly list prices from the Cloud Billing Catalog API (per-family vCPU and RAM rates for the offer's region, read page by page and cached for a day, or 10 minutes after a failure), and Premium Tier egress at $0.12/GB. The Cloud Billing API must be on in the project; without it prices are unknown and nothing else changes. No spot prices, since spot VMs aren't offered.
   - **Safety:** it only lists and deletes labelled VMs.
   - **Forms:** credential fields can be multi-line, with a file picker.
 - **Azure** (`@tramline/adapter-azure`, guide in `docs/adapters/azure.md`):

@@ -213,7 +213,7 @@ More: [docs/adapters/proxmox.md](docs/adapters/proxmox.md)
 
 **You need:** a Google Cloud project with billing turned on. One `e2-micro` in `us-central1`, `us-east1` or `us-west1` is free.
 
-**1. Turn on Compute Engine.** In the console, go to **APIs & Services → Library**, search for _Compute Engine API_, and click **Enable**.
+**1. Turn on Compute Engine.** In the console, go to **APIs & Services → Library**, search for _Compute Engine API_, and click **Enable**. Then do the same for the _Cloud Billing API_, which Tramline reads sizes' prices from. Without it everything else works, but prices show as unknown.
 
 **2. Create a service account key.**
 
