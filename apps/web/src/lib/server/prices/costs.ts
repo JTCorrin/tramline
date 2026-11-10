@@ -1,7 +1,16 @@
 import type { EnvironmentCosts, ProjectCosts, ServiceCost } from '@tramline/contracts';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client';
-import { deployment, environment, node, nodePool, priceOffer, service } from '../db/schema';
+import {
+	deployment,
+	environment,
+	node,
+	nodePool,
+	nodeSpend,
+	priceOffer,
+	service,
+	serviceSpend
+} from '../db/schema';
 import { requireEnvironment, requireProject } from '../domain/access';
 import type { Ctx } from '../domain/context';
 import { nodesOf, replicaNode, reservedOn } from '../nodes/placement';
@@ -13,6 +22,18 @@ export const HOURS_PER_MONTH = 730;
 const LIVE = ['building', 'deploying', 'active', 'crashed'] as const;
 
 const cents = (n: number) => Math.round(n * 100) / 100;
+
+/** Spend is added up this often, for the time since the last time. */
+export const SPEND_INTERVAL_MS = 5 * 60_000;
+/** A longer gap (Tramline was stopped) is counted as this much at most. */
+const MAX_GAP_MS = 2 * SPEND_INTERVAL_MS;
+/** Daily spend is kept this long. */
+export const SPEND_KEPT_DAYS = 400;
+
+/** A UTC day, `2026-11-10`. */
+const dayOf = (at: Date) => at.toISOString().slice(0, 10);
+/** The first day of `at`'s month, UTC. */
+const monthStart = (at: Date) => `${at.toISOString().slice(0, 7)}-01`;
 
 export interface NodeCost {
 	monthly: number | null;
@@ -82,7 +103,26 @@ export function nodeCosts(db: DbOrTx): Map<string, NodeCost> {
  * nothing reserves isn't charged to anyone, so a service with no requests
  * or limits is free on a node it shares.
  */
-function costsOf(db: DbOrTx, environmentId: string, prices: Map<string, NodeCost>) {
+function costsOf(
+	db: DbOrTx,
+	environmentId: string,
+	prices: Map<string, NodeCost>,
+	now = new Date()
+) {
+	const spent = new Map(
+		db
+			.select({
+				serviceId: serviceSpend.serviceId,
+				amount: sql<number>`sum(${serviceSpend.amount})`
+			})
+			.from(serviceSpend)
+			.where(
+				and(eq(serviceSpend.environmentId, environmentId), gte(serviceSpend.day, monthStart(now)))
+			)
+			.groupBy(serviceSpend.serviceId)
+			.all()
+			.map((r) => [r.serviceId, r.amount])
+	);
 	const nodes = new Map(
 		db
 			.select({ id: node.id, name: node.name, info: node.info })
@@ -143,6 +183,7 @@ function costsOf(db: DbOrTx, environmentId: string, prices: Map<string, NodeCost
 				name: d.name,
 				monthly: unpriced ? null : cents(parts.reduce((sum, p) => sum + (p.monthly ?? 0), 0)),
 				unreserved: parts.every((p) => p.share === 0),
+				spent: cents(spent.get(d.serviceId) ?? 0),
 				nodes: parts
 			};
 		})
@@ -150,18 +191,23 @@ function costsOf(db: DbOrTx, environmentId: string, prices: Map<string, NodeCost
 	return {
 		monthly: cents(services.reduce((sum, s) => sum + (s.monthly ?? 0), 0)),
 		complete: services.every((s) => s.monthly !== null),
+		spent: cents([...spent.values()].reduce((sum, a) => sum + a, 0)),
 		services
 	};
 }
 
 /** What an environment's running services cost a month. Any member of the organization can see it. */
-export function environmentCosts(ctx: Ctx, environmentId: string): EnvironmentCosts {
+export function environmentCosts(
+	ctx: Ctx,
+	environmentId: string,
+	now = new Date()
+): EnvironmentCosts {
 	requireEnvironment(ctx, environmentId);
-	return { environmentId, ...costsOf(ctx.db, environmentId, nodeCosts(ctx.db)) };
+	return { environmentId, ...costsOf(ctx.db, environmentId, nodeCosts(ctx.db), now) };
 }
 
 /** What a project costs a month, environment by environment. */
-export function projectCosts(ctx: Ctx, projectId: string): ProjectCosts {
+export function projectCosts(ctx: Ctx, projectId: string, now = new Date()): ProjectCosts {
 	requireProject(ctx, projectId);
 	const prices = nodeCosts(ctx.db);
 	const environments = ctx.db
@@ -171,13 +217,82 @@ export function projectCosts(ctx: Ctx, projectId: string): ProjectCosts {
 		.orderBy(asc(environment.createdAt))
 		.all()
 		.map((e) => {
-			const { monthly, complete } = costsOf(ctx.db, e.id, prices);
-			return { environmentId: e.id, name: e.name, monthly, complete };
+			const { monthly, complete, spent } = costsOf(ctx.db, e.id, prices, now);
+			return { environmentId: e.id, name: e.name, monthly, complete, spent };
 		});
 	return {
 		projectId,
 		monthly: cents(environments.reduce((sum, e) => sum + e.monthly, 0)),
 		complete: environments.every((e) => e.complete),
+		spent: cents(environments.reduce((sum, e) => sum + e.spent, 0)),
 		environments
 	};
+}
+
+/** What each node has cost so far this month, by node ID. */
+export function nodeSpentThisMonth(db: DbOrTx, now = new Date()) {
+	return new Map(
+		db
+			.select({ nodeId: nodeSpend.nodeId, amount: sql<number>`sum(${nodeSpend.amount})` })
+			.from(nodeSpend)
+			.where(gte(nodeSpend.day, monthStart(now)))
+			.groupBy(nodeSpend.nodeId)
+			.all()
+			.map((r) => [r.nodeId, cents(r.amount)])
+	);
+}
+
+/**
+ * Adds what nodes and services cost between `from` and `to` to the day's
+ * spend: each at its monthly cost now, for that many hours of a 730-hour
+ * month. A gap longer than a couple of runs, while Tramline was stopped,
+ * counts as a couple of runs, since nobody saw what ran then.
+ */
+export function accrueSpend(db: DbOrTx, from: Date, to: Date) {
+	const ms = Math.min(to.getTime() - from.getTime(), MAX_GAP_MS);
+	if (ms <= 0) return;
+	const part = ms / 3600_000 / HOURS_PER_MONTH;
+	// on the day it began, so a run ending at midnight counts for the day before
+	const day = dayOf(new Date(to.getTime() - ms));
+	const prices = nodeCosts(db);
+	const names = new Map(
+		db
+			.select({ id: node.id, name: node.name })
+			.from(node)
+			.all()
+			.map((n) => [n.id, n.name])
+	);
+	const environments = db.select({ id: environment.id }).from(environment).all();
+	db.transaction((tx) => {
+		for (const [nodeId, cost] of prices) {
+			if (!cost.monthly) continue;
+			const amount = cost.monthly * part;
+			tx.insert(nodeSpend)
+				.values({ day, nodeId, nodeName: names.get(nodeId) ?? nodeId, amount })
+				.onConflictDoUpdate({
+					target: [nodeSpend.day, nodeSpend.nodeId],
+					set: {
+						amount: sql`${nodeSpend.amount} + ${amount}`,
+						nodeName: names.get(nodeId) ?? nodeId
+					}
+				})
+				.run();
+		}
+		for (const e of environments) {
+			for (const s of costsOf(tx, e.id, prices, to).services) {
+				if (!s.monthly) continue;
+				const amount = s.monthly * part;
+				tx.insert(serviceSpend)
+					.values({ day, serviceId: s.serviceId, environmentId: e.id, amount })
+					.onConflictDoUpdate({
+						target: [serviceSpend.day, serviceSpend.serviceId, serviceSpend.environmentId],
+						set: { amount: sql`${serviceSpend.amount} + ${amount}` }
+					})
+					.run();
+			}
+		}
+		const cutoff = dayOf(new Date(to.getTime() - SPEND_KEPT_DAYS * 24 * 3600_000));
+		tx.delete(nodeSpend).where(lt(nodeSpend.day, cutoff)).run();
+		tx.delete(serviceSpend).where(lt(serviceSpend.day, cutoff)).run();
+	});
 }

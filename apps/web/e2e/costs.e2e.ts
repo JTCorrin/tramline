@@ -42,6 +42,8 @@ test("a service's monthly cost is its share of the node it runs on", async ({ pa
 		await expect(cost).toHaveText(/≈ \$\d+\.\d\d\/mo/, { timeout: 120_000 });
 		await cost.click();
 		await expect(page.getByTestId('service-costs')).toContainText(/busybox\s*\$\d+\.\d\d\/mo/);
+		// spend is added up every few minutes, so a new service has spent nothing yet
+		await expect(page.getByTestId('environment-spent')).toContainText('Spent this month');
 	} finally {
 		await page.goto('/nodes');
 		await local.getByLabel('Monthly cost').fill('');

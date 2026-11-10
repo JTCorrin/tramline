@@ -193,6 +193,8 @@ export const ServiceCost = z.object({
 	monthly: z.number().nullable(),
 	/** It reserves no CPU, memory or GPU, so it costs nothing on a node it shares. */
 	unreserved: z.boolean(),
+	/** US dollars spent on it so far this month (UTC), counted while Tramline runs. */
+	spent: z.number(),
 	nodes: z.array(
 		z.object({
 			nodeId: z.string(),
@@ -212,6 +214,8 @@ export const EnvironmentCosts = z.object({
 	monthly: z.number(),
 	/** Every node its services run on has a price. */
 	complete: z.boolean(),
+	/** Spent so far this month, services that have stopped or gone included. */
+	spent: z.number(),
 	services: z.array(ServiceCost)
 });
 export type EnvironmentCosts = z.infer<typeof EnvironmentCosts>;
@@ -220,12 +224,14 @@ export const ProjectCosts = z.object({
 	projectId: z.string(),
 	monthly: z.number(),
 	complete: z.boolean(),
+	spent: z.number(),
 	environments: z.array(
 		z.object({
 			environmentId: z.string(),
 			name: z.string(),
 			monthly: z.number(),
-			complete: z.boolean()
+			complete: z.boolean(),
+			spent: z.number()
 		})
 	)
 });

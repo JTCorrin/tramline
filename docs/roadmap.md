@@ -763,9 +763,9 @@ What a hostile workload tries, from a published account of one on another platfo
   - **Node costs:** a machine an account created keeps its region and size, and is priced from the catalog (or its pool's price). Any node can have a monthly cost entered on the Nodes page, which wins.
   - **Service costs:** a service pays for the larger of the CPU, memory and GPU share it reserves on each node it runs on. What nothing reserves isn't charged.
   - **Where:** the project header shows the environment's monthly cost with a breakdown per service. The API has `GET /environments/:id/costs` and `GET /projects/:id/costs`, per environment.
+- **Spend so far ✅** (unit-tested): every 5 minutes, each node's and service's monthly cost is added to the day's `node_spend` and `service_spend`, for the time that passed (a gap while Tramline was stopped counts 10 minutes at most). This month's totals show per node, service, environment and project. Node spend is kept by name, so it outlives the node. Days are kept for 400 days. It's metered from Tramline's own prices, not read from providers' billing APIs.
   - **Not yet:**
     - an egress estimate for traffic between groups;
-    - tracking what's actually spent;
     - opt-in spot for stateless services (no adapter creates spot machines yet);
     - converting Hetzner's prices, which are in euros, to dollars.
 - **As planned:**

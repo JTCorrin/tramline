@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { registerAdapter } from '../adapters/registry';
-import { node, priceOffer } from '../db/schema';
+import { node, nodeSpend, priceOffer } from '../db/schema';
 import * as adapters from '../domain/adapters';
 import * as changes from '../domain/changes';
 import type { Ctx } from '../domain/context';
@@ -17,7 +17,7 @@ import * as services from '../domain/services';
 import { reconcile } from '../nodes/reconciler';
 import { ensureLocalNode, join, recordHello } from '../nodes/registry';
 import { grantInstallAdmin, seedCtx } from '../testing';
-import { environmentCosts, projectCosts } from './costs';
+import { accrueSpend, environmentCosts, nodeSpentThisMonth, projectCosts } from './costs';
 
 const fake = fakeAdapter();
 registerAdapter({ ...fake.adapter, meta: { ...fake.adapter.meta, id: 'fake-costs' } } as never);
@@ -62,7 +62,7 @@ describe('what services cost', () => {
 	it('charges each service its part of the node, by what it reserves', async () => {
 		const { ctx, local, project, env } = setup();
 		const node = await nodes.update(ctx, local.id, { monthlyCost: 40 });
-		expect(node.cost).toEqual({ monthly: 40, source: 'entered' });
+		expect(node.cost).toEqual({ monthly: 40, source: 'entered', spent: 0 });
 		// a quarter of the CPU is more than an eighth of the memory
 		const api = addService(ctx, project.id, env.id, {
 			deploy: { cpuRequest: 1, memoryRequestMb: 1024 }
@@ -93,7 +93,8 @@ describe('what services cost', () => {
 		// going back to the provider's price, of which there is none here
 		expect((await nodes.update(ctx, local.id, { monthlyCost: null })).cost).toEqual({
 			monthly: null,
-			source: null
+			source: null,
+			spent: 0
 		});
 		expect(environmentCosts(ctx, env.id)).toMatchObject({ monthly: 0, complete: false });
 	});
@@ -129,7 +130,8 @@ describe('what services cost', () => {
 			.run();
 		expect(nodes.list(ctx).find((n) => n.id === joined.nodeId)?.cost).toEqual({
 			monthly: 14.6,
-			source: 'provider'
+			source: 'provider',
+			spent: 0
 		});
 
 		addService(ctx, project.id, env.id, { deploy: { cpuRequest: 1 } });
@@ -154,5 +156,64 @@ describe('what services cost', () => {
 		const other = seedCtx(ctx.db);
 		expect(() => environmentCosts(other, env.id)).toThrow('Environment');
 		expect(() => projectCosts(other, project.id)).toThrow('Project');
+	});
+});
+
+describe('what has been spent', () => {
+	const MIN = 60_000;
+
+	it('adds up nodes and services as time passes, by month', async () => {
+		const { ctx, local, project, env } = setup();
+		// $1 an hour, and a quarter of it reserved
+		await nodes.update(ctx, local.id, { monthlyCost: 730 });
+		const api = addService(ctx, project.id, env.id, { deploy: { cpuRequest: 1 } });
+		deployAll(ctx, env.id);
+
+		const start = new Date('2026-10-31T23:00:00Z');
+		for (let i = 0; i < 12; i++) {
+			accrueSpend(
+				ctx.db,
+				new Date(start.getTime() + i * 10 * MIN),
+				new Date(start.getTime() + (i + 1) * 10 * MIN)
+			);
+		}
+		// an hour in October, an hour in November
+		const nov = new Date('2026-11-01T12:00:00Z');
+		expect(nodeSpentThisMonth(ctx.db, nov).get(local.id)).toBe(1);
+		const costs = environmentCosts(ctx, env.id, nov);
+		expect(costs.spent).toBe(0.25);
+		expect(costs.services.find((s) => s.serviceId === api.id)?.spent).toBe(0.25);
+		expect(projectCosts(ctx, project.id, nov)).toMatchObject({ spent: 0.25 });
+		expect(
+			ctx.db
+				.select()
+				.from(nodeSpend)
+				.all()
+				.map((r) => [r.day, Math.round(r.amount * 100) / 100])
+		).toEqual([
+			['2026-10-31', 1],
+			['2026-11-01', 1]
+		]);
+	});
+
+	it("doesn't count a long gap, and forgets after 400 days", async () => {
+		const { ctx, local } = setup();
+		await nodes.update(ctx, local.id, { monthlyCost: 730 });
+		const at = new Date('2026-01-01T00:00:00Z');
+		// stopped for five hours: ten minutes counted
+		accrueSpend(ctx.db, at, new Date(at.getTime() + 5 * 60 * MIN));
+		expect(ctx.db.select().from(nodeSpend).get()?.amount).toBeCloseTo(1 / 6, 6);
+		// nothing for no time, or backwards
+		accrueSpend(ctx.db, at, at);
+		expect(ctx.db.select().from(nodeSpend).all()).toHaveLength(1);
+		const later = new Date(at.getTime() + (401 * 24 + 1) * 60 * MIN);
+		accrueSpend(ctx.db, new Date(later.getTime() - MIN), later);
+		expect(
+			ctx.db
+				.select()
+				.from(nodeSpend)
+				.all()
+				.map((r) => r.day)
+		).toEqual(['2027-02-06']);
 	});
 });

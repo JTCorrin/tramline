@@ -327,6 +327,9 @@
 								? ' (entered)'
 								: ''}</span
 						>{/if}
+					{#if node.cost.spent > 0}<span data-testid="node-spent"
+							>· {money(node.cost.spent)} this month</span
+						>{/if}
 					{#if node.lastSeenAt && node.status !== 'online'}· last seen {timeAgo(
 							node.lastSeenAt
 						)}{/if}
