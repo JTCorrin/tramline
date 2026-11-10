@@ -10,6 +10,7 @@ import {
 import { generateKeyPairSync } from 'node:crypto';
 import { z } from 'zod';
 import { HetznerClient, HetznerError, type Action, type ClientOptions } from './client';
+import { dollars } from './currency';
 
 /**
  * Hetzner Cloud: one server per node, from Ubuntu 24.04 (the x86 or Arm
@@ -188,6 +189,7 @@ const sameRule = (a: Rule, b: Rule) =>
 
 export function hetznerAdapter(options: ClientOptions = {}) {
 	const client = (creds: HetznerCredentials) => new HetznerClient(creds.token, options);
+	const toUsd = dollars({ fetch: options.fetch });
 	const query = (value: string) => encodeURIComponent(value);
 
 	async function find(api: HetznerClient, id: string) {
@@ -337,6 +339,11 @@ export function hetznerAdapter(options: ClientOptions = {}) {
 			);
 			if (!locations.length) throw new AdapterError(`There is no region called ${region}`);
 			const types = await api.list<ServerType>('server_types', 'server_types');
+			// prices are in the account's currency; a size is listed without one rather than in euros
+			const rate = await api.get<{ pricing: { currency: string } }>('pricing').then(
+				(r) => toUsd(r.pricing.currency),
+				() => null
+			);
 			return types
 				.filter((t) => {
 					const here = t.locations?.find((l) => l.name === region);
@@ -357,10 +364,10 @@ export function hetznerAdapter(options: ClientOptions = {}) {
 						a.name.localeCompare(b.name)
 				)
 				.map((t) => {
-					// net (without VAT), per hour, in the currency of the project owner's
-					// account: euros for most, though Offer prices are meant to be dollars
+					// net (without VAT), per hour, in the account's currency
 					const price = t.prices.find((p) => p.location === region)?.price_hourly.net;
-					const hourly = price === undefined ? NaN : Number(price);
+					const net = price === undefined ? NaN : Number(price);
+					const hourly = rate === null ? NaN : Math.round(net * rate * 1e6) / 1e6;
 					return {
 						id: t.name,
 						region,
