@@ -635,7 +635,9 @@ export const NodeSummary = z.object({
 	 */
 	cost: z.object({
 		monthly: z.number().nullable(),
-		source: z.enum(['entered', 'provider']).nullable()
+		source: z.enum(['entered', 'provider']).nullable(),
+		/** US dollars it has cost so far this month (UTC), counted while Tramline runs. */
+		spent: z.number()
 	}),
 	/** Takes no new deployments. */
 	cordoned: z.boolean(),
