@@ -12,6 +12,7 @@ import {
 	service
 } from '../db/schema';
 import { newId } from '../ids';
+import { trafficConditions } from '../traffic/alerts';
 import { MINUTE, pruneMetrics, rollUp } from './store';
 
 /**
@@ -161,6 +162,7 @@ function conditions(db: DbOrTx, now: number): Condition[] {
 	}
 	found.push(...fullest.values());
 	found.push(...securityConditions(db, now));
+	found.push(...trafficConditions(db, now));
 	return found;
 }
 
