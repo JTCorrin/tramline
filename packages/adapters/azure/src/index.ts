@@ -9,6 +9,7 @@ import {
 import { generateKeyPairSync } from 'node:crypto';
 import { z } from 'zod';
 import { AzureClient, AzureError, type ClientOptions } from './client';
+import { AzurePrices, EGRESS_PER_GB, type PriceOptions } from './prices';
 
 /**
  * Azure VMs: one per node, in one resource group, from an Ubuntu image
@@ -204,8 +205,10 @@ const toNode = (vm: Vm, address: string | null): ProviderNode => ({
 	instructions: null
 });
 
-export function azureAdapter(options: ClientOptions = {}) {
+export function azureAdapter(options: ClientOptions & PriceOptions = {}) {
 	const client = (creds: AzureCredentials) => new AzureClient(creds, options);
+	// per adapter, so the prices cache lasts as long as the process
+	const prices = new AzurePrices(options);
 
 	const group = (creds: AzureCredentials) => `resourceGroups/${creds.resourceGroup}`;
 	const paths = (creds: AzureCredentials, name: string) => {
@@ -369,6 +372,16 @@ export function azureAdapter(options: ClientOptions = {}) {
 		}
 	}
 
+	const capabilities = {
+		// createNode makes on-demand VMs only, so spot prices aren't offered yet
+		spot: false,
+		arch: ['amd64' as const],
+		autoProvision: true,
+		gpus: false,
+		inventory: true,
+		edgePorts: true
+	};
+
 	const adapter = defineAdapter({
 		meta: {
 			id: 'azure',
@@ -377,14 +390,7 @@ export function azureAdapter(options: ClientOptions = {}) {
 			description: 'Azure VMs in your subscription'
 		},
 		credentials,
-		capabilities: {
-			spot: false,
-			arch: ['amd64'],
-			autoProvision: true,
-			gpus: false,
-			inventory: true,
-			edgePorts: true
-		},
+		capabilities,
 
 		async validate(creds) {
 			const api = client(creds);
@@ -425,6 +431,8 @@ export function azureAdapter(options: ClientOptions = {}) {
 
 		async listOffers(creds, region): Promise<Offer[]> {
 			const sizes: { name: string; numberOfCores: number; memoryInMB: number }[] = [];
+			// fetched alongside the sizes; it never fails, it just has no prices
+			const table = prices.forRegion(region);
 			try {
 				for await (const size of pages<(typeof sizes)[number]>(
 					client(creds),
@@ -438,6 +446,7 @@ export function azureAdapter(options: ClientOptions = {}) {
 				}
 				throw error;
 			}
+			const priced = await table;
 			return sizes
 				.filter((s) => offeredSize(s.name) && s.numberOfCores <= MAX_VCPUS)
 				.sort(
@@ -455,10 +464,11 @@ export function azureAdapter(options: ClientOptions = {}) {
 					diskGb: creds.diskGb,
 					arch: 'amd64',
 					gpu: null,
-					// prices come from the Azure Retail Prices API with Phase 8
-					hourly: null,
-					spotHourly: null,
-					egressPerGb: null
+					// Linux, retail, USD; see prices.ts
+					hourly: priced?.get(s.name)?.hourly ?? null,
+					// the contract allows a spot price only where spot VMs can be made
+					spotHourly: capabilities.spot ? (priced?.get(s.name)?.spotHourly ?? null) : null,
+					egressPerGb: EGRESS_PER_GB
 				}));
 		},
 

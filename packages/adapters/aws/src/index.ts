@@ -8,6 +8,7 @@ import {
 } from '@tramline/adapter-sdk';
 import { z } from 'zod';
 import { AwsClient, AwsError, type ClientOptions } from './client';
+import { EGRESS_PER_GB, onDemandPrices, PriceCache } from './pricing';
 import { items, text, type XmlNode } from './xml';
 
 /**
@@ -22,6 +23,9 @@ import { items, text, type XmlNode } from './xml';
  * ever terminates tagged instances. A security group opens the mesh port
  * (UDP 51820); an edge node also joins `tramline-edge`, which opens TCP 80
  * and 443. See docs/adapters/aws.md for the IAM policy.
+ *
+ * Offers carry on-demand Linux prices from the Price List API (see
+ * pricing.ts), or null when the policy doesn't allow `pricing:GetProducts`.
  */
 
 export const TAG = 'tramline';
@@ -171,6 +175,7 @@ const NEXT_ZONE = new Set(['InsufficientInstanceCapacity', 'Unsupported']);
 
 export function awsAdapter(options: ClientOptions = {}) {
 	const client = (creds: AwsCredentials) => new AwsClient(creds, options);
+	const prices = new PriceCache(() => (options.now?.() ?? new Date()).getTime());
 
 	async function regions(api: AwsClient) {
 		const found = await api.call(HOME_REGION, 'DescribeRegions');
@@ -333,7 +338,7 @@ export function awsAdapter(options: ClientOptions = {}) {
 				}),
 				MaxResults: '100'
 			});
-			return types
+			const sizes = types
 				.map((t) => ({
 					name: text(t, 'instanceType')!,
 					vcpus: Number(text(t, 'vCpuInfo', 'defaultVCpus')),
@@ -342,21 +347,29 @@ export function awsAdapter(options: ClientOptions = {}) {
 				.filter((t) => SIZE.test(t.name) && t.vcpus <= MAX_VCPUS)
 				.sort(
 					(a, b) => a.vcpus - b.vcpus || a.memoryMb - b.memoryMb || a.name.localeCompare(b.name)
-				)
-				.map((t) => ({
-					id: t.name,
+				);
+			// never throws: without pricing:GetProducts the prices are just unknown
+			const hourly = await prices.get(region, creds.accessKeyId, () =>
+				onDemandPrices(
+					api,
 					region,
-					name: t.name,
-					vcpus: t.vcpus,
-					memoryMb: t.memoryMb,
-					diskGb: creds.diskGb,
-					arch: 'amd64',
-					gpu: null,
-					// prices come from the AWS Price List API with Phase 8
-					hourly: null,
-					spotHourly: null,
-					egressPerGb: null
-				}));
+					sizes.map((t) => t.name)
+				)
+			);
+			return sizes.map((t) => ({
+				id: t.name,
+				region,
+				name: t.name,
+				vcpus: t.vcpus,
+				memoryMb: t.memoryMb,
+				diskGb: creds.diskGb,
+				arch: 'amd64',
+				gpu: null,
+				hourly: hourly?.get(t.name) ?? null,
+				// the adapter only launches on-demand instances (capabilities.spot is false)
+				spotHourly: null,
+				egressPerGb: EGRESS_PER_GB
+			}));
 		},
 
 		async createNode(creds, spec) {
