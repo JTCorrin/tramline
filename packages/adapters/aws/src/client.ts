@@ -53,8 +53,19 @@ export class AwsClient {
 		this.#fetch = options.fetch ?? fetch;
 	}
 
-	/** Signs a request for `service` in `region` (SigV4, headers form). */
-	sign(region: string, service: string, url: URL, body: string) {
+	/**
+	 * Signs a request for `service` in `region` (SigV4, headers form). Every
+	 * header given is signed, along with host and the date.
+	 */
+	sign(
+		region: string,
+		service: string,
+		url: URL,
+		body: string,
+		extra: Record<string, string> = {
+			'content-type': 'application/x-www-form-urlencoded; charset=utf-8'
+		}
+	) {
 		const now = this.options.now?.() ?? new Date();
 		const stamp = now
 			.toISOString()
@@ -62,7 +73,7 @@ export class AwsClient {
 			.replace(/\.\d{3}/, '');
 		const day = stamp.slice(0, 8);
 		const headers: Record<string, string> = {
-			'content-type': 'application/x-www-form-urlencoded; charset=utf-8',
+			...extra,
 			host: url.host,
 			'x-amz-date': stamp
 		};
@@ -126,6 +137,61 @@ export class AwsClient {
 		}
 		if (!root) throw new AdapterError(`AWS sent a response that isn’t XML for ${action}`);
 		return root;
+	}
+
+	/**
+	 * One call to an AWS JSON 1.1 API, such as the Price List Query API
+	 * (`AWSPriceListService.GetProducts`); returns the parsed response.
+	 */
+	async json(
+		url: string,
+		region: string,
+		service: string,
+		target: string,
+		payload: unknown,
+		timeoutMs = 60_000
+	): Promise<unknown> {
+		const address = new URL(url);
+		const body = JSON.stringify(payload);
+		let response: Response;
+		try {
+			response = await this.#fetch(address, {
+				method: 'POST',
+				headers: this.sign(region, service, address, body, {
+					'content-type': 'application/x-amz-json-1.1',
+					'x-amz-target': target
+				}),
+				body,
+				signal: AbortSignal.timeout(timeoutMs)
+			});
+		} catch (error) {
+			throw new AdapterError(
+				`Couldn’t reach AWS: ${error instanceof Error ? error.message : String(error)}`
+			);
+		}
+		const raw = await response.text();
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			parsed = undefined;
+		}
+		if (!response.ok) {
+			const fields = (parsed ?? {}) as { __type?: unknown; message?: unknown; Message?: unknown };
+			// `__type` is a bare code or `namespace#Code`
+			const code =
+				typeof fields.__type === 'string' ? (fields.__type.split('#').pop() ?? null) : null;
+			const message = fields.message ?? fields.Message;
+			throw new AwsError(
+				`AWS: ${typeof message === 'string' ? message : `HTTP ${response.status}`}`,
+				response.status,
+				code
+			);
+		}
+		if (parsed === undefined) {
+			throw new AdapterError(`AWS sent a response that isn’t JSON for ${target}`);
+		}
+		return parsed;
 	}
 
 	/** Every page of an action that pages with NextToken, as one list of a set's items. */

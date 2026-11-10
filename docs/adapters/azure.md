@@ -9,6 +9,7 @@ You need three things: a subscription, an app registration with a client secret,
 - **Free tier:** a new account's first year includes 750 hours a month of a `Standard_B1s`, enough for one small node.
 - **Resource providers:** under Subscription → Resource providers, check that **Microsoft.Compute** and **Microsoft.Network** are registered. Testing the account says so if one isn't.
 - **Quota:** new subscriptions have small vCPU quotas per region. Request more under Subscription → Usage + quotas if a size is refused.
+- **Prices:** offers show Azure's hourly pay-as-you-go price for Linux in US dollars, from the public Azure Retail Prices API, so your agreement's discounts aren't included. Egress shows Azure's first-tier internet rate for North America and Europe ($0.087/GB after the first free 100 GB); other regions cost more. Prices are kept for a day. If the API can't be reached, sizes are still offered, without prices.
 
 ## 2. An app registration
 

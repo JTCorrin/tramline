@@ -2,7 +2,8 @@ import { AdapterError } from '@tramline/adapter-sdk';
 import { createHash, createSign } from 'node:crypto';
 
 /**
- * A small client for the Compute Engine API, signed in as a service account:
+ * A small client for the Compute Engine API (and the Cloud Billing catalog,
+ * for prices), signed in as a service account:
  * the key signs a JWT that Google's token endpoint exchanges for an access
  * token (an hour long), so nothing beyond Node is needed.
  */
@@ -15,7 +16,12 @@ export interface ServiceAccountKey {
 }
 
 export const COMPUTE = 'https://compute.googleapis.com/compute/v1/';
-const SCOPE = 'https://www.googleapis.com/auth/compute';
+/** The public price catalog; reading it needs no role, only the API turned on. */
+export const BILLING = 'https://cloudbilling.googleapis.com/v1/';
+export const SCOPE = [
+	'https://www.googleapis.com/auth/compute',
+	'https://www.googleapis.com/auth/cloud-billing.readonly'
+].join(' ');
 
 export interface ClientOptions {
 	fetch?: typeof fetch;
@@ -130,6 +136,26 @@ export class GcpClient {
 			? path
 			: `${COMPUTE}projects/${encodeURIComponent(this.project)}/${path}`;
 		if (!url.startsWith(COMPUTE)) throw new AdapterError('Only the Compute Engine API is used');
+		return this.#request<T>(method, url, body, (status, message) =>
+			explain(status, message, this.project)
+		);
+	}
+
+	/** A Cloud Billing catalog read; `path` is relative to `v1/`. */
+	catalog<T>(path: string): Promise<T> {
+		return this.#request<T>('GET', `${BILLING}${path}`, undefined, (status, message) =>
+			/has not been used in project|is disabled/.test(message)
+				? `The Cloud Billing API is off in project ${this.project}, so prices are unknown. Turn it on under APIs & Services → Library.`
+				: `Google Cloud Billing: ${message}`
+		);
+	}
+
+	async #request<T>(
+		method: string,
+		url: string,
+		body: unknown,
+		describe: (status: number, message: string) => string
+	): Promise<T> {
 		const response = await this.#send(url, {
 			method,
 			headers: {
@@ -145,7 +171,7 @@ export class GcpClient {
 			const error = parsed?.error;
 			const reason = error?.errors?.[0]?.reason ?? error?.status ?? null;
 			throw new GoogleError(
-				explain(response.status, error?.message ?? `HTTP ${response.status}`, this.project),
+				describe(response.status, error?.message ?? `HTTP ${response.status}`),
 				response.status,
 				reason
 			);

@@ -1,13 +1,23 @@
 import { conformance, type NodeSpec } from '@tramline/adapter-sdk';
 import { createVerify, generateKeyPairSync } from 'node:crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { COMPUTE } from './client';
-import { gcpAdapter, instanceName, METADATA_ADDRESS, type GcpCredentials } from './index';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BILLING, COMPUTE } from './client';
+import {
+	gcpAdapter,
+	instanceName,
+	METADATA_ADDRESS,
+	PRICES_RETRY_MS,
+	PRICES_TTL_MS,
+	type GcpCredentials,
+	type GcpOptions
+} from './index';
+import { addSku, money, PREMIUM_EGRESS_PER_GB, priceOf, type RateTable, type Sku } from './prices';
 
 /**
  * A fake Google Cloud: the OAuth token endpoint (which checks the JWT's
- * signature against the key's public half) and enough of Compute Engine.
- * Operations report RUNNING once before DONE, so waiting is exercised.
+ * signature against the key's public half), enough of Compute Engine, and
+ * the Cloud Billing catalog. Operations report RUNNING once before DONE, so
+ * waiting is exercised.
  */
 
 const keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -53,6 +63,10 @@ let exhausted: Set<string>;
 let forbidFirewalls: boolean;
 let apiDisabled: boolean;
 let staleTags: boolean;
+let catalog: Sku[][];
+let catalogRequests: URL[];
+/** Replaces the catalog's answer, e.g. with an error or junk. */
+let catalogResponse: (() => Promise<Response>) | null;
 
 function reset() {
 	vms = [
@@ -71,6 +85,9 @@ function reset() {
 	forbidFirewalls = false;
 	apiDisabled = false;
 	staleTags = false;
+	catalog = CATALOG;
+	catalogRequests = [];
+	catalogResponse = null;
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
@@ -95,6 +112,9 @@ const ZONES: Record<string, string[]> = {
 
 const MACHINE_TYPES = [
 	{ name: 'e2-standard-2', guestCpus: 2, memoryMb: 8192 },
+	{ name: 'n2-standard-4', guestCpus: 4, memoryMb: 16_384 },
+	{ name: 'n2d-standard-2', guestCpus: 2, memoryMb: 8192 },
+	{ name: 'c4-standard-2', guestCpus: 2, memoryMb: 7680 },
 	{ name: 'e2-micro', guestCpus: 2, memoryMb: 1024 },
 	{ name: 'n2-standard-32', guestCpus: 32, memoryMb: 131_072 },
 	{ name: 'a2-highgpu-1g', guestCpus: 12, memoryMb: 87_040 },
@@ -102,6 +122,130 @@ const MACHINE_TYPES = [
 	{ name: 'n1-standard-1', guestCpus: 1, memoryMb: 3840, deprecated: { state: 'DEPRECATED' } },
 	{ name: 'e2-medium', guestCpus: 2, memoryMb: 4096 }
 ];
+
+/** A Compute Engine machine SKU, shaped as the catalog sends it. */
+const sku = (
+	description: string,
+	regions: string[],
+	price: { units?: string; nanos: number },
+	{ usageType = 'OnDemand', usageUnit = description.includes(' Ram ') ? 'GiBy.h' : 'h' } = {}
+): Sku => ({
+	description,
+	category: { resourceFamily: 'Compute', usageType },
+	serviceRegions: regions,
+	pricingInfo: [
+		{
+			pricingExpression: {
+				usageUnit,
+				tieredRates: [
+					{ unitPrice: { currencyCode: 'USD', units: price.units ?? '0', nanos: price.nanos } }
+				]
+			}
+		}
+	]
+});
+
+const AMERICAS = ['us-central1', 'us-east1', 'us-west1'];
+const E2_CORE = 0.021811;
+const E2_RAM = 0.002923;
+const N2_CORE = 0.031611;
+const N2_RAM = 0.004237;
+
+/** Two pages, with each family's core and RAM rates on different pages. */
+const CATALOG: Sku[][] = [
+	[
+		sku('E2 Instance Core running in Americas', AMERICAS, { nanos: 21_811_000 }),
+		sku('E2 Instance Core running in London', ['europe-west2'], { nanos: 28_103_000 }),
+		sku('N2 Instance Core running in Americas', AMERICAS, { nanos: 31_611_000 }),
+		sku('N2D AMD Instance Core running in Americas', AMERICAS, { nanos: 27_502_000 }),
+		// none of these price a predefined machine, and would spoil the N2 rates if matched
+		sku(
+			'Commitment v1: N2 Cpu in Americas for 1 Year',
+			AMERICAS,
+			{ nanos: 19_915_000 },
+			{
+				usageType: 'Commit1Yr'
+			}
+		),
+		sku(
+			'N2 Instance Core running in Americas',
+			AMERICAS,
+			{ nanos: 19_915_000 },
+			{
+				usageType: 'Commit1Yr'
+			}
+		),
+		sku('N2 Custom Instance Core running in Americas', AMERICAS, { nanos: 33_191_000 }),
+		sku('N2 Sole Tenancy Instance Core running in Americas', AMERICAS, { nanos: 34_772_000 }),
+		sku(
+			'Spot Preemptible E2 Instance Core running in Americas',
+			AMERICAS,
+			{ nanos: 6_543_000 },
+			{
+				usageType: 'Preemptible'
+			}
+		),
+		{
+			description: 'Network Internet Egress from Americas to Americas',
+			category: { resourceFamily: 'Network', usageType: 'OnDemand' },
+			serviceRegions: AMERICAS,
+			pricingInfo: [{ pricingExpression: { usageUnit: 'GiBy', tieredRates: [] } }]
+		}
+	],
+	[
+		sku('E2 Instance Ram running in Americas', AMERICAS, { nanos: 2_923_000 }),
+		sku('E2 Instance Ram running in London', ['europe-west2'], { nanos: 3_766_000 }),
+		sku('N2 Instance Ram running in Americas', AMERICAS, { nanos: 4_237_000 }),
+		sku('N2 Custom Extended Instance Ram running in Americas', AMERICAS, { nanos: 9_550_000 }),
+		sku('N2 Custom Instance Ram running in Americas', AMERICAS, { nanos: 4_449_000 }),
+		sku(
+			'Spot Preemptible E2 Instance Ram running in Americas',
+			AMERICAS,
+			{ nanos: 877_000 },
+			{
+				usageType: 'Preemptible'
+			}
+		)
+		// no N2D RAM rate, so n2d can't be priced; no C4 SKUs at all
+	]
+];
+
+function catalogPage(url: URL) {
+	catalogRequests.push(url);
+	if (catalogResponse) return catalogResponse();
+	expect(url.pathname).toBe('/v1/services/6F81-5844-456A/skus');
+	expect(url.searchParams.get('currencyCode')).toBe('USD');
+	expect(url.searchParams.get('pageSize')).toBe('5000');
+	const page = Number(url.searchParams.get('pageToken')?.replace('page-', '') ?? 0);
+	return Promise.resolve(
+		json({
+			skus: catalog[page] ?? [],
+			...(page + 1 < catalog.length ? { nextPageToken: `page-${page + 1}` } : {})
+		})
+	);
+}
+
+/** Google's answer when the Cloud Billing API is off in the project. */
+const billingDisabled = async () =>
+	json(
+		{
+			error: {
+				code: 403,
+				message:
+					'Cloud Billing API has not been used in project 123 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudbilling.googleapis.com/overview?project=123 then retry.',
+				status: 'PERMISSION_DENIED',
+				details: [
+					{
+						'@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+						reason: 'SERVICE_DISABLED',
+						domain: 'googleapis.com',
+						metadata: { service: 'cloudbilling.googleapis.com', consumer: 'projects/123' }
+					}
+				]
+			}
+		},
+		403
+	);
 
 async function handle(url: URL, init: RequestInit): Promise<Response> {
 	const method = init.method ?? 'GET';
@@ -116,13 +260,15 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 		if (
 			!valid ||
 			payload.iss !== EMAIL ||
-			payload.scope !== 'https://www.googleapis.com/auth/compute'
+			payload.scope !==
+				'https://www.googleapis.com/auth/compute https://www.googleapis.com/auth/cloud-billing.readonly'
 		) {
 			return json({ error: 'invalid_grant', error_description: 'Invalid JWT Signature.' }, 400);
 		}
 		return json({ access_token: 'ya29.fake', expires_in: 3599, token_type: 'Bearer' });
 	}
 	expect(new Headers(init.headers).get('authorization')).toBe('Bearer ya29.fake');
+	if (url.href.startsWith(BILLING)) return catalogPage(url);
 	const prefix = `${COMPUTE}projects/lab-123/`;
 	expect(url.href.startsWith(prefix)).toBe(true);
 	const path = url.pathname.replace('/compute/v1/projects/lab-123/', '');
@@ -260,6 +406,8 @@ const fetcher = (async (input: string | URL, init: RequestInit = {}) =>
 	handle(new URL(String(input)), init)) as typeof fetch;
 
 const adapter = gcpAdapter({ fetch: fetcher, pollMs: 1 });
+/** An adapter with its own price cache. */
+const fresh = (options: GcpOptions = {}) => gcpAdapter({ fetch: fetcher, pollMs: 1, ...options });
 
 const spec = (overrides: Partial<NodeSpec> = {}): NodeSpec => ({
 	name: 'gcp-node',
@@ -339,7 +487,14 @@ describe('GCP adapter', () => {
 
 	it('offers general-purpose sizes up to 16 vCPUs, smallest first', async () => {
 		const offers = await adapter.listOffers(creds(), 'us-central1');
-		expect(offers.map((o) => o.id)).toEqual(['e2-micro', 'e2-medium', 'e2-standard-2']);
+		expect(offers.map((o) => o.id)).toEqual([
+			'e2-micro',
+			'e2-medium',
+			'c4-standard-2',
+			'e2-standard-2',
+			'n2d-standard-2',
+			'n2-standard-4'
+		]);
 		expect(offers[0]).toEqual({
 			id: 'e2-micro',
 			region: 'us-central1',
@@ -349,9 +504,9 @@ describe('GCP adapter', () => {
 			diskGb: 20,
 			arch: 'amd64',
 			gpu: null,
-			hourly: null,
+			hourly: expect.any(Number),
 			spotHourly: null,
-			egressPerGb: null
+			egressPerGb: 0.12
 		});
 		await expect(adapter.listOffers(creds(), 'nowhere1')).rejects.toThrow(
 			/no region called nowhere1/
@@ -563,6 +718,195 @@ describe('GCP adapter', () => {
 		const started = performance.now();
 		expect(instanceName(`a${'-'.repeat(100_000)}b`)).toBe('a-b');
 		expect(performance.now() - started).toBeLessThan(100);
+	});
+});
+
+describe('GCP prices', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const hourly = async (region = 'us-central1', a = fresh()) =>
+		Object.fromEntries(
+			(await a.listOffers(creds(), region)).map((o) => [o.id, o.hourly] as const)
+		) as Record<string, number | null>;
+
+	it('prices each size from its family’s core and RAM rates, read across every page', async () => {
+		const prices = await hourly();
+		expect(catalogRequests.map((u) => u.searchParams.get('pageToken'))).toEqual([null, 'page-1']);
+		expect(prices['e2-standard-2']).toBeCloseTo(2 * E2_CORE + 8 * E2_RAM, 9);
+		// the commitment, custom, extended and sole-tenancy N2 SKUs are ignored
+		expect(prices['n2-standard-4']).toBeCloseTo(4 * N2_CORE + 16 * N2_RAM, 9);
+		// shared-core E2 types bill a fraction of a vCPU
+		expect(prices['e2-micro']).toBeCloseTo(0.25 * E2_CORE + 1 * E2_RAM, 9);
+		expect(prices['e2-medium']).toBeCloseTo(1 * E2_CORE + 4 * E2_RAM, 9);
+		// n2d has no RAM rate in the catalog, and c4 none at all: unknown, not guessed
+		expect(prices['n2d-standard-2']).toBeNull();
+		expect(prices['c4-standard-2']).toBeNull();
+	});
+
+	it('uses the rates for the offer’s own region', async () => {
+		const a = fresh();
+		const london = await hourly('europe-west2', a);
+		expect(london['e2-standard-2']).toBeCloseTo(2 * 0.028103 + 8 * 0.003766, 9);
+		expect(london['n2-standard-4']).toBeNull();
+		// one read of the catalog serves every region
+		expect((await hourly('us-central1', a))['e2-standard-2']).toBeCloseTo(
+			2 * E2_CORE + 8 * E2_RAM,
+			9
+		);
+		expect(catalogRequests).toHaveLength(2);
+	});
+
+	it('lists spot prices as unknown, since spot VMs aren’t offered', async () => {
+		const a = fresh();
+		expect(a.capabilities.spot).toBe(false);
+		const offers = await a.listOffers(creds(), 'us-central1');
+		expect(offers.every((o) => o.spotHourly === null)).toBe(true);
+		expect(offers.every((o) => o.egressPerGb === PREMIUM_EGRESS_PER_GB)).toBe(true);
+		// spot rates are read from Preemptible SKUs, and never taken for on-demand ones
+		const table: RateTable = new Map();
+		for (const page of CATALOG) for (const s of page) addSku(table, s);
+		const e2 = { name: 'e2-standard-2', guestCpus: 2, memoryMb: 8192 };
+		expect(priceOf(table, e2, 'us-central1', 'Preemptible')).toBeCloseTo(
+			2 * 0.006543 + 8 * 0.000877,
+			9
+		);
+		expect(priceOf(table, e2, 'us-central1', 'OnDemand')).toBeCloseTo(2 * E2_CORE + 8 * E2_RAM, 9);
+		expect(priceOf(table, e2, 'asia-south9', 'OnDemand')).toBeNull();
+		expect(priceOf(table, { ...e2, name: 'f1-micro' }, 'us-central1', 'OnDemand')).toBeNull();
+	});
+
+	it('reads Google’s money as units plus nanos', () => {
+		expect(money({ currencyCode: 'USD', units: '1', nanos: 500_000_000 })).toBe(1.5);
+		expect(money({ units: 2 })).toBe(2);
+		expect(money({ nanos: 21_811_000 })).toBeCloseTo(0.021811, 12);
+		expect(money({ currencyCode: 'EUR', units: '1' })).toBeNull();
+		expect(money({ units: '-1' })).toBeNull();
+		expect(money({ units: 'lots' })).toBeNull();
+		expect(money(undefined)).toBeNull();
+	});
+
+	it('takes the last tier, and skips SKUs with the wrong shape', () => {
+		const table: RateTable = new Map();
+		const tiered = sku('E2 Instance Core running in Americas', ['us-central1'], { nanos: 0 });
+		tiered.pricingInfo![0]!.pricingExpression!.tieredRates!.push({
+			unitPrice: { currencyCode: 'USD', units: '0', nanos: 21_811_000 }
+		});
+		addSku(table, tiered);
+		addSku(
+			table,
+			sku(
+				'E2 Instance Ram running in Americas',
+				['us-central1'],
+				{ nanos: 1 },
+				{
+					usageUnit: 'h'
+				}
+			)
+		);
+		addSku(
+			table,
+			sku(
+				'E2 Instance Ram running in Americas',
+				['us-east1'],
+				{ nanos: 1 },
+				{
+					usageType: 'Preemptible'
+				}
+			)
+		);
+		addSku(table, { description: 'E2 Instance Ram running in Americas' });
+		addSku(table, {
+			...sku('C3 Instance Core running in Americas', ['us-central1'], { nanos: 1 }),
+			category: { resourceFamily: 'License', usageType: 'OnDemand' }
+		});
+		addSku(table, {});
+		expect([...table]).toEqual([['us-central1|E2|OnDemand|core', 0.021811]]);
+		// two different prices for the same rate: neither is trusted
+		addSku(table, sku('E2 Instance Core running in Iowa', ['us-central1'], { nanos: 1 }));
+		addSku(table, sku('E2 Instance Ram running in Iowa', ['us-central1'], { nanos: 1 }));
+		const e2 = { name: 'e2-standard-2', guestCpus: 2, memoryMb: 8192 };
+		expect(priceOf(table, e2, 'us-central1', 'OnDemand')).toBeNull();
+	});
+
+	it('lists offers with unknown prices when the Cloud Billing API is off, and still validates', async () => {
+		catalogResponse = billingDisabled;
+		const a = fresh();
+		await expect(a.validate(creds())).resolves.toBeUndefined();
+		expect(catalogRequests).toHaveLength(0);
+		const offers = await a.listOffers(creds(), 'us-central1');
+		expect(offers).toHaveLength(6);
+		expect(offers.every((o) => o.hourly === null && o.spotHourly === null)).toBe(true);
+	});
+
+	it('lists unknown prices when the catalog can’t be read or makes no sense', async () => {
+		for (const response of [
+			() => Promise.reject(new Error('ECONNRESET')),
+			async () => new Response('<html>oops</html>', { status: 502 }),
+			async () => new Response('not json'),
+			async () => json({ skus: 'many' }),
+			async () => json({ skus: [] }),
+			// a page token that never ends
+			async () => json({ skus: CATALOG[0], nextPageToken: 'again' })
+		]) {
+			catalogResponse = response;
+			const offers = await fresh().listOffers(creds(), 'us-central1');
+			expect(offers.map((o) => o.hourly)).toEqual(offers.map(() => null));
+		}
+	});
+
+	it('doesn’t keep listOffers waiting on a slow catalog, and uses it once it arrives', async () => {
+		let answer!: () => void;
+		const arrived = new Promise<void>((resolve) => (answer = resolve));
+		catalogResponse = async () => {
+			await arrived;
+			catalogResponse = null;
+			return catalogPage(catalogRequests.at(-1)!);
+		};
+		const a = fresh({ priceWaitMs: 5 });
+		expect((await hourly('us-central1', a))['e2-standard-2']).toBeNull();
+		answer();
+		await vi.waitFor(() => expect(catalogRequests).toHaveLength(3));
+		await vi.waitFor(async () =>
+			expect((await hourly('us-central1', a))['e2-standard-2']).toBeCloseTo(
+				2 * E2_CORE + 8 * E2_RAM,
+				9
+			)
+		);
+		expect(catalogRequests).toHaveLength(3);
+	});
+
+	it('keeps prices for a day, and retries a failed read after ten minutes', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-11-10T12:00:00Z'));
+		const a = fresh();
+		catalogResponse = billingDisabled;
+		expect((await hourly('us-central1', a))['e2-micro']).toBeNull();
+		expect(catalogRequests).toHaveLength(1);
+		// the API is turned on, but the failure is remembered for a while
+		catalogResponse = null;
+		vi.setSystemTime(Date.now() + PRICES_RETRY_MS - 1000);
+		expect((await hourly('us-central1', a))['e2-micro']).toBeNull();
+		expect(catalogRequests).toHaveLength(1);
+		vi.setSystemTime(Date.now() + 2000);
+		expect((await hourly('us-central1', a))['e2-micro']).not.toBeNull();
+		expect(catalogRequests).toHaveLength(3);
+
+		// then the table serves every call for a day
+		await hourly('europe-west2', a);
+		vi.setSystemTime(Date.now() + PRICES_TTL_MS - 1000);
+		await hourly('us-central1', a);
+		expect(catalogRequests).toHaveLength(3);
+		catalog = [
+			[
+				sku('E2 Instance Core running in Americas', AMERICAS, { nanos: 30_000_000 }),
+				sku('E2 Instance Ram running in Americas', AMERICAS, { nanos: 4_000_000 })
+			]
+		];
+		vi.setSystemTime(Date.now() + 2000);
+		expect((await hourly('us-central1', a))['e2-standard-2']).toBeCloseTo(2 * 0.03 + 8 * 0.004, 9);
+		expect(catalogRequests).toHaveLength(4);
 	});
 });
 

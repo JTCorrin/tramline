@@ -8,6 +8,7 @@ import {
 } from '@tramline/adapter-sdk';
 import { z } from 'zod';
 import { GcpClient, GoogleError, type ClientOptions, type ServiceAccountKey } from './client';
+import { loadRates, PREMIUM_EGRESS_PER_GB, priceOf, type RateTable } from './prices';
 
 /**
  * Google Compute Engine: one VM per node, from an Ubuntu image (which runs
@@ -19,6 +20,10 @@ import { GcpClient, GoogleError, type ClientOptions, type ServiceAccountKey } fr
  *
  * A region is offered as a whole; the VM goes in its first zone that has
  * the machine type and room for it. See docs/adapters/gcp.md for the roles.
+ *
+ * Prices come from the Cloud Billing catalog (see prices.ts). It needs the
+ * Cloud Billing API on in the project; without it, or if the catalog can't be
+ * read for any other reason, offers are listed with unknown prices.
  */
 
 export const LABEL = 'tramline';
@@ -189,12 +194,63 @@ const SHORTAGES = new Set([
 	'ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS'
 ]);
 
-export function gcpAdapter(options: ClientOptions = {}) {
+/** A read rate table is good for a day; a failed read is retried after ten minutes. */
+export const PRICES_TTL_MS = 24 * 60 * 60_000;
+export const PRICES_RETRY_MS = 10 * 60_000;
+/** Reading the whole catalog gives up after this. */
+const PRICES_LOAD_MS = 5 * 60_000;
+
+export interface GcpOptions extends ClientOptions {
+	/**
+	 * How long listOffers waits for prices before listing them as unknown. The
+	 * read carries on, and later calls get its prices.
+	 */
+	priceWaitMs?: number;
+}
+
+export function gcpAdapter(options: GcpOptions = {}) {
 	const client = (creds: GcpCredentials) => {
 		const key = parseKey(creds.serviceAccountKey);
 		if (!key) throw new AdapterError('The service account key isn’t a valid JSON key');
 		return new GcpClient({ ...key, project_id: creds.project || key.project_id }, options);
 	};
+
+	// list prices are the same for everyone, so one table serves every account and region
+	let rates: { table: RateTable; expiresAt: number } | null = null;
+	const failedUntil = new Map<string, number>();
+	const loading = new Map<string, Promise<RateTable | null>>();
+
+	/** The rate table, or null when prices are unknown; never throws. */
+	async function ratesFor(api: GcpClient): Promise<RateTable | null> {
+		if (rates && rates.expiresAt > Date.now()) return rates.table;
+		if ((failedUntil.get(api.project) ?? 0) > Date.now()) return null;
+		let load = loading.get(api.project);
+		if (!load) {
+			load = loadRates(api, Date.now() + PRICES_LOAD_MS)
+				.then(
+					(table) => {
+						rates = { table, expiresAt: Date.now() + PRICES_TTL_MS };
+						failedUntil.delete(api.project);
+						return table;
+					},
+					() => {
+						failedUntil.set(api.project, Date.now() + PRICES_RETRY_MS);
+						return null;
+					}
+				)
+				.finally(() => loading.delete(api.project));
+			loading.set(api.project, load);
+		}
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const waited = new Promise<null>((resolve) => {
+			timer = setTimeout(() => resolve(null), options.priceWaitMs ?? 30_000);
+		});
+		try {
+			return await Promise.race([load, waited]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
 
 	async function zonesIn(api: GcpClient, region: string) {
 		let zones: string[];
@@ -341,10 +397,12 @@ export function gcpAdapter(options: ClientOptions = {}) {
 
 		async listOffers(creds, region): Promise<Offer[]> {
 			const api = client(creds);
+			const table = ratesFor(api);
 			const [zone] = await zonesIn(api, region);
 			const { items = [] } = await api.get<{ items?: MachineType[] }>(
 				`zones/${zone}/machineTypes?maxResults=500`
 			);
+			const prices = await table;
 			return items
 				.filter((m) => SIZE.test(m.name) && !m.deprecated && m.guestCpus <= MAX_VCPUS)
 				.sort(
@@ -360,10 +418,12 @@ export function gcpAdapter(options: ClientOptions = {}) {
 					diskGb: creds.diskGb,
 					arch: 'amd64',
 					gpu: null,
-					// prices come from the Cloud Billing catalog with Phase 8
-					hourly: null,
-					spotHourly: null,
-					egressPerGb: null
+					hourly: prices && priceOf(prices, m, region, 'OnDemand'),
+					// Spot VMs aren't offered (capabilities.spot is false), so neither is their price
+					spotHourly:
+						prices && adapter.capabilities.spot ? priceOf(prices, m, region, 'Preemptible') : null,
+					// a published constant, so known even when the catalog isn't
+					egressPerGb: PREMIUM_EGRESS_PER_GB
 				}));
 		},
 

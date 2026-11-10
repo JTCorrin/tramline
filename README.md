@@ -213,7 +213,7 @@ More: [docs/adapters/proxmox.md](docs/adapters/proxmox.md)
 
 **You need:** a Google Cloud project with billing turned on. One `e2-micro` in `us-central1`, `us-east1` or `us-west1` is free.
 
-**1. Turn on Compute Engine.** In the console, go to **APIs & Services → Library**, search for _Compute Engine API_, and click **Enable**.
+**1. Turn on Compute Engine.** In the console, go to **APIs & Services → Library**, search for _Compute Engine API_, and click **Enable**. Then do the same for the _Cloud Billing API_, which Tramline reads sizes' prices from. Without it everything else works, but prices show as unknown.
 
 **2. Create a service account key.**
 
@@ -319,7 +319,7 @@ More: [docs/adapters/azure.md](docs/adapters/azure.md)
 
 **You need:** an AWS account. A `t3.micro` is free-tier eligible.
 
-**1. Create a policy.** Go to **IAM → Policies → Create policy → JSON**. Paste [this policy](docs/adapters/aws.md#2-an-access-key) and name it `tramline-nodes`. It lets the key start and terminate only instances tagged `tramline=node`.
+**1. Create a policy.** Go to **IAM → Policies → Create policy → JSON**. Paste [this policy](docs/adapters/aws.md#2-an-access-key) and name it `tramline-nodes`. It lets the key start and terminate only instances tagged `tramline=node`, and read AWS's price list (without `pricing:GetProducts`, sizes show no price).
 
 **2. Create a user and key.**
 
