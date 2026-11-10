@@ -99,7 +99,6 @@ test('compare where a workload could run, then create the cheapest machine for i
 		}
 	});
 	expect(connected.ok(), await connected.text()).toBe(true);
-	const { id: accountId } = (await connected.json()) as { id: string };
 	await page.reload();
 
 	const compare = page.getByTestId('compare-prices');
@@ -148,6 +147,11 @@ test('compare where a workload could run, then create the cheapest machine for i
 	page.once('dialog', (dialog) => dialog.accept());
 	await pending.getByRole('button', { name: 'Destroy' }).click();
 	await expect(pending).toHaveCount(0);
-	const removed = await page.request.delete(`/api/v1/adapter-accounts/${accountId}`);
-	expect(removed.ok(), await removed.text()).toBe(true);
+	const account = page
+		.getByTestId('compute-accounts')
+		.getByTestId('compute-account')
+		.filter({ hasText: 'Fake prices' });
+	page.once('dialog', (dialog) => dialog.accept());
+	await account.getByRole('button', { name: 'Remove' }).click();
+	await expect(account).toHaveCount(0);
 });
