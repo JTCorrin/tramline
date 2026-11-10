@@ -2,6 +2,14 @@ import { conformance, type NodeSpec } from '@tramline/adapter-sdk';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ARM } from './client';
 import { azureAdapter, offeredSize, vmName, type AzureCredentials } from './index';
+import {
+	AzurePrices,
+	EGRESS_PER_GB,
+	FAILURE_TTL_MS,
+	PRICE_TTL_MS,
+	PRICES_API,
+	priceFilter
+} from './prices';
 
 /**
  * A fake Azure: Entra ID's token endpoint and enough of Resource Manager.
@@ -47,8 +55,15 @@ let registered: Set<string>;
 let unavailable: Set<string>;
 let forbidden: boolean;
 let ipSeq: number;
+/** The Retail Prices API: its items by region, how it fails, and what was asked of it. */
+let priceItems: Record<string, unknown[]>;
+let priceFailure: 'status' | 'network' | 'junk' | 'hang' | 'loop' | null;
+let priceRequests: string[];
 
 function reset() {
+	priceItems = { eastus: PRICE_ITEMS };
+	priceFailure = null;
+	priceRequests = [];
 	resources = new Map();
 	groups = new Set();
 	operations = new Map();
@@ -91,6 +106,101 @@ const SIZES = [
 	{ name: 'Standard_B2s', numberOfCores: 2, memoryInMB: 4096 }
 ];
 
+/** Items as the Retail Prices API returns them; trimmed to the fields it matters for. */
+const price = (
+	armSkuName: string,
+	retailPrice: number,
+	{
+		sku = armSkuName,
+		product = 'Virtual Machines Dsv5 Series',
+		...rest
+	}: { sku?: string; product?: string } & Record<string, unknown> = {}
+) => ({
+	currencyCode: 'USD',
+	retailPrice,
+	unitPrice: retailPrice,
+	armRegionName: 'eastus',
+	location: 'US East',
+	effectiveStartDate: '2021-11-01T00:00:00Z',
+	meterName: sku.replace('Standard_', '').replace('_', ' '),
+	productName: product,
+	skuName: sku,
+	serviceName: 'Virtual Machines',
+	unitOfMeasure: '1 Hour',
+	type: 'Consumption',
+	isPrimaryMeterRegion: true,
+	armSkuName,
+	...rest
+});
+
+const PRICE_ITEMS = [
+	price('Standard_D2s_v5', 0.188, { product: 'Virtual Machines Dsv5 Series Windows' }),
+	price('Standard_D2s_v5', 0.0752, {
+		sku: 'Standard_D2s_v5 Low Priority',
+		product: 'Virtual Machines Dsv5 Series Windows'
+	}),
+	price('Standard_D2s_v5', 0.039687, {
+		sku: 'Standard_D2s_v5 Spot',
+		product: 'Virtual Machines Dsv5 Series Windows'
+	}),
+	price('Standard_D2s_v5', 0.0192, { sku: 'Standard_D2s_v5 Low Priority' }),
+	price('Standard_D2s_v5', 0.096),
+	price('Standard_D2s_v5', 0.020266, { sku: 'Standard_D2s_v5 Spot' }),
+	// the same size as a Cloud Services role costs more
+	price('Standard_D2s_v5', 0.2, { product: 'Dsv5 Series Cloud Services' }),
+	// a price that changed: the newer one counts, in either order
+	price('Standard_F2s_v2', 0.09, { product: 'Virtual Machines FSv2 Series' }),
+	price('Standard_F2s_v2', 0.0846, {
+		product: 'Virtual Machines FSv2 Series',
+		effectiveStartDate: '2024-01-01T00:00:00Z'
+	}),
+	price('Standard_F2s_v2', 0.02, {
+		sku: 'Standard_F2s_v2 Spot',
+		product: 'Virtual Machines FSv2 Series',
+		effectiveStartDate: '2024-01-01T00:00:00Z'
+	}),
+	price('Standard_F2s_v2', 0.03, {
+		sku: 'Standard_F2s_v2 Spot',
+		product: 'Virtual Machines FSv2 Series'
+	}),
+	// B1s has no spot meter
+	price('Standard_B1s', 0.0104, { sku: 'B1s', product: 'Virtual Machines BS Series' }),
+	// not hourly, not USD, not consumption, or not a price at all: ignored
+	price('Standard_B2s', 30, { product: 'Virtual Machines BS Series', unitOfMeasure: '1 Month' }),
+	price('Standard_B2s', 0.04, { product: 'Virtual Machines BS Series', currencyCode: 'EUR' }),
+	price('Standard_B2s', 0.03, {
+		product: 'Virtual Machines BS Series',
+		type: 'DevTestConsumption'
+	}),
+	price('Standard_B2s', 0.03, { product: 'Virtual Machines BS Series', type: 'Reservation' }),
+	{ armSkuName: 'Standard_B2s', retailPrice: 'free' },
+	null
+];
+
+/** Pages of two, linked like the real API (which adds :443 and $skip). */
+function prices(url: URL): Response {
+	priceRequests.push(url.href);
+	expect(url.pathname).toBe('/api/retail/prices');
+	expect(url.searchParams.get('api-version')).toBe('2023-01-01-preview');
+	const filter = url.searchParams.get('$filter')!;
+	const region = /armRegionName eq '([^']*)'/.exec(filter)?.[1] ?? '';
+	expect(filter).toBe(priceFilter(region));
+	if (priceFailure === 'status') return json({ Error: 'Service Unavailable' }, 503);
+	if (priceFailure === 'network') throw new TypeError('fetch failed');
+	if (priceFailure === 'junk') return new Response('<html>oops</html>', { status: 200 });
+	const skip = Number(url.searchParams.get('$skip') ?? 0);
+	const items = priceItems[region] ?? [];
+	const next = new URL(url);
+	next.port = '443';
+	next.searchParams.set('$skip', String(priceFailure === 'loop' ? 0 : skip + 2));
+	return json({
+		BillingCurrency: 'USD',
+		Items: items.slice(skip, skip + 2),
+		NextPageLink: priceFailure === 'loop' || skip + 2 < items.length ? next.href : null,
+		Count: Math.min(2, items.length - skip)
+	});
+}
+
 const instanceView = (vm: Stored) => ({
 	...vm,
 	properties: {
@@ -106,6 +216,15 @@ const instanceView = (vm: Stored) => ({
 
 async function handle(url: URL, init: RequestInit): Promise<Response> {
 	const method = init.method ?? 'GET';
+	if (url.origin === new URL(PRICES_API).origin) {
+		expect(new Headers(init.headers).get('authorization')).toBeNull();
+		if (priceFailure === 'hang') {
+			return new Promise((_, reject) =>
+				init.signal!.addEventListener('abort', () => reject(init.signal!.reason))
+			);
+		}
+		return prices(url);
+	}
 	if (url.origin === 'https://login.microsoftonline.com') {
 		tokenRequests++;
 		if (url.pathname !== `/${TENANT}/oauth2/v2.0/token`) {
@@ -397,6 +516,109 @@ describe('Azure adapter', () => {
 		expect(offeredSize('Standard_B2als_v2')).toBe(true);
 		expect(offeredSize('Standard_D2ps_v5')).toBe(false);
 		expect(offeredSize('Standard_D2_v3')).toBe(false);
+	});
+
+	describe('prices', () => {
+		let clock: number;
+		// each gets its own cache and clock
+		const fresh = () =>
+			azureAdapter({ fetch: fetcher, pollMs: 1, now: () => clock, priceTimeoutMs: 50 });
+		const byId = async (a: ReturnType<typeof fresh>, region = 'eastus') =>
+			Object.fromEntries((await a.listOffers(creds(), region)).map((o) => [o.id, o]));
+		beforeEach(() => {
+			clock = Date.parse('2026-11-10T12:00:00Z');
+		});
+
+		it('prices each size from its Linux on-demand and spot meters, over every page', async () => {
+			const table = await new AzurePrices({ fetch: fetcher }).forRegion('eastus');
+			expect(Object.fromEntries(table!)).toEqual({
+				Standard_D2s_v5: { hourly: 0.096, spotHourly: 0.020266 },
+				// the newer of two prices for the same meter
+				Standard_F2s_v2: { hourly: 0.0846, spotHourly: 0.02 },
+				Standard_B1s: { hourly: 0.0104, spotHourly: null }
+				// Standard_B2s has only a monthly, a euro, a Dev/Test, a reservation and a broken price
+			});
+			// 18 items in pages of two
+			expect(priceRequests).toHaveLength(9);
+			expect(new URL(priceRequests[1]!).searchParams.get('$skip')).toBe('2');
+		});
+
+		it('puts the on-demand price on each offer, and no spot price while VMs are on-demand only', async () => {
+			const a = fresh();
+			expect(a.capabilities.spot).toBe(false);
+			const offers = await byId(a);
+			expect(offers['Standard_D2s_v5']).toMatchObject({
+				hourly: 0.096,
+				spotHourly: null,
+				egressPerGb: EGRESS_PER_GB
+			});
+			expect(offers['Standard_F2s_v2']!.hourly).toBe(0.0846);
+			expect(offers['Standard_B1s']!.hourly).toBe(0.0104);
+			expect(offers['Standard_B2s']!.hourly).toBeNull();
+			expect(EGRESS_PER_GB).toBe(0.087);
+		});
+
+		it.each(['status', 'network', 'junk', 'hang', 'loop'] as const)(
+			'lists the sizes without prices when the API fails (%s)',
+			async (failure) => {
+				priceFailure = failure;
+				const a = fresh();
+				const offers = await a.listOffers(creds(), 'eastus');
+				expect(offers.map((o) => o.id)).toEqual([
+					'Standard_B1s',
+					'Standard_B2s',
+					'Standard_F2s_v2',
+					'Standard_D2s_v5'
+				]);
+				for (const offer of offers) {
+					expect(offer).toMatchObject({ hourly: null, spotHourly: null });
+				}
+				// a link back to the first page is followed only so far
+				if (failure === 'loop') expect(priceRequests).toHaveLength(50);
+				await expect(a.validate(creds())).resolves.toBeUndefined();
+				const prices = new AzurePrices({ fetch: fetcher, priceTimeoutMs: 50 });
+				expect(await prices.forRegion('eastus')).toBeNull();
+			}
+		);
+
+		it('lists the sizes without prices when the region has none', async () => {
+			const offers = await byId(fresh(), 'westeurope');
+			expect(offers['Standard_D2s_v5']).toMatchObject({ hourly: null, spotHourly: null });
+			expect(priceRequests).toHaveLength(1);
+		});
+
+		it('keeps a region’s prices for a day, and fetches each region once at a time', async () => {
+			const a = fresh();
+			await Promise.all([byId(a), byId(a)]);
+			expect(priceRequests).toHaveLength(9);
+			clock += PRICE_TTL_MS - 1;
+			expect((await byId(a))['Standard_D2s_v5']!.hourly).toBe(0.096);
+			expect(priceRequests).toHaveLength(9);
+
+			// another region is its own entry
+			await byId(a, 'westeurope');
+			expect(priceRequests).toHaveLength(10);
+
+			priceItems.eastus = [price('Standard_D2s_v5', 0.1)];
+			clock += 2;
+			expect((await byId(a))['Standard_D2s_v5']!.hourly).toBe(0.1);
+			expect(priceRequests).toHaveLength(11);
+		});
+
+		it('waits ten minutes before asking again after a failure', async () => {
+			const a = fresh();
+			priceFailure = 'status';
+			await byId(a);
+			await byId(a);
+			expect(priceRequests).toHaveLength(1);
+			priceFailure = null;
+			clock += FAILURE_TTL_MS - 1;
+			expect((await byId(a))['Standard_D2s_v5']!.hourly).toBeNull();
+			expect(priceRequests).toHaveLength(1);
+			clock += 2;
+			expect((await byId(a))['Standard_D2s_v5']!.hourly).toBe(0.096);
+			expect(priceRequests).toHaveLength(10);
+		});
 	});
 
 	it('creates a tagged VM with its address in cloud-init, no password and no usable SSH key', async () => {
