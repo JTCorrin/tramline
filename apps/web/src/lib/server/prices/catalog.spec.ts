@@ -165,6 +165,29 @@ describe('comparing where a workload could run', () => {
 		expect(gpu.existing).toEqual([]);
 	});
 
+	it('adds what the traffic out costs at each provider, and ranks by the total', async () => {
+		const { ctx, account } = setup();
+		catalog['us-1']![0] = size('small', 'us-1', { hourly: 0.03, egressPerGb: 0.01 });
+		catalog['eu-1']![2] = size('arm', 'eu-1', { arch: 'arm64', hourly: 0.015, egressPerGb: null });
+		const regions = [
+			{ account: account.id, region: 'eu-1' },
+			{ account: account.id, region: 'us-1' }
+		];
+		const result = await placement(ctx, { vcpus: 1, memoryMb: 1024, egressGb: 1000, regions });
+		const row = (id: string) => result.offers.find((o) => `${o.offer.region}/${o.offer.id}` === id);
+		// $21.90 a month for the machine and $10 for a TB beats $14.60 and $90
+		expect(row('us-1/small')).toMatchObject({ monthly: 31.9, egress: 10 });
+		expect(row('eu-1/small')).toMatchObject({ monthly: 104.6, egress: 90 });
+		expect(result.offers.findIndex((o) => o === row('us-1/small'))).toBeLessThan(
+			result.offers.findIndex((o) => o === row('eu-1/small'))
+		);
+		// a provider that doesn't say what traffic costs: the machine alone, flagged
+		expect(row('eu-1/arm')).toMatchObject({ monthly: 10.95, egress: null });
+		// no traffic asked about costs nothing
+		const quiet = await placement(ctx, { vcpus: 1, memoryMb: 1024, regions });
+		expect(quiet.offers.find((o) => o.offer.id === 'arm')).toMatchObject({ egress: 0 });
+	});
+
 	it('prices a region once a day, and shows a region that fails without hiding the rest', async () => {
 		const { ctx, account } = setup();
 		failing.add('us-1');

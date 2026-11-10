@@ -759,15 +759,15 @@ What a hostile workload tries, from a published account of one on another platfo
   - **Catalog:** `price_offer` keeps each account's sizes and prices per region, from `listOffers`. A region is kept while a node pool uses it or someone compared it in the last 30 days. It's refreshed daily, a few regions every 10 minutes; a failed refresh is retried after an hour and keeps the old prices.
   - **Placement:** for vCPUs, memory, architecture and GPUs (matched the way the scheduler matches them), it lists nodes with room first, then every size that fits across accounts and regions, by monthly price (730 hours). It can rank by spot prices, and sizes without a price come last.
   - **UI:** **Where should this run?** on the Nodes page, with regions added per account and **Create node** on each size.
+  - **Egress:** a GB-a-month traffic-out figure adds each size's egress at its provider's rate to the monthly price it's ranked by. Sizes whose provider gives no rate say so.
 - **$/mo per service and project ✅** (unit-tested; the e2e test enters a node's cost and sees a service's share):
   - **Node costs:** a machine an account created keeps its region and size, and is priced from the catalog (or its pool's price). Any node can have a monthly cost entered on the Nodes page, which wins.
   - **Service costs:** a service pays for the larger of the CPU, memory and GPU share it reserves on each node it runs on. What nothing reserves isn't charged.
   - **Where:** the project header shows the environment's monthly cost with a breakdown per service. The API has `GET /environments/:id/costs` and `GET /projects/:id/costs`, per environment.
 - **Spend so far ✅** (unit-tested): every 5 minutes, each node's and service's monthly cost is added to the day's `node_spend` and `service_spend`, for the time that passed (a gap while Tramline was stopped counts 10 minutes at most). This month's totals show per node, service, environment and project. Node spend is kept by name, so it outlives the node. Days are kept for 400 days. It's metered from Tramline's own prices, not read from providers' billing APIs.
   - **Not yet:**
-    - an egress estimate for traffic between groups;
-    - opt-in spot for stateless services (no adapter creates spot machines yet);
-    - converting Hetzner's prices, which are in euros, to dollars.
+    - opt-in spot for stateless services (no adapter creates spot machines yet).
+  - **Hetzner in dollars ✅** (#57): converted at the ECB's daily reference rate.
 - **As planned:**
   - Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
   - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.

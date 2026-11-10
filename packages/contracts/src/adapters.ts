@@ -141,6 +141,8 @@ export const PlacementRequest = z.object({
 	gpus: GpuRequest.nullable().default(null),
 	/** Rank by spot prices where there are any: cheaper, but the provider may take the machine back. */
 	spot: z.boolean().default(false),
+	/** GB a month it sends out to the internet, priced at each provider's egress rate. */
+	egressGb: z.number().min(0).max(10_000_000).default(0),
 	/** Regions to price now, besides the ones already kept. */
 	regions: z
 		.array(z.object({ account: z.string().min(1), region: z.string().min(1).max(64) }))
@@ -167,8 +169,13 @@ export const Placement = z.object({
 			offer: AdapterOffer,
 			/** The price ranked by: spot when asked for and offered, else on-demand. */
 			hourly: z.number().nullable(),
-			/** `hourly` over an average month (730 hours). */
+			/** `hourly` over an average month (730 hours), plus `egress`. */
 			monthly: z.number().nullable(),
+			/**
+			 * What `egressGb` costs a month at the provider's rate; null when
+			 * traffic was asked about and the provider doesn't say.
+			 */
+			egress: z.number().nullable(),
 			spot: z.boolean(),
 			fetchedAt: z.iso.datetime()
 		})
