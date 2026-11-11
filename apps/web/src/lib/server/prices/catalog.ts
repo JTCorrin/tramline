@@ -7,7 +7,7 @@ import { adapterAccount, node, nodePool, priceOffer, priceRegion } from '../db/s
 import { connect, call, requireAccount } from '../domain/adapters';
 import type { Ctx } from '../domain/context';
 import { list as listNodes } from '../domain/nodes';
-import { HOURS_PER_MONTH } from '../domain/pools';
+import { HOURS_PER_MONTH } from './costs';
 import { requireInstallAdmin } from '../domain/admins';
 import { gpuMatches, offerFits } from '../nodes/gpus';
 
@@ -82,14 +82,26 @@ export async function refreshRegion(
 	return offers.length;
 }
 
-/** Regions node pools grow in: kept fresh whether or not anyone compares them. */
+/**
+ * Regions node pools grow in, and regions machines were created in: kept
+ * fresh whether or not anyone compares them, to price what runs there.
+ */
 function regionsInUse(db: DbOrTx) {
 	const seen = new Map<string, { accountId: string; region: string }>();
-	for (const u of db
-		.select({ accountId: nodePool.adapterAccountId, region: nodePool.region })
-		.from(nodePool)
-		.all()) {
-		seen.set(`${u.accountId}\n${u.region}`, u);
+	const used = [
+		...db
+			.select({ accountId: nodePool.adapterAccountId, region: nodePool.region })
+			.from(nodePool)
+			.all(),
+		...db
+			.select({ accountId: node.adapterAccountId, region: node.region })
+			.from(node)
+			.where(and(isNotNull(node.adapterAccountId), isNotNull(node.region)))
+			.all()
+	];
+	for (const u of used) {
+		if (u.accountId && u.region)
+			seen.set(`${u.accountId}\n${u.region}`, { accountId: u.accountId, region: u.region });
 	}
 	return [...seen.values()];
 }

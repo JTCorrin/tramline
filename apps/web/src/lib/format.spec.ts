@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatMb, formatPercent, formatRate, timeAgo } from './format';
+import { formatBytes, formatMb, formatPercent, formatRate, money, timeAgo } from './format';
 
 describe('timeAgo', () => {
 	const now = Date.parse('2026-10-23T12:00:00Z');
@@ -35,4 +35,13 @@ describe('metric formats', () => {
 		expect(formatPercent(0)).toBe('0%');
 		expect(formatRate(1400)).toBe('1.4 KB/s');
 	});
+});
+
+describe('money', () => {
+	it.each([
+		[0, '$0.00'],
+		[7.3, '$7.30'],
+		[14.6, '$15'],
+		[1234.5, '$1,235']
+	])('%d → %s', (n, expected) => expect(money(n)).toBe(expected));
 });

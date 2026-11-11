@@ -466,6 +466,12 @@ On **Nodes → Node pools**, click **New pool** and pick a compute account, a re
 
 On **Nodes**, **Where should this run?** takes what a workload needs (vCPUs, memory, GPUs, architecture) and lists where it fits. Nodes with room come first, since they cost nothing more. After them come machine sizes from every compute account, ranked by monthly price, with spot prices if you ask for them. Add the regions you want to compare; regions your node pools use are always included. Prices come from each provider (AWS's Price List, Google's Cloud Billing catalog, Azure's Retail Prices, Hetzner's and Lambda's APIs) and are refreshed daily. **Create node** on any size makes that machine, after saying what it costs.
 
+### What services cost
+
+The top of a project shows about what the environment's running services cost a month; click it for each service. A service's cost is its part of each node it runs on: the larger of the CPU, memory and GPUs it reserves there (its requests, or else its memory limit), over what the node has, times what the node costs. A service that reserves nothing is free on a node it shares, so set requests on services to see what they cost.
+
+A machine a compute account created is priced from its provider's price for its size. For any other machine, like a box at home or a Proxmox VM, an install admin enters what it costs a month on **Nodes**. An entered cost also overrides a provider's list price, say for a discount.
+
 ## Run on GPUs
 
 In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.

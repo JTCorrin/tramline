@@ -629,6 +629,14 @@ export const NodeSummary = z.object({
 	allocatedCpus: z.number(),
 	/** Live deployments placed on the node. */
 	deployments: z.number().int(),
+	/**
+	 * What the machine costs a month in US dollars: `entered` by someone,
+	 * from the `provider`'s price for its size, or null when neither says.
+	 */
+	cost: z.object({
+		monthly: z.number().nullable(),
+		source: z.enum(['entered', 'provider']).nullable()
+	}),
 	/** Takes no new deployments. */
 	cordoned: z.boolean(),
 	/** Its stateless deployments are moving elsewhere. */
@@ -694,7 +702,9 @@ export const UpdateNode = z
 			.regex(/^[A-Za-z0-9.-]+:\d{1,5}$|^\[[0-9a-fA-F:]+\]:\d{1,5}$/, {
 				message: 'Use host:port, e.g. 203.0.113.7:51820'
 			})
-			.nullable()
+			.nullable(),
+		/** What the machine costs a month in US dollars; null goes back to the provider's price. */
+		monthlyCost: z.number().min(0).max(1_000_000).nullable()
 	})
 	.partial();
 export type UpdateNode = z.infer<typeof UpdateNode>;

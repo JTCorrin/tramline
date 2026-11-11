@@ -17,6 +17,7 @@ import {
 	volume
 } from '../db/schema';
 import { newId } from '../ids';
+import { HOURS_PER_MONTH } from '../prices/costs';
 import { notifyNodes } from '../nodes/bus';
 import { gpuRequest, offerFits } from '../nodes/gpus';
 import { onNode, replicaRequest } from '../nodes/placement';
@@ -39,7 +40,7 @@ import { drainNode, removeNode } from './nodes';
 type PoolRow = typeof nodePool.$inferSelect;
 
 /** Hours in a month, for estimates. */
-export const HOURS_PER_MONTH = 730;
+export { HOURS_PER_MONTH };
 /** Queued this long, a deployment has been through the scheduler and found no room. */
 export const WAITING_MS = 15_000;
 /** A pool machine that just joined gets this long to take the waiting work before another is added. */

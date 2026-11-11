@@ -113,6 +113,8 @@ export function join(db: DbOrTx, token: string, hello: AgentHello, now = new Dat
 							adapterAccountId: invite.adapterAccountId,
 							providerNodeId: invite.providerNodeId,
 							offerGpu: invite.offerGpu,
+							region: invite.region,
+							offer: invite.offer,
 							poolId: invite.poolId
 						}
 					: {})

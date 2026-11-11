@@ -9,7 +9,7 @@
 	import * as Select from '#lib/components/ui/select/index.js';
 	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
-	import { timeAgo } from '#lib/format.js';
+	import { money, timeAgo } from '#lib/format.js';
 	import { formatMemory, tooSmall } from '#lib/offers.js';
 	import type {
 		AdapterAccount,
@@ -98,7 +98,6 @@
 	});
 
 	const key = (o: Placement['offers'][number]) => `${o.account.id}/${o.offer.region}/${o.offer.id}`;
-	const money = (n: number) => (n < 10 ? `$${n.toFixed(2)}` : `$${Math.round(n).toLocaleString()}`);
 
 	function open(o: Placement['offers'][number]) {
 		creating = key(o);
