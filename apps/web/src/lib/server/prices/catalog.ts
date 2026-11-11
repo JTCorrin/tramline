@@ -253,6 +253,8 @@ export async function placement(
 			const account = accounts.get(o.accountId)!;
 			const spot = req.spot && o.spotHourly !== null;
 			const hourly = spot ? o.spotHourly : o.hourly;
+			const egress =
+				req.egressGb === 0 ? 0 : o.egressPerGb === null ? null : req.egressGb * o.egressPerGb;
 			return {
 				account: { id: account.id, name: account.name, adapter: account.adapter },
 				offer: {
@@ -269,14 +271,18 @@ export async function placement(
 					egressPerGb: o.egressPerGb
 				},
 				hourly,
-				monthly: hourly === null ? null : Math.round(hourly * HOURS_PER_MONTH * 100) / 100,
+				monthly:
+					hourly === null
+						? null
+						: Math.round((hourly * HOURS_PER_MONTH + (egress ?? 0)) * 100) / 100,
+				egress: egress === null ? null : Math.round(egress * 100) / 100,
 				spot,
 				fetchedAt: o.fetchedAt.toISOString()
 			};
 		})
 		.sort(
 			(a, b) =>
-				(a.hourly ?? Infinity) - (b.hourly ?? Infinity) ||
+				(a.monthly ?? Infinity) - (b.monthly ?? Infinity) ||
 				a.offer.vcpus - b.offer.vcpus ||
 				a.offer.memoryMb - b.offer.memoryMb ||
 				a.account.name.localeCompare(b.account.name) ||

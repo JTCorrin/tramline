@@ -125,6 +125,12 @@ test('compare where a workload could run, then create the cheapest machine for i
 	await compare.getByRole('switch', { name: 'Spot prices' }).click();
 	await compare.getByRole('button', { name: 'Compare' }).click();
 	await expect(offers.first().getByTestId('placement-monthly')).toContainText('$2.92/mo');
+	// 100 GB out a month at the fake provider's $0.01/GB
+	await compare.getByLabel('Traffic out (GB/mo)').fill('100');
+	await compare.getByRole('button', { name: 'Compare' }).click();
+	await expect(offers.first().getByTestId('placement-monthly')).toContainText(
+		/\$3\.92\/mo\s*incl\. \$1\.00 traffic/
+	);
 
 	// one click (and a name) creates it, after saying what it costs
 	await offers.first().getByRole('button', { name: 'Create node' }).click();
@@ -137,6 +143,7 @@ test('compare where a workload could run, then create the cheapest machine for i
 	);
 	await compare.getByRole('button', { name: 'Create', exact: true }).click();
 	expect(await asked).toContain('about $2.92 a month');
+	expect(await asked).toContain('Traffic out is extra: about $1.00 for 100 GB');
 	const pending = page
 		.getByTestId('add-node')
 		.getByTestId('provisioning-node')
