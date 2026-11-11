@@ -755,9 +755,19 @@ What a hostile workload tries, from a published account of one on another platfo
 
 ### Phase 8: Price engine and placement
 
-- Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
-- Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
-- UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
+- **Price catalog and comparison ✅** (unit-tested; the e2e test compares and creates a machine with the fake adapter):
+  - **Catalog:** `price_offer` keeps each account's sizes and prices per region, from `listOffers`. A region is kept while a node pool uses it or someone compared it in the last 30 days. It's refreshed daily, a few regions every 10 minutes; a failed refresh is retried after an hour and keeps the old prices.
+  - **Placement:** for vCPUs, memory, architecture and GPUs (matched the way the scheduler matches them), it lists nodes with room first, then every size that fits across accounts and regions, by monthly price (730 hours). It can rank by spot prices, and sizes without a price come last.
+  - **UI:** **Where should this run?** on the Nodes page, with regions added per account and **Create node** on each size.
+  - **Not yet:**
+    - an egress estimate for traffic between groups;
+    - $/mo per service and project, and tracking what's actually spent;
+    - opt-in spot for stateless services (no adapter creates spot machines yet);
+    - converting Hetzner's prices, which are in euros, to dollars.
+- **As planned:**
+  - Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
+  - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
+  - UI: a "Where should this run?" comparison when creating node pools, a $/mo estimate per service and project, actual usage cost tracking, and opt-in spot for stateless services.
 - **Exit:** for a given set of service requirements, Tramline shows a ranked provider/region/instance list with monthly cost and provisions the chosen option in one click.
 
 ### Phase 8.5: Tramline Templates

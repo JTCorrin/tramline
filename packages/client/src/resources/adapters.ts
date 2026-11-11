@@ -5,6 +5,8 @@ import type {
 	AdapterRegion,
 	CreateAdapterAccount,
 	LeftoverMachine,
+	Placement,
+	PlacementRequest,
 	ProviderNodeCreated,
 	ProvisioningNode,
 	ProvisionNode,
@@ -34,6 +36,8 @@ export const adapters = (http: Http) => ({
 	leftovers: (id: string) => http.get<LeftoverMachine[]>(`/adapter-accounts/${id}/leftovers`),
 	destroyLeftover: (id: string, machine: string) =>
 		http.delete<void>(`/adapter-accounts/${id}/leftovers/${encodeURIComponent(machine)}`),
+	/** Where a workload could run, and what each option costs a month. */
+	placement: (input: PlacementRequest) => http.post<Placement>('/placement', input),
 	/** Destroys a machine that hasn't enrolled. */
 	cancel: (id: string) => http.delete<void>(`/nodes/provisioning/${id}`)
 });

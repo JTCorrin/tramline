@@ -462,6 +462,10 @@ More: [docs/adapters/lambda.md](docs/adapters/lambda.md)
 
 On **Nodes → Node pools**, click **New pool** and pick a compute account, a region and a size, with a minimum and a maximum. When a deployment has nowhere to run, the pool creates a machine for it; once a machine has run nothing for 15 minutes, it's destroyed. A pool can serve every environment or just one, and a monthly cap keeps it from growing past what you want to spend. Tramline shows the cost and asks before a pool can grow.
 
+## Compare where to run something
+
+On **Nodes**, **Where should this run?** takes what a workload needs (vCPUs, memory, GPUs, architecture) and lists where it fits. Nodes with room come first, since they cost nothing more. After them come machine sizes from every compute account, ranked by monthly price, with spot prices if you ask for them. Add the regions you want to compare; regions your node pools use are always included. Prices come from each provider (AWS's Price List, Google's Cloud Billing catalog, Azure's Retail Prices, Hetzner's and Lambda's APIs) and are refreshed daily. **Create node** on any size makes that machine, after saying what it costs.
+
 ## Run on GPUs
 
 In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.

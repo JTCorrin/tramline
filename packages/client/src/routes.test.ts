@@ -148,6 +148,11 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 		(c) => c.adapters.provision({ account: 'acct_1', name: 'box', region: 'r', offer: 'o' }),
 		'POST /nodes/provision'
 	],
+	[
+		'adapters.placement',
+		(c) => c.adapters.placement({ vcpus: 2, memoryMb: 4096 }),
+		'POST /placement'
+	],
 	['adapters.provisioning', (c) => c.adapters.provisioning(), 'GET /nodes/provisioning'],
 	['adapters.cancel', (c) => c.adapters.cancel('join_1'), 'DELETE /nodes/provisioning/join_1'],
 	['github.status', (c) => c.github.status(), 'GET /github'],
