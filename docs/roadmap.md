@@ -768,6 +768,16 @@ What a hostile workload tries, from a published account of one on another platfo
   - **Not yet:**
     - opt-in spot for stateless services (no adapter creates spot machines yet).
   - **Hetzner in dollars ✅** (#57): converted at the ECB's daily reference rate.
+- **Budget VPS adapters (planned):** small, cheap machines for light services, edge nodes and pool minimums. Each one is a package on the same contract that passes the conformance suite. Entry prices as listed today:
+  - **Vultr** from $2.50/month (API v2, bearer token; plans and their regions are in `GET /plans`).
+  - **AWS Lightsail** from $3.50/month. It has its own API (`CreateInstances`, bundles from `GetBundles`), not EC2's, so it's a separate adapter that can reuse the AWS signing code.
+  - **DigitalOcean** from $4/month (API v2, bearer token; sizes from `GET /v2/sizes` with hourly and monthly prices).
+  - **Linode (Akamai)** from $5/month (API v4, bearer token; types from `GET /v4/linode/types`, with per-region prices).
+  - **What to check for each:**
+    - These providers bill hourly up to a monthly cap, so a size's hourly price is its monthly price ÷ 730 when that's lower.
+    - The cheapest plans can be IPv6-only or limited to a few regions. The mesh and edge nodes need IPv4, so sizes say which they have.
+    - 512 MB to 1 GB of memory leaves little room once Docker and the agent are running, so placement counts that overhead.
+    - Included transfer: most plans include some traffic out each month, so the egress estimate charges only what's past it.
 - **As planned:**
   - Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
   - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
