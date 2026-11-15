@@ -464,7 +464,7 @@ On **Nodes → Node pools**, click **New pool** and pick a compute account, a re
 
 ## Compare where to run something
 
-On **Nodes**, **Where should this run?** takes what a workload needs (vCPUs, memory, GPUs, architecture) and lists where it fits. Nodes with room come first, since they cost nothing more. After them come machine sizes from every compute account, ranked by monthly price, with spot prices if you ask for them. Add the regions you want to compare; regions your node pools use are always included. Prices come from each provider (AWS's Price List, Google's Cloud Billing catalog, Azure's Retail Prices, Hetzner's and Lambda's APIs) and are refreshed daily. **Create node** on any size makes that machine, after saying what it costs.
+On **Nodes**, **Where should this run?** takes what a workload needs (vCPUs, memory, GPUs, architecture) and lists where it fits. Nodes with room come first, since they cost nothing more. After them come machine sizes from every compute account, ranked by monthly price, with spot prices if you ask for them. Say how much traffic it sends out a month and each size's price includes what its provider charges for that, at the provider's first-tier rate without free allowances (Hetzner doesn't give a rate, so its sizes say "+ traffic"). Add the regions you want to compare; regions your node pools use are always included. Prices come from each provider (AWS's Price List, Google's Cloud Billing catalog, Azure's Retail Prices, Hetzner's and Lambda's APIs) and are refreshed daily. **Create node** on any size makes that machine, after saying what it costs.
 
 ### What services cost
 

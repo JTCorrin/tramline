@@ -40,6 +40,8 @@
 	let gpuModel = $state('');
 	let arch = $state<'any' | 'amd64' | 'arm64'>('any');
 	let spot = $state(false);
+	/** GB a month sent out to the internet. */
+	let egressGb = $state(0);
 
 	let result = $state<Placement | null>(null);
 	let busy = $state(false);
@@ -61,6 +63,7 @@
 			...(arch === 'any' ? {} : { arch }),
 			gpus: gpus > 0 ? { count: gpus, model: gpuModel.trim() || null, minVramGb: null } : null,
 			spot,
+			egressGb: Number(egressGb) || 0,
 			regions: extra
 		};
 	}
@@ -113,7 +116,7 @@
 		const cost =
 			o.monthly === null
 				? `${o.account.name} doesn't say what ${o.offer.name} costs.`
-				: `${o.offer.name} costs about ${money(o.monthly)} a month${o.spot ? ' at today’s spot price, and the provider may take it back' : ''}, for as long as it runs, whether or not anything uses it.`;
+				: `${o.offer.name} costs about ${money(o.monthly - (o.egress ?? 0))} a month${o.spot ? ' at today’s spot price, and the provider may take it back' : ''}, for as long as it runs, whether or not anything uses it.${o.egress ? ` Traffic out is extra: about ${money(o.egress)} for ${egressGb} GB.` : ''}`;
 		if (!confirm(`${cost} Create ${name.trim()} on ${o.account.name} in ${o.offer.region}?`))
 			return;
 		try {
@@ -185,6 +188,10 @@
 							<Select.Item value="arm64">arm64</Select.Item>
 						</Select.Content>
 					</Select.Root>
+				</Field.Field>
+				<Field.Field class="w-36">
+					<Field.Label for="compare-egress">Traffic out (GB/mo)</Field.Label>
+					<Input id="compare-egress" type="number" min="0" step="1" bind:value={egressGb} />
 				</Field.Field>
 				<label class="flex items-center gap-2 pb-2 text-sm">
 					<Switch bind:checked={spot} aria-label="Spot prices" />
@@ -282,9 +289,15 @@
 									>
 									<span class="ml-auto tabular-nums" data-testid="placement-monthly">
 										{#if o.monthly !== null}
-											{money(o.monthly)}/mo{#if o.spot}<Badge variant="outline" class="ml-1.5"
-													>spot</Badge
-												>{/if}
+											{money(o.monthly)}/mo{#if o.egress === null}<span
+													class="ml-1 text-xs text-muted-foreground"
+													title="This provider doesn't say what traffic out costs, so it isn't included."
+													>+ traffic</span
+												>{:else if o.egress > 0}<span
+													class="ml-1 text-xs text-muted-foreground"
+													title="Traffic out at the provider's first-tier rate, without free allowances."
+													>incl. {money(o.egress)} traffic</span
+												>{/if}{#if o.spot}<Badge variant="outline" class="ml-1.5">spot</Badge>{/if}
 										{:else}
 											<span class="text-muted-foreground">Price unknown</span>
 										{/if}
