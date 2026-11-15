@@ -16,7 +16,8 @@ import {
  * PUTs finish through an Azure-AsyncOperation URL and DELETEs through a
  * Location URL, each reporting "not yet" once, so waiting is exercised. A
  * NIC can't be deleted while a VM uses it, nor a public IP while a NIC does,
- * as in Azure; deleting a VM deletes its NIC and disk (deleteOption).
+ * as in Azure; deleting a VM deletes its NIC and disk (deleteOption), and
+ * the NIC's public IP when its reference says so.
  */
 
 const TENANT = '11111111-2222-3333-4444-555555555555';
@@ -396,14 +397,8 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 		if (inUse && type !== 'virtualmachines') {
 			return armError(400, 'InUseByAnotherResource', `${name} is in use`);
 		}
-		resources.delete(key);
-		if (type === 'virtualmachines') {
-			// deleteOption: Delete on the NIC and the OS disk
-			for (const [k, r] of resources) {
-				if (k.endsWith(`/networkinterfaces/${name}-nic`) || r.managedBy === key)
-					resources.delete(k);
-			}
-		}
+		if (type === 'virtualmachines') deleteVm(key);
+		else resources.delete(key);
 		const op = `op-${++opSeq}`;
 		operations.set(op, { polls: 0 });
 		return json(null, 202, {
@@ -411,6 +406,27 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 		});
 	}
 	return armError(501, 'Unexpected', `unexpected ${method} ${path}`);
+}
+
+/** Deletes a VM as Azure does, on a DELETE or a spot eviction, with what its deleteOptions take. */
+function deleteVm(key: string) {
+	const name = key.split('/').at(-1)!;
+	resources.delete(key);
+	for (const [k, r] of resources) {
+		// deleteOption: Delete on the NIC and the OS disk
+		if (k.endsWith(`/networkinterfaces/${name}-nic`)) {
+			resources.delete(k);
+			// deleteOption: Delete on the NIC's public IP
+			const configs = r.properties.ipConfigurations as {
+				properties: { publicIPAddress?: { id: string; properties?: { deleteOption?: string } } };
+			}[];
+			for (const config of configs) {
+				const ip = config.properties.publicIPAddress;
+				if (ip?.properties?.deleteOption !== 'Delete') continue;
+				resources.delete(ip.id.replace(`/subscriptions/${SUB}/`, '').toLowerCase());
+			}
+		} else if (r.managedBy === key) resources.delete(k);
+	}
 }
 
 const fetcher = (async (input: string | URL, init: RequestInit = {}) =>
@@ -543,18 +559,19 @@ describe('Azure adapter', () => {
 			expect(new URL(priceRequests[1]!).searchParams.get('$skip')).toBe('2');
 		});
 
-		it('puts the on-demand price on each offer, and no spot price while VMs are on-demand only', async () => {
+		it('puts the on-demand and spot prices on each offer', async () => {
 			const a = fresh();
-			expect(a.capabilities.spot).toBe(false);
+			expect(a.capabilities.spot).toBe(true);
 			const offers = await byId(a);
 			expect(offers['Standard_D2s_v5']).toMatchObject({
 				hourly: 0.096,
-				spotHourly: null,
+				spotHourly: 0.020266,
 				egressPerGb: EGRESS_PER_GB
 			});
-			expect(offers['Standard_F2s_v2']!.hourly).toBe(0.0846);
-			expect(offers['Standard_B1s']!.hourly).toBe(0.0104);
-			expect(offers['Standard_B2s']!.hourly).toBeNull();
+			expect(offers['Standard_F2s_v2']).toMatchObject({ hourly: 0.0846, spotHourly: 0.02 });
+			// no spot meter, so no spot price
+			expect(offers['Standard_B1s']).toMatchObject({ hourly: 0.0104, spotHourly: null });
+			expect(offers['Standard_B2s']).toMatchObject({ hourly: null, spotHourly: null });
 			expect(EGRESS_PER_GB).toBe(0.087);
 		});
 
@@ -698,6 +715,59 @@ describe('Azure adapter', () => {
 			status: 'running',
 			address: '20.42.0.1'
 		});
+	});
+
+	it('makes a spot VM that Azure deletes on eviction, with its NIC, address and disk', async () => {
+		await adapter.createNode(creds(), spec({ offer: 'Standard_D2s_v5', spot: true }));
+		const vm = resource('microsoft.compute', 'virtualmachines/azure-node')!;
+		expect(vm.properties).toMatchObject({
+			hardwareProfile: { vmSize: 'Standard_D2s_v5' },
+			priority: 'Spot',
+			evictionPolicy: 'Delete',
+			billingProfile: { maxPrice: -1 },
+			networkProfile: {
+				networkInterfaces: [
+					expect.objectContaining({ properties: { primary: true, deleteOption: 'Delete' } })
+				]
+			}
+		});
+		const nic = resource('microsoft.network', 'networkinterfaces/azure-node-nic')!;
+		expect(nic.properties.ipConfigurations).toEqual([
+			expect.objectContaining({
+				properties: expect.objectContaining({
+					publicIPAddress: {
+						id: `/subscriptions/${SUB}/resourceGroups/tramline/providers/Microsoft.Network/publicIPAddresses/azure-node-ip`,
+						properties: { deleteOption: 'Delete' }
+					}
+				})
+			})
+		]);
+
+		// Azure takes it back: nothing is left, and the node is gone
+		deleteVm('resourcegroups/tramline/providers/microsoft.compute/virtualmachines/azure-node');
+		expect([...resources.keys()].filter((k) => k.includes('azure-node'))).toEqual([]);
+		expect(await adapter.getNode(creds(), 'azure-node')).toBeNull();
+		expect(await adapter.listNodes(creds())).toEqual([]);
+		await expect(adapter.destroyNode(creds(), 'azure-node')).resolves.toBeUndefined();
+	});
+
+	it('makes an on-demand VM without spot settings, whose address outlives an outside delete', async () => {
+		await adapter.createNode(creds(), spec({ offer: 'Standard_D2s_v5' }));
+		const vm = resource('microsoft.compute', 'virtualmachines/azure-node')!;
+		for (const field of ['priority', 'evictionPolicy', 'billingProfile']) {
+			expect(vm.properties).not.toHaveProperty(field);
+		}
+		const nic = resource('microsoft.network', 'networkinterfaces/azure-node-nic')!;
+		const [config] = nic.properties.ipConfigurations as {
+			properties: { publicIPAddress: Record<string, unknown> };
+		}[];
+		expect(config!.properties.publicIPAddress).not.toHaveProperty('properties');
+
+		// as before: destroyNode, not Azure, removes the address
+		deleteVm('resourcegroups/tramline/providers/microsoft.compute/virtualmachines/azure-node');
+		expect(resource('microsoft.network', 'publicipaddresses/azure-node-ip')).toBeDefined();
+		await adapter.destroyNode(creds(), 'azure-node');
+		expect([...resources.keys()].filter((k) => k.includes('azure-node'))).toEqual([]);
 	});
 
 	it('adds the mesh rule to an existing security group, keeping its rules, and can leave it closed', async () => {

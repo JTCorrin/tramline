@@ -24,6 +24,10 @@ import { AzurePrices, EGRESS_PER_GB, type PriceOptions } from './prices';
  * the mesh port (UDP 51820). An edge node's NIC joins the region's
  * application security group `tramline-edge-<region>`, which a rule in that
  * security group opens TCP 80 and 443 to. See docs/adapters/azure.md for the roles.
+ *
+ * A spot VM is evicted by deleting it. Its NIC and OS disk go with it
+ * (`deleteOption: 'Delete'`, as for every VM), and its public address goes
+ * with the NIC, so an eviction leaves nothing behind that's still billed.
  */
 
 export const TAG = 'tramline';
@@ -373,8 +377,7 @@ export function azureAdapter(options: ClientOptions & PriceOptions = {}) {
 	}
 
 	const capabilities = {
-		// createNode makes on-demand VMs only, so spot prices aren't offered yet
-		spot: false,
+		spot: true,
 		arch: ['amd64' as const],
 		autoProvision: true,
 		gpus: false,
@@ -466,8 +469,8 @@ export function azureAdapter(options: ClientOptions & PriceOptions = {}) {
 					gpu: null,
 					// Linux, retail, USD; see prices.ts
 					hourly: priced?.get(s.name)?.hourly ?? null,
-					// the contract allows a spot price only where spot VMs can be made
-					spotHourly: capabilities.spot ? (priced?.get(s.name)?.spotHourly ?? null) : null,
+					// null for sizes Azure has no spot meter for, like the B series, which can't be spot
+					spotHourly: priced?.get(s.name)?.spotHourly ?? null,
 					egressPerGb: EGRESS_PER_GB
 				}));
 		},
@@ -503,7 +506,11 @@ export function azureAdapter(options: ClientOptions & PriceOptions = {}) {
 								properties: {
 									subnet: { id: subnet },
 									privateIPAllocationMethod: 'Dynamic',
-									publicIPAddress: { id: id(api, path.ip) }
+									publicIPAddress: {
+										id: id(api, path.ip),
+										// an evicted spot VM takes its NIC with it, and this takes the address too
+										...(spec.spot && { properties: { deleteOption: 'Delete' } })
+									}
 								}
 							}
 						]
@@ -521,6 +528,12 @@ export function azureAdapter(options: ClientOptions & PriceOptions = {}) {
 					tags,
 					properties: {
 						hardwareProfile: { vmSize: spec.offer },
+						// evicted only when Azure needs the capacity back, never for price, and then deleted
+						...(spec.spot && {
+							priority: 'Spot',
+							evictionPolicy: 'Delete',
+							billingProfile: { maxPrice: -1 }
+						}),
 						storageProfile: {
 							imageReference: { publisher, offer, sku, version },
 							osDisk: {
