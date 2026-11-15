@@ -37,6 +37,15 @@ export function toRunSpec(container: DesiredContainer, nodeId: string): RunSpec 
 		network: container.network,
 		volumes: container.volumes,
 		...(container.gpus?.length ? { gpus: container.gpus } : {}),
+		...(container.files?.length
+			? {
+					files: container.files.map((f) => ({
+						path: f.path,
+						content: Buffer.from(f.content),
+						mode: 0o644
+					}))
+				}
+			: {}),
 		// workloads never get host mounts, so the Docker socket can't leak into them
 		security: {
 			capabilities: WORKLOAD_CAPABILITIES,

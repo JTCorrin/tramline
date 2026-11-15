@@ -114,6 +114,15 @@ export const DesiredContainer = z.object({
 		.array(z.string().regex(/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/))
 		.min(1)
 		.max(50)
+		.optional(),
+	/**
+	 * Files written into the container before it starts, their references
+	 * resolved. Only sent when there are some.
+	 */
+	files: z
+		.array(z.object({ path: z.string().startsWith('/'), content: z.string() }))
+		.min(1)
+		.max(20)
 		.optional()
 });
 

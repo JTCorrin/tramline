@@ -24,6 +24,13 @@ const ROUTES: [string, (c: TramlineClient) => Promise<unknown>, string][] = [
 	['environments.canvas', (c) => c.environments.canvas('e'), 'GET /environments/e/canvas'],
 	['environments.costs', (c) => c.environments.costs('e'), 'GET /environments/e/costs'],
 	['projects.costs', (c) => c.projects.costs('p'), 'GET /projects/p/costs'],
+	['templates.list', (c) => c.templates.list(), 'GET /templates'],
+	['templates.get', (c) => c.templates.get('t'), 'GET /templates/t'],
+	[
+		'templates.install',
+		(c) => c.templates.install('p', { template: 't' }),
+		'POST /projects/p/templates'
+	],
 	['environments.changes', (c) => c.environments.changes('e'), 'GET /environments/e/changes'],
 	['environments.discard', (c) => c.environments.discard('e'), 'DELETE /environments/e/changes'],
 	['environments.deploy', (c) => c.environments.deploy('e'), 'POST /environments/e/deploy'],

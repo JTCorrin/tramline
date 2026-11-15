@@ -58,6 +58,7 @@ describe('Tramline MCP server', () => {
 		const { tools } = await mcp.listTools();
 		const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 		expect(Object.keys(byName).sort()).toEqual([
+			'add_template',
 			'create_environment',
 			'create_service',
 			'deploy',
@@ -69,6 +70,7 @@ describe('Tramline MCP server', () => {
 			'list_environments',
 			'list_nodes',
 			'list_projects',
+			'list_templates',
 			'set_variables',
 			'update_service_config'
 		]);
@@ -81,6 +83,14 @@ describe('Tramline MCP server', () => {
 	it.each([
 		['list_projects', {}, 'GET', '/projects', undefined],
 		['list_nodes', {}, 'GET', '/nodes', undefined],
+		['list_templates', {}, 'GET', '/templates', undefined],
+		[
+			'add_template',
+			{ projectId: 'prj_1', template: 'supabase', answers: { SITE_URL: 'https://a.example' } },
+			'POST',
+			'/projects/prj_1/templates',
+			{ template: 'supabase', answers: { SITE_URL: 'https://a.example' }, deploy: null }
+		],
 		[
 			'list_environments',
 			{ projectId: 'prj_1' },

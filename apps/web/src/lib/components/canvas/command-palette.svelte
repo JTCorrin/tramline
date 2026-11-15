@@ -6,6 +6,10 @@
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import LayersIcon from '@lucide/svelte/icons/layers';
 	import SquareDashedIcon from '@lucide/svelte/icons/square-dashed';
+	import { api } from '#lib/api.js';
+	import TemplateIcon from '#lib/components/templates/template-icon.svelte';
+	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
+	import type { TemplateSummary } from '@tramline/contracts';
 	import { DATABASES, type AddServiceAction } from './add-service';
 	import ServiceIcon from './service-icon.svelte';
 
@@ -20,6 +24,18 @@
 		onadd: (action: AddServiceAction) => void;
 		onselect: (serviceId: string) => void;
 	} = $props();
+
+	// the gallery's templates, listed here so one can be picked by name
+	let templates = $state<TemplateSummary[]>([]);
+	$effect(() => {
+		if (!open || templates.length) return;
+		api()
+			.templates.list()
+			.then(
+				(list) => (templates = list),
+				() => {}
+			);
+	});
 
 	function run(fn: () => void) {
 		open = false;
@@ -59,6 +75,25 @@
 			{/each}
 			<Command.Item onSelect={() => run(() => onadd({ kind: 'empty' }))}>
 				<SquareDashedIcon /> Empty Service
+			</Command.Item>
+		</Command.Group>
+		<Command.Separator />
+		<Command.Group heading="Templates">
+			{#each templates as t (t.id)}
+				<Command.Item
+					value="template {t.name} {t.tags.join(' ')}"
+					onSelect={() => run(() => onadd({ kind: 'template', template: t.id }))}
+				>
+					<TemplateIcon icon={t.icon} class="size-5 rounded [&_svg]:size-3" />
+					{t.name}
+					<span class="ml-auto truncate text-xs text-muted-foreground">{t.tagline}</span>
+				</Command.Item>
+			{/each}
+			<Command.Item
+				value="template browse all templates"
+				onSelect={() => run(() => onadd({ kind: 'template' }))}
+			>
+				<LayoutTemplateIcon /> Browse templates…
 			</Command.Item>
 		</Command.Group>
 		{#if workspace.canvas.services.length}

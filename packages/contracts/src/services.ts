@@ -79,6 +79,27 @@ export const GpuRequest = z.object({
 });
 export type GpuRequest = z.infer<typeof GpuRequest>;
 
+/** Where a config file goes in the container, e.g. `/etc/kong/kong.yml`. */
+const filePath = z
+	.string()
+	.trim()
+	.max(500)
+	.regex(/^\/[^\0]*[^/]$/, 'Use an absolute path to a file, like /etc/app/config.yml')
+	.refine((path) => !/(^|\/)\.\.(\/|$)/.test(path), { message: "A path can't contain .." })
+	.refine((path) => !/^\/(proc|sys|dev)(\/|$)/.test(path), {
+		message: "Files can't go in /proc, /sys or /dev"
+	});
+
+/**
+ * A file written into the container before it starts. `${{ KEY }}` in its
+ * content is the service's own variable KEY, resolved when it deploys.
+ */
+export const ServiceFile = z.object({
+	path: filePath,
+	content: z.string().max(65_536, 'A file can be at most 64 KB')
+});
+export type ServiceFile = z.infer<typeof ServiceFile>;
+
 export const DeployConfig = z.object({
 	startCommand: optionalText,
 	replicas: z.number().int().min(1).max(20),
@@ -109,7 +130,18 @@ export const DeployConfig = z.object({
 	 * whose data would go with the machine. Missing on services saved before
 	 * spot, which means no.
 	 */
-	spot: z.boolean().optional()
+	spot: z.boolean().optional(),
+	/**
+	 * Config files written into the container before it starts. Not with a
+	 * read-only filesystem. Missing on services saved before files, which means none.
+	 */
+	files: z
+		.array(ServiceFile)
+		.max(20)
+		.refine((files) => new Set(files.map((f) => f.path)).size === files.length, {
+			message: 'Two files have the same path'
+		})
+		.optional()
 });
 
 /** An IPv4 address or block a service may reach past containment, e.g. 192.168.1.20 or 10.0.5.0/24. */
