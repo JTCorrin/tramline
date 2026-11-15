@@ -45,6 +45,10 @@ export const node = sqliteTable('node', {
 	monthlyCost: real('monthly_cost'),
 	/** The pool that created it; the pool destroys it once it's idle. */
 	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
+	/** A spot machine: it takes only services that allow spot. */
+	spot: integer('spot', { mode: 'boolean' }).notNull().default(false),
+	/** When its provider was found to have taken this spot machine back. */
+	reclaimedAt: integer('reclaimed_at', { mode: 'timestamp_ms' }),
 	/** When a pool node was last seen running nothing; null while it runs something. */
 	idleSince: integer('idle_since', { mode: 'timestamp_ms' }),
 	/** sha256 of the agent's bearer token. */
@@ -111,6 +115,8 @@ export const joinToken = sqliteTable('join_token', {
 	region: text('region'),
 	offer: text('offer'),
 	offerGpu: text('offer_gpu', { mode: 'json' }).$type<OfferGpu>(),
+	/** A spot machine was asked for. */
+	spot: integer('spot', { mode: 'boolean' }).notNull().default(false),
 	/** The pool that asked for the machine. */
 	poolId: text('pool_id').references((): AnySQLiteColumn => nodePool.id, { onDelete: 'set null' }),
 	/**
@@ -144,6 +150,8 @@ export const nodePool = sqliteTable('node_pool', {
 	vcpus: integer('vcpus').notNull(),
 	memoryMb: integer('memory_mb').notNull(),
 	gpu: text('gpu', { mode: 'json' }).$type<OfferGpu>(),
+	/** Its machines are spot machines; `hourly` is then the spot price. */
+	spot: integer('spot', { mode: 'boolean' }).notNull().default(false),
 	hourly: real('hourly'),
 	/** The environment it serves; every environment when `forEnvironment` is false. */
 	forEnvironment: integer('for_environment', { mode: 'boolean' }).notNull().default(false),

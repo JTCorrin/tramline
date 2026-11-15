@@ -40,6 +40,13 @@ registerAdapter({
 	setEdge: undefined
 } as never);
 
+// a provider that only makes on-demand machines
+registerAdapter({
+	...fakeAdapter({ onCreate: (spec) => created.push(spec) }).adapter,
+	meta: { ...fake.adapter.meta, id: 'fake-on-demand' },
+	capabilities: { ...fake.adapter.capabilities, spot: false }
+} as never);
+
 beforeEach(() => {
 	fake = fakeAdapter({ onCreate: (spec) => created.push(spec) });
 	created = [];
@@ -199,6 +206,38 @@ describe('provisioning a node', () => {
 		expect(fake.machines.size).toBe(0);
 		adapters.removeAccount(ctx, account.id);
 		expect(adapters.listAccounts(ctx)).toEqual([]);
+	});
+
+	it('makes a spot machine when asked, and only where the provider makes them', async () => {
+		const { ctx, account } = setup();
+		await adapters.provision(
+			ctx,
+			{ account: account.id, name: 'cheap', region: 'fake-1', offer: 'small', spot: true },
+			'http://t.test'
+		);
+		expect(created[0]).toMatchObject({ name: 'cheap', spot: true });
+		join(ctx.db, created[0]!.install.token, hello);
+		expect(nodes.list(ctx).find((n) => n.name === 'cheap')).toMatchObject({
+			spot: true,
+			reclaimedAt: null
+		});
+		// an on-demand machine doesn't say spot at all
+		await provision(ctx, account.id);
+		expect(created[1]!.spot).toBeUndefined();
+
+		const onDemand = adapters.createAccount(ctx, {
+			adapter: 'fake-on-demand',
+			name: 'On demand',
+			credentials: good
+		});
+		await expect(
+			adapters.provision(
+				ctx,
+				{ account: onDemand.id, name: 'nope', region: 'fake-1', offer: 'small', spot: true },
+				'http://t.test'
+			)
+		).rejects.toThrow("Fake cloud doesn't make spot machines");
+		expect(created).toHaveLength(2);
 	});
 
 	it('keeps the node when its machine cannot be destroyed', async () => {

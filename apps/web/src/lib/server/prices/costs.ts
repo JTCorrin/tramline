@@ -43,7 +43,9 @@ export interface NodeCost {
 /**
  * What each node costs a month: what someone entered for it, else its
  * provider's price for the size it was created as (from the price catalog,
- * or the pool's price when the catalog hasn't got it), else nothing.
+ * or the pool's price when the catalog hasn't got it), else nothing. A spot
+ * machine is priced at today's spot price, and one its provider took back
+ * costs nothing.
  */
 export function nodeCosts(db: DbOrTx): Map<string, NodeCost> {
 	const prices = new Map(
@@ -52,11 +54,12 @@ export function nodeCosts(db: DbOrTx): Map<string, NodeCost> {
 				accountId: priceOffer.accountId,
 				region: priceOffer.region,
 				offerId: priceOffer.offerId,
-				hourly: priceOffer.hourly
+				hourly: priceOffer.hourly,
+				spotHourly: priceOffer.spotHourly
 			})
 			.from(priceOffer)
 			.all()
-			.map((o) => [`${o.accountId}\n${o.region}\n${o.offerId}`, o.hourly])
+			.map((o) => [`${o.accountId}\n${o.region}\n${o.offerId}`, o])
 	);
 	const pools = new Map(
 		db
@@ -73,7 +76,9 @@ export function nodeCosts(db: DbOrTx): Map<string, NodeCost> {
 			region: node.region,
 			offer: node.offer,
 			poolId: node.poolId,
-			monthlyCost: node.monthlyCost
+			monthlyCost: node.monthlyCost,
+			spot: node.spot,
+			reclaimedAt: node.reclaimedAt
 		})
 		.from(node)
 		.all()) {
@@ -81,10 +86,16 @@ export function nodeCosts(db: DbOrTx): Map<string, NodeCost> {
 			costs.set(n.id, { monthly: n.monthlyCost, source: 'entered' });
 			continue;
 		}
-		const hourly =
-			(n.accountId && n.region && n.offer
+		if (n.reclaimedAt) {
+			costs.set(n.id, { monthly: 0, source: 'provider' });
+			continue;
+		}
+		const offer =
+			n.accountId && n.region && n.offer
 				? prices.get(`${n.accountId}\n${n.region}\n${n.offer}`)
-				: null) ??
+				: undefined;
+		const hourly =
+			(n.spot ? offer?.spotHourly : offer?.hourly) ??
 			(n.poolId ? pools.get(n.poolId) : null) ??
 			null;
 		costs.set(

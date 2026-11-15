@@ -301,12 +301,15 @@
 						<span class={cn('size-2 rounded-full', STATUS_DOT[node.status])}></span>
 						{node.status}
 					</span>
-					{#if node.draining}
+					{#if node.reclaimedAt}
+						<Badge variant="secondary" data-testid="node-reclaimed">Taken back</Badge>
+					{:else if node.draining}
 						<Badge variant="secondary">Draining</Badge>
 					{:else if node.cordoned}
 						<Badge variant="secondary">Cordoned</Badge>
 					{/if}
 					{#if node.edge}<Badge variant="outline">Edge</Badge>{/if}
+					{#if node.spot}<Badge variant="outline">Spot</Badge>{/if}
 					{#if node.pool}<Badge variant="outline">Pool {node.pool.name}</Badge>{/if}
 					<span class="ml-auto text-xs text-muted-foreground">
 						{node.deployments} deployment{node.deployments === 1 ? '' : 's'}
@@ -335,6 +338,13 @@
 						)}{/if}
 				</div>
 				{#if node.error}<p class="mt-1 text-xs text-red-400">{node.error}</p>{/if}
+				{#if node.reclaimedAt}
+					<p class="mt-1 text-xs text-muted-foreground">
+						{node.account?.name ?? 'Its provider'} took this spot machine back {timeAgo(
+							node.reclaimedAt
+						)}. Its services are moving to other nodes, and it's removed once nothing is left on it.
+					</p>
+				{/if}
 				{#if node.status === 'online' && node.containment && node.containment.state !== 'active' && node.containment.state !== 'starting'}
 					<p class="mt-1 text-xs text-amber-600 dark:text-amber-400" data-testid="not-contained">
 						Service containers here aren't contained, so they can reach the LAN, the mesh and the

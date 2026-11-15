@@ -49,3 +49,12 @@ export function reservedOn(
 	const one = replicaRequest(dep.config);
 	return { memoryMb: one.memoryMb * count, cpus: one.cpus * count };
 }
+
+/**
+ * Whether a service may run on spot machines: it said so, and it has no
+ * volume, whose data would go with a machine the provider takes back.
+ */
+export const mayUseSpot = (config: {
+	deploy: { spot?: boolean };
+	volume?: { mountPath: string | null } | null;
+}) => !!config.deploy.spot && !config.volume?.mountPath;

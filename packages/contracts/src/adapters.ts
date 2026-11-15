@@ -95,7 +95,9 @@ export const ProvisionNode = z.object({
 	name: NODE_NAME,
 	region: z.string().min(1),
 	offer: z.string().min(1),
-	cordoned: z.boolean().default(false)
+	cordoned: z.boolean().default(false),
+	/** A spot machine, at the size's spot price; only on accounts whose provider makes them. */
+	spot: z.boolean().default(false)
 });
 export type ProvisionNode = z.input<typeof ProvisionNode>;
 

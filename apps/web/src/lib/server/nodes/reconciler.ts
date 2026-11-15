@@ -7,7 +7,7 @@ import type { PlatformSettings } from '../settings';
 import { notifyNodes } from './bus';
 import { systemLog } from './logs';
 import { describeGpus, freeGpus, gpuMatches, gpuRequest, heldOn, nodeGpus } from './gpus';
-import { nodesOf, replicaNode, replicaRequest, reservedOn } from './placement';
+import { mayUseSpot, nodesOf, replicaNode, replicaRequest, reservedOn } from './placement';
 import { isOnline, ONLINE_WINDOW_MS } from './registry';
 import { isCron, runCronSchedules } from './cron';
 import { ensureVolume, recreatePlan, volumeFor } from './volumes';
@@ -237,6 +237,8 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		return { message: 'Pinned to a node that no longer exists. Choose another in Settings.' };
 	}
 
+	// spot machines take only work that allows them (and has no volume)
+	const spotOk = mayUseSpot(dep.config);
 	let candidates: NodeRow[];
 	if (home) {
 		candidates = online.filter((n) => n.id === home);
@@ -250,7 +252,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		}
 	} else {
 		candidates = online.filter(
-			(n) => !n.cordoned && servesEnvironment(n, dep.environmentId, pools)
+			(n) => !n.cordoned && servesEnvironment(n, dep.environmentId, pools) && (!n.spot || spotOk)
 		);
 	}
 
@@ -280,9 +282,11 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		return {
 			message: !online.length
 				? 'Waiting for a node to come online'
-				: online.some((n) => !n.cordoned)
+				: online.some((n) => !n.cordoned && !n.spot)
 					? 'Waiting for a node: the online ones are kept for other environments'
-					: 'Waiting for a node: every online node is cordoned'
+					: online.some((n) => !n.cordoned)
+						? "Waiting for a node: the online ones are spot machines, which this service doesn't allow (Settings → Deploy)"
+						: 'Waiting for a node: every online node is cordoned'
 		};
 	}
 
@@ -337,6 +341,8 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	};
 	// work that needs no GPU keeps off GPU nodes while others have room, so they stay free for it
 	const gpuNode = (n: NodeRow) => Number(!gpus && nodeGpus(n).length > 0);
+	// work that allows spot goes to spot machines first: they cost less, and keep others free
+	const onDemand = (n: NodeRow) => Number(spotOk && !n.spot);
 
 	// a built image lives on the node that built it; anywhere else builds it again
 	const builtOn =
@@ -369,6 +375,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 					(a, b) =>
 						gpuNode(a.n) - gpuNode(b.n) ||
 						(count.get(a.n.id) ?? 0) - (count.get(b.n.id) ?? 0) ||
+						onDemand(a.n) - onDemand(b.n) ||
 						sameEnvironment(b.n) - sameEnvironment(a.n) ||
 						load(a.n, count.get(a.n.id) ?? 0) - load(b.n, count.get(b.n.id) ?? 0) ||
 						a.order - b.order
@@ -387,6 +394,7 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 				(a, b) =>
 					Number(b.n.id === builtOn) - Number(a.n.id === builtOn) ||
 					gpuNode(a.n) - gpuNode(b.n) ||
+					onDemand(a.n) - onDemand(b.n) ||
 					sameEnvironment(b.n) - sameEnvironment(a.n) ||
 					load(a.n) - load(b.n) ||
 					a.order - b.order

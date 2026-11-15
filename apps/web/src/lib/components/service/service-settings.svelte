@@ -420,6 +420,30 @@
 					aria-label="Read-only filesystem"
 				/>
 			</div>
+			<div class="flex items-start justify-between gap-3 rounded-lg border p-3">
+				<div>
+					<div class="flex items-center gap-2 text-sm font-medium">
+						Spot machines
+						{#if staged('deploy', 'spot')}
+							<span class="size-1.5 rounded-full bg-amber-400"></span>
+						{/if}
+					</div>
+					<p class="text-xs text-muted-foreground">
+						{#if config.volume.mountPath}
+							Not with a volume: its data would go with a machine the provider takes back.
+						{:else}
+							Can run on spot machines, which cost less but can be taken back at short notice. It
+							then moves to another node.
+						{/if}
+					</p>
+				</div>
+				<Switch
+					checked={!!config.deploy.spot && !config.volume.mountPath}
+					disabled={!!config.volume.mountPath}
+					onCheckedChange={(checked) => stage('deploy', { spot: checked })}
+					aria-label="Spot machines"
+				/>
+			</div>
 		</div>
 		<Setting
 			label="Cron schedule"

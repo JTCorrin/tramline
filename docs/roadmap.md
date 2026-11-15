@@ -641,7 +641,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Machines:** Ubuntu 24.04 VMs with cloud-init user data, a public address, no service account, the `tramline` label and network tag. Sizes: e2, n2, n2d, n4, c3 and c4 general-purpose types up to 16 vCPUs.
   - **Placement:** a region, and the first zone that has the size and room for it.
   - **Mesh:** a firewall rule for UDP 51820, and each VM offers the public address from the metadata server as its mesh endpoint.
-  - **Prices:** hourly list prices from the Cloud Billing Catalog API (per-family vCPU and RAM rates for the offer's region, read page by page and cached for a day, or 10 minutes after a failure), and Premium Tier egress at $0.12/GB. The Cloud Billing API must be on in the project; without it prices are unknown and nothing else changes. No spot prices, since spot VMs aren't offered.
+  - **Prices:** hourly list prices from the Cloud Billing Catalog API (per-family vCPU and RAM rates for the offer's region, read page by page and cached for a day, or 10 minutes after a failure), and Premium Tier egress at $0.12/GB. The Cloud Billing API must be on in the project; without it prices are unknown and nothing else changes. Spot prices come from the "Spot Preemptible" SKUs (#61).
   - **Safety:** it only lists and deletes labelled VMs.
   - **Forms:** credential fields can be multi-line, with a file picker.
 - **Azure** (`@tramline/adapter-azure`, guide in `docs/adapters/azure.md`):
@@ -655,7 +655,7 @@ Phase 7 is split in four: requests and spreading (7a), cloud adapters (7b), node
   - **Machines:** Canonical's latest Ubuntu 24.04 AMI in the region's default VPC, with a public address, an encrypted gp3 disk, and no IAM role or key pair. Sizes: t3, t3a, m6i, m7i, m7i-flex, m7a, c7i and r7i up to 16 vCPUs.
   - **Metadata:** IMDSv2 only, with a hop limit of 1, so containers on Docker's bridge network can't reach the metadata service (or the user data with the join token).
   - **Placement:** the region's first availability zone with room, trying the next when one is out of capacity.
-  - **Prices:** on-demand Linux prices per size from the Price List Query API (`GetProducts`, one query per region for every size, cached in the process for a day; a failure is retried after 10 minutes), and $0.09/GB egress, AWS's published first-tier rate. Without `pricing:GetProducts` in the policy, prices are unknown and nothing else changes. No spot prices, since the adapter doesn't launch spot.
+  - **Prices:** on-demand Linux prices per size from the Price List Query API (`GetProducts`, one query per region for every size, cached in the process for a day; a failure is retried after 10 minutes), and $0.09/GB egress, AWS's published first-tier rate. Without `pricing:GetProducts` in the policy, prices are unknown and nothing else changes. Spot prices are the lowest current `DescribeSpotPriceHistory` price across the region's zones, cached for an hour (#61).
   - **Mesh:** a `tramline-mesh` security group allowing UDP 51820, and each instance offers its public address from the metadata service as its mesh endpoint.
   - **Safety:** instances and volumes carry the `tramline` tag, and only tagged instances are listed or terminated. The policy in the guide limits termination to tagged instances too.
 - **Hetzner** (`@tramline/adapter-hetzner`, guide in `docs/adapters/hetzner.md`; unit-tested against a fake API, not yet verified on a real account):
@@ -765,9 +765,24 @@ What a hostile workload tries, from a published account of one on another platfo
   - **Service costs:** a service pays for the larger of the CPU, memory and GPU share it reserves on each node it runs on. What nothing reserves isn't charged.
   - **Where:** the project header shows the environment's monthly cost with a breakdown per service. The API has `GET /environments/:id/costs` and `GET /projects/:id/costs`, per environment.
 - **Spend so far ✅** (unit-tested): every 5 minutes, each node's and service's monthly cost is added to the day's `node_spend` and `service_spend`, for the time that passed (a gap while Tramline was stopped counts 10 minutes at most). This month's totals show per node, service, environment and project. Node spend is kept by name, so it outlives the node. Days are kept for 400 days. It's metered from Tramline's own prices, not read from providers' billing APIs.
-  - **Not yet:**
-    - opt-in spot for stateless services (no adapter creates spot machines yet).
   - **Hetzner in dollars ✅** (#57): converted at the ECB's daily reference rate.
+- **Opt-in spot ✅** (unit-tested against the fake adapter; not yet run on a real provider):
+  - **Adapters (#61):**
+    - GCP, Azure and AWS make spot machines when `NodeSpec.spot` is set. GCP uses a Spot VM, Azure a Spot priority VM with eviction set to Delete, and AWS a one-time spot request that terminates on interruption.
+    - Each prices its sizes at spot rates.
+    - A reclaimed machine is deleted, so the provider no longer lists it.
+  - **Services:** Settings → Deploy → **Spot machines** lets a service run on them. Services with a volume never do: their data would go with the machine.
+  - **Pools:** a pool can be a spot pool, priced and capped at the spot price.
+    - Its machines take only services that allow spot, and it grows only for those.
+    - Services that allow spot go to spot machines first, so on-demand nodes stay free for other work.
+    - **Create node** in the comparison makes a spot machine when it quoted a spot price.
+  - **Taken back:**
+    - A spot machine offline for 90 seconds is looked up at its provider. If it's gone (or stopped), the node is marked as taken back and costs nothing from then on.
+    - Its services move elsewhere, as when draining. Its pool stops counting it and grows a replacement in the same pass.
+    - The node is removed once nothing is left on it.
+  - **Not yet:**
+    - reading the provider's interruption notice to move work before the machine goes;
+    - checkpoints for training and batch jobs.
 - **Budget VPS adapters (planned):** small, cheap machines for light services, edge nodes and pool minimums. Each one is a package on the same contract that passes the conformance suite. Entry prices as listed today:
   - **Vultr** from $2.50/month (API v2, bearer token; plans and their regions are in `GET /plans`).
   - **AWS Lightsail** from $3.50/month. It has its own API (`CreateInstances`, bundles from `GetBundles`), not EC2's, so it's a separate adapter that can reuse the AWS signing code.

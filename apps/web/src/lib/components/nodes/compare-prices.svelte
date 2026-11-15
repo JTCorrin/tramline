@@ -125,7 +125,9 @@
 				name: name.trim(),
 				region: o.offer.region,
 				offer: o.offer.id,
-				cordoned: false
+				cordoned: false,
+				// what was quoted is what's made
+				spot: o.spot
 			});
 			toast.success(`Creating ${started.name}. It appears as a node once it has enrolled.`);
 			creating = null;

@@ -248,10 +248,16 @@ export async function provisionMachine(
 		poolId?: string;
 		/** The size's GPUs, when the caller knows them; looked up otherwise. */
 		gpu?: OfferGpu | null;
+		/** A spot machine, which the provider can take back. */
+		spot?: boolean;
 	},
 	origin: string
 ) {
 	const { adapter, creds } = connect(ctx, row);
+	const spot = !!machine.spot;
+	if (spot && !adapter.capabilities.spot) {
+		throw new AppError('validation_failed', `${adapter.meta.name} doesn't make spot machines`);
+	}
 	// the driver won't say how much memory a GPU has, so it's kept from the size
 	const gpu =
 		machine.gpu !== undefined
@@ -266,6 +272,7 @@ export async function provisionMachine(
 		region: machine.region,
 		offer: machine.offer,
 		offerGpu: gpu,
+		spot,
 		...(machine.poolId ? { poolId: machine.poolId } : {})
 	});
 	const { id: tokenId, url } = joining;
@@ -284,7 +291,8 @@ export async function provisionMachine(
 				offer: machine.offer,
 				install: { url, token: joining.token, command: joining.command },
 				userData,
-				seedUrl: `${url}/api/agent/v1/seed/${seedId}/`
+				seedUrl: `${url}/api/agent/v1/seed/${seedId}/`,
+				...(spot ? { spot } : {})
 			})
 		);
 		const token = ctx.db

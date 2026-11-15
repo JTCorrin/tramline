@@ -44,9 +44,14 @@ export const NodePool = z.object({
 		gpu: z
 			.object({ model: z.string(), count: z.number().int(), vramGb: z.number().nullable() })
 			.nullable(),
-		/** null when the provider doesn't say (e.g. Proxmox without a price). */
+		/** What it pays: the spot price for a spot pool. null when the provider doesn't say (e.g. Proxmox without a price). */
 		hourly: z.number().nullable()
 	}),
+	/**
+	 * Its machines are spot machines: they take only services that allow spot,
+	 * and one the provider takes back is replaced.
+	 */
+	spot: z.boolean(),
 	/** The environment it serves, or null for every environment. */
 	environment: z.object({ id: z.string(), name: z.string(), project: z.string() }).nullable(),
 	/** It was for an environment that has since been deleted; it only shrinks. */
@@ -81,7 +86,8 @@ export const CreateNodePool = z
 		minNodes: limits.minNodes.default(0),
 		maxNodes: limits.maxNodes.default(3),
 		idleMinutes: limits.idleMinutes.default(15),
-		monthlyCap: limits.monthlyCap.default(null)
+		monthlyCap: limits.monthlyCap.default(null),
+		spot: z.boolean().default(false)
 	})
 	.refine((p) => p.minNodes <= p.maxNodes, {
 		message: 'The minimum is more than the maximum',
