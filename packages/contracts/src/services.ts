@@ -102,7 +102,14 @@ export const DeployConfig = z.object({
 	/** Mount the container's root filesystem read-only (with a writable /tmp). */
 	readOnlyRootFilesystem: z.boolean(),
 	/** Run only on this node (its id); null lets the scheduler choose. */
-	node: z.string().nullable()
+	node: z.string().nullable(),
+	/**
+	 * May run on spot machines, which cost less but which the provider can
+	 * take back; it then moves elsewhere. Ignored for a service with a volume,
+	 * whose data would go with the machine. Missing on services saved before
+	 * spot, which means no.
+	 */
+	spot: z.boolean().optional()
 });
 
 /** An IPv4 address or block a service may reach past containment, e.g. 192.168.1.20 or 10.0.5.0/24. */
@@ -196,7 +203,8 @@ export const DEFAULT_SERVICE_CONFIG: ServiceConfig = {
 		cpuRequest: null,
 		gpus: null,
 		readOnlyRootFilesystem: false,
-		node: null
+		node: null,
+		spot: false
 	},
 	networking: {
 		port: null,

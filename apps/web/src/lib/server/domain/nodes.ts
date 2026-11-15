@@ -93,6 +93,8 @@ export function list(ctx: Ctx): NodeSummary[] {
 				adapter: row.adapter,
 				account: account && { id: account.id, name: account.name },
 				pool: (row.poolId && pools.get(row.poolId)) || null,
+				spot: row.spot,
+				reclaimedAt: row.reclaimedAt?.toISOString() ?? null,
 				cpus: row.info?.cpus ?? null,
 				memoryMb: row.info?.memoryMb ?? null,
 				// the driver doesn't say how much memory a GPU has; the size it was created as does
@@ -183,6 +185,7 @@ export function issueJoinToken(
 		region?: string;
 		offer?: string;
 		offerGpu?: OfferGpu | null;
+		spot?: boolean;
 		poolId?: string;
 	},
 	now = new Date()
@@ -298,8 +301,15 @@ export function drain(ctx: Ctx, id: string): DrainResult {
 	return drainNode(ctx, requireNode(ctx, id));
 }
 
-/** `drain` without the permission check, for node pools. */
-export function drainNode(ctx: Ctx, target: typeof node.$inferSelect): DrainResult {
+/**
+ * `drain` without the permission check, for node pools. `createdBy` is who
+ * the moves are recorded as: nobody, when Tramline moves work by itself.
+ */
+export function drainNode(
+	ctx: Ctx,
+	target: typeof node.$inferSelect,
+	createdBy: string | null = ctx.userId
+): DrainResult {
 	const id = target.id;
 	return ctx.db.transaction((tx) => {
 		tx.update(node).set({ cordoned: true, draining: true }).where(eq(node.id, id)).run();
@@ -322,9 +332,11 @@ export function drainNode(ctx: Ctx, target: typeof node.$inferSelect): DrainResu
 				continue;
 			}
 			copyDeployment(tx, dep, {
-				createdBy: ctx.userId,
+				createdBy,
 				dataDir: ctx.settings.dataDir,
-				log: `Moving off ${target.name}, which is draining`,
+				log: target.reclaimedAt
+					? `Moving off ${target.name}: its provider took the spot machine back`
+					: `Moving off ${target.name}, which is draining`,
 				// a built image only exists on the node that built it
 				rebuild: true
 			});

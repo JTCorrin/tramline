@@ -612,6 +612,13 @@ export const NodeSummary = z.object({
 	account: z.object({ id: z.string(), name: z.string() }).nullable(),
 	/** The node pool that created it, and destroys it when it's idle. */
 	pool: z.object({ id: z.string(), name: z.string() }).nullable(),
+	/**
+	 * A spot machine: it takes only services that allow spot. `reclaimedAt` is
+	 * when Tramline found its provider had taken it back; its work moves and
+	 * it's removed once nothing is left on it.
+	 */
+	spot: z.boolean(),
+	reclaimedAt: z.iso.datetime().nullable(),
 	cpus: z.number().int().nullable(),
 	memoryMb: z.number().int().nullable(),
 	gpus: z.array(z.object({ model: z.string(), vramMb: z.number().int().nullable() })),

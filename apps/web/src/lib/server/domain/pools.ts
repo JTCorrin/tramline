@@ -20,8 +20,8 @@ import { newId } from '../ids';
 import { HOURS_PER_MONTH } from '../prices/costs';
 import { notifyNodes } from '../nodes/bus';
 import { gpuRequest, offerFits } from '../nodes/gpus';
-import { onNode, replicaRequest } from '../nodes/placement';
-import { isOnline } from '../nodes/registry';
+import { mayUseSpot, onNode, replicaRequest } from '../nodes/placement';
+import { ONLINE_WINDOW_MS, isOnline } from '../nodes/registry';
 import { volumeFor } from '../nodes/volumes';
 import type { PlatformSettings } from '../settings';
 import { requireInstallAdmin } from './admins';
@@ -50,14 +50,23 @@ export const ERROR_BACKOFF_MS = 5 * 60_000;
 /** Some of a machine's memory goes to the system, Docker and the agent. */
 const USABLE_MEMORY = 0.9;
 
+/** A spot machine offline this long is looked up at its provider, to see if it was taken back. */
+export const RECLAIM_CHECK_MS = ONLINE_WINDOW_MS + 60_000;
+
 /** Deployments that hold a place on a node. */
 const LIVE = ['building', 'deploying', 'active', 'crashed'] as const;
 
 const monthly = (row: PoolRow, machines: number) =>
 	row.hourly === null ? null : Math.round(row.hourly * HOURS_PER_MONTH * machines * 100) / 100;
 
+/** Its machines, apart from spot ones the provider took back (`reclaimSpot` removes those). */
 function members(db: Db, poolId: string) {
-	return db.select().from(node).where(eq(node.poolId, poolId)).orderBy(asc(node.createdAt)).all();
+	return db
+		.select()
+		.from(node)
+		.where(and(eq(node.poolId, poolId), isNull(node.reclaimedAt)))
+		.orderBy(asc(node.createdAt))
+		.all();
 }
 
 /** Machines the pool asked for that haven't enrolled (including ones that never will). */
@@ -99,6 +108,7 @@ function toDto(db: Db, row: PoolRow): NodePool {
 			gpu: row.gpu ?? null,
 			hourly: row.hourly
 		},
+		spot: row.spot,
 		environment: env ?? null,
 		orphaned: row.forEnvironment && !row.environmentId,
 		minNodes: row.minNodes,
@@ -165,10 +175,19 @@ export async function create(ctx: Ctx, input: CreateNodePool, origin: string): P
 			`${adapter.meta.name} can't create machines by itself, so it can't back a node pool`
 		);
 	}
+	if (parsed.spot && !adapter.capabilities.spot) {
+		throw new AppError('validation_failed', `${adapter.meta.name} doesn't make spot machines`);
+	}
 	const offers = await call(account, () => adapter.listOffers(creds, parsed.region));
 	const offer = offers.find((o) => o.id === parsed.offer);
 	if (!offer)
 		throw new AppError('validation_failed', `${parsed.offer} isn't offered in ${parsed.region}`);
+	if (parsed.spot && offer.spotHourly === null) {
+		throw new AppError(
+			'validation_failed',
+			`${account.name} has no spot price for ${offer.name} in ${parsed.region}`
+		);
+	}
 	const row = ctx.db
 		.insert(nodePool)
 		.values({
@@ -181,7 +200,8 @@ export async function create(ctx: Ctx, input: CreateNodePool, origin: string): P
 			vcpus: offer.vcpus,
 			memoryMb: offer.memoryMb,
 			gpu: offer.gpu,
-			hourly: offer.hourly,
+			hourly: parsed.spot ? offer.spotHourly : offer.hourly,
+			spot: parsed.spot,
 			forEnvironment: !!parsed.environmentId,
 			environmentId: parsed.environmentId,
 			minNodes: parsed.minNodes,
@@ -298,6 +318,8 @@ export function waitingFor(db: Db, row: PoolRow, now: number) {
 			if (now - dep.createdAt.getTime() < WAITING_MS) return false;
 			if (row.forEnvironment && dep.environmentId !== row.environmentId) return false;
 			if (dep.config.deploy.node) return false;
+			// spot machines only take work that allows them
+			if (row.spot && !mayUseSpot(dep.config)) return false;
 			if (dep.config.volume?.mountPath && volumeFor(db, dep.serviceId, dep.environmentId)?.nodeId) {
 				return false;
 			}
@@ -341,7 +363,8 @@ async function grow(ctx: Ctx, row: PoolRow, reason: string, now: number) {
 				offer: row.offer,
 				cordoned: false,
 				poolId: row.id,
-				gpu: row.gpu ?? null
+				gpu: row.gpu ?? null,
+				spot: row.spot
 			},
 			origin
 		);
@@ -405,6 +428,7 @@ export async function autoscale(
 	settings: PlatformSettings,
 	now = Date.now()
 ) {
+	await reclaimSpot(db, secrets, settings, now);
 	const connector = db.select({ nodeId: publicTunnel.nodeId }).from(publicTunnel).get()?.nodeId;
 	for (const row of db.select().from(nodePool).all()) {
 		const ctx = poolCtx(db, secrets, settings, row);
@@ -481,5 +505,71 @@ export async function autoscale(
 				.sort((a, b) => a.idleSince!.getTime() - b.idleSince!.getTime());
 			if (idle[0]) await shrink(ctx, row, idle[0], now);
 		}
+	}
+}
+
+/**
+ * Spot machines the provider took back. A spot machine that's been offline
+ * for a while is looked up at its provider; once it's gone, the node is
+ * marked reclaimed, its work moves elsewhere (as when draining), and its pool
+ * no longer counts it, so it can grow a replacement. The node is removed
+ * once nothing is left on it. A machine that's only unreachable stays.
+ */
+export async function reclaimSpot(
+	db: Db,
+	secrets: Secrets,
+	settings: PlatformSettings,
+	now = Date.now()
+) {
+	const spot = db
+		.select()
+		.from(node)
+		.where(eq(node.spot, true))
+		.all()
+		.filter((n) => n.adapterAccountId && n.providerNodeId);
+	for (const n of spot) {
+		const ctx: Ctx = {
+			db,
+			secrets,
+			settings,
+			userId: 'system',
+			organizationId: ''
+		};
+		if (n.reclaimedAt) {
+			if (!busy(db, n.id)) {
+				await removeNode(ctx, n).then(
+					() => console.log(`[pools] removed ${n.name}, a spot machine its provider took back`),
+					(error) => console.error(`[pools] couldn't remove ${n.name}:`, error)
+				);
+			}
+			continue;
+		}
+		if (isOnline(n, now) || !n.lastSeenAt || now - n.lastSeenAt.getTime() < RECLAIM_CHECK_MS) {
+			continue;
+		}
+		const account = db
+			.select()
+			.from(adapterAccount)
+			.where(eq(adapterAccount.id, n.adapterAccountId!))
+			.get();
+		if (!account) continue;
+		let machine;
+		try {
+			const { adapter, creds } = connect(ctx, account);
+			machine = await call(account, () => adapter.getNode(creds, n.providerNodeId!));
+		} catch (error) {
+			console.error(`[pools] couldn't look up ${n.name}:`, error);
+			continue;
+		}
+		if (machine && machine.status !== 'stopped') continue;
+		const reclaimedAt = new Date(now);
+		db.update(node).set({ reclaimedAt }).where(eq(node.id, n.id)).run();
+		const moved = drainNode(ctx, { ...n, reclaimedAt }, null);
+		if (n.poolId) {
+			note(db, n.poolId, `${account.name} took back ${n.name}, a spot machine`, now);
+		}
+		console.log(
+			`[pools] ${n.name}: its spot machine was taken back; moving ${moved.moved} deployment${moved.moved === 1 ? '' : 's'}`
+		);
 	}
 }

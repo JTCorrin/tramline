@@ -474,6 +474,15 @@ A machine a compute account created is priced from its provider's price for its 
 
 Tramline also adds up what each node and service has cost as time passes, every few minutes, and shows what's been spent this month (UTC) beside the estimate, and on each node. It counts only while Tramline runs, at each node's cost at the time, so it's a close estimate rather than your provider's bill. Services that have stopped still count toward their environment's month. Daily figures are kept for 400 days.
 
+### Spot machines
+
+Spot machines (GCP Spot VMs, Azure Spot VMs, AWS spot instances) cost much less, but the provider can take them back at short notice. To use them:
+
+1. In a service's **Settings → Deploy**, turn on **Spot machines** for services that can stop and start elsewhere: web servers, workers, anything without a volume. Services with a volume never run on spot machines.
+2. On **Nodes**, create a node pool and turn on **Spot machines**. It's priced and capped at the spot price.
+
+A spot pool's machines take only services that allow spot, and services that allow spot use spot machines first. When a provider takes a machine back, Tramline notices within a couple of minutes. It moves the machine's services to other nodes, the pool adds a replacement, and the old node is removed once it's empty. **Create node** in **Where should this run?** also makes a spot machine when you compared spot prices.
+
 ## Run on GPUs
 
 In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.

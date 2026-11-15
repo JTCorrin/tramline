@@ -6,6 +6,7 @@
 	import * as Field from '#lib/components/ui/field/index.js';
 	import { Input } from '#lib/components/ui/input/index.js';
 	import * as Select from '#lib/components/ui/select/index.js';
+	import { Switch } from '#lib/components/ui/switch/index.js';
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
 	import { defaultOffer, formatMemory, tooSmall } from '#lib/offers.js';
@@ -43,14 +44,19 @@
 	let maxNodes = $state(3);
 	let idleMinutes = $state(15);
 	let monthlyCap = $state('');
+	let spot = $state(false);
 	let envs = $state<{ id: string; label: string }[]>([]);
 
 	const chosen = $derived(offers.find((o) => o.id === offer));
+	// spot only where the size has a spot price (so its provider makes spot machines)
+	const spotOffered = $derived(chosen?.spotHourly != null);
+	const useSpot = $derived(spot && spotOffered);
+	const hourly = $derived((useSpot ? chosen?.spotHourly : chosen?.hourly) ?? null);
 	const money = (n: number) => `$${n.toFixed(2)}`;
 	const perMonth = (hourly: number | null, machines: number) =>
 		hourly === null ? null : hourly * HOURS_PER_MONTH * machines;
 	const atMost = $derived.by(() => {
-		const max = perMonth(chosen?.hourly ?? null, maxNodes);
+		const max = perMonth(hourly, maxNodes);
 		const cap = Number(monthlyCap) || null;
 		return max === null ? null : cap !== null ? Math.min(max, cap) : max;
 	});
@@ -130,7 +136,7 @@
 		if (
 			maxNodes > 0 &&
 			!confirm(
-				`Tramline will create and destroy machines on ${accounts.find((a) => a.id === account)?.name} by itself: ${costLine(maxNodes, chosen?.hourly ?? null, cap)}. Continue?`
+				`Tramline will create and destroy ${useSpot ? 'spot machines' : 'machines'} on ${accounts.find((a) => a.id === account)?.name} by itself: ${costLine(maxNodes, hourly, cap)}${useSpot ? ' at today’s spot price' : ''}. Continue?`
 			)
 		)
 			return;
@@ -145,7 +151,8 @@
 				minNodes,
 				maxNodes,
 				idleMinutes,
-				monthlyCap: cap
+				monthlyCap: cap,
+				spot: useSpot
 			});
 			pools = [...pools, pool];
 			adding = false;
@@ -232,6 +239,7 @@
 							<span class="text-xs text-muted-foreground">
 								{pool.account.name} · {pool.region} · {describe(pool.offer)}
 							</span>
+							{#if pool.spot}<Badge variant="outline">Spot</Badge>{/if}
 							{#if pool.removing}<Badge variant="secondary">Removing</Badge>{/if}
 							{#if pool.orphaned}<Badge variant="secondary">Environment deleted</Badge>{/if}
 							<span class="ml-auto text-xs text-muted-foreground">
@@ -375,6 +383,18 @@
 						>
 					{/if}
 				</Field.Field>
+				{#if spotOffered}
+					<Field.Field>
+						<label class="flex items-center gap-2 text-sm">
+							<Switch bind:checked={spot} aria-label="Spot machines" />
+							Spot machines
+						</label>
+						<Field.Description
+							>Cheaper, but the provider can take them back at short notice. They only take services
+							that allow spot (Settings → Deploy), and one that's taken back is replaced.</Field.Description
+						>
+					</Field.Field>
+				{/if}
 				<Field.Field>
 					<Field.Label for="pool-scope">For</Field.Label>
 					<Select.Root type="single" value={scope} onValueChange={(value) => (scope = value)}>

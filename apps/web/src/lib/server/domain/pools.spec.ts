@@ -29,6 +29,7 @@ registerAdapter({
 	meta: { ...fake.adapter.meta, id: 'fake-pools' },
 	listOffers: (creds: Creds, region: string) => fake.adapter.listOffers(creds, region),
 	listNodes: (creds: Creds) => fake.adapter.listNodes(creds),
+	getNode: (creds: Creds, id: string) => fake.adapter.getNode(creds, id),
 	createNode: (creds: Creds, spec: NodeSpec) => {
 		if (failCreate) throw new AdapterError(failCreate);
 		return fake.adapter.createNode(creds, spec);
@@ -291,6 +292,107 @@ describe('node pools', () => {
 		await expect(createPool(ctx, account.id)).rejects.toThrow('already a node pool called web');
 		expect(() => pools.update(ctx, pool.id, { minNodes: 5 })).toThrow('minimum is more');
 		expect(() => adapters.removeAccount(ctx, account.id)).toThrow('node pool web uses Lab');
+	});
+});
+
+describe('spot pools', () => {
+	it('makes spot machines at the spot price, for work that allows spot', async () => {
+		const { ctx, account, project, env } = setup();
+		const pool = await createPool(ctx, account.id, { spot: true });
+		expect(pool).toMatchObject({ spot: true, offer: { hourly: 0.004 }, monthly: { max: 5.84 } });
+
+		// a service that doesn't allow spot gets no machine
+		const plain = deploy(ctx, project.id, env.id);
+		await scale(ctx, later(20));
+		expect(created).toHaveLength(0);
+
+		// a stateful one doesn't either, even if it says it may
+		deploy(ctx, project.id, env.id, {
+			deploy: { memoryMb: 2048, spot: true },
+			volume: { mountPath: '/data' }
+		});
+		await scale(ctx, later(40));
+		expect(created).toHaveLength(0);
+
+		const ok = deploy(ctx, project.id, env.id, { deploy: { memoryMb: 2048, spot: true } });
+		await scale(ctx, later(60));
+		expect(created).toHaveLength(1);
+		expect(created[0]!.spot).toBe(true);
+		const machine = enroll(ctx, created[0]!);
+		expect(machine).toMatchObject({ spot: true, poolId: pool.id });
+		reconcile(ctx.db, ctx.settings);
+		expect(ok.row().nodeId).toBe(machine.id);
+		// the spot machine has room, but the plain service won't run there
+		expect(plain.row()).toMatchObject({ status: 'queued', nodeId: null });
+		// small enough for the local node too, work that allows spot goes to the spot machine first
+		const small = deploy(ctx, project.id, env.id, { deploy: { memoryMb: 512, spot: true } });
+		expect(small.row().nodeId).toBe(machine.id);
+		// and what doesn't allow spot stays off it
+		const local = deploy(ctx, project.id, env.id, { deploy: { memoryMb: 512 } });
+		expect(local.row().nodeId).not.toBe(machine.id);
+		expect(local.row().nodeId).not.toBeNull();
+		expect(nodes.list(ctx).find((n) => n.id === machine.id)).toMatchObject({
+			spot: true,
+			reclaimedAt: null,
+			cost: { monthly: 2.92, source: 'provider' }
+		});
+	});
+
+	it('moves work off a spot machine its provider took back, and replaces it', async () => {
+		const { ctx, account, project, env } = setup();
+		const pool = await createPool(ctx, account.id, { spot: true, maxNodes: 1 });
+		const { svc, row } = deploy(ctx, project.id, env.id, {
+			deploy: { memoryMb: 2048, spot: true }
+		});
+		await scale(ctx, later(20));
+		const machine = enroll(ctx, created[0]!);
+		reconcile(ctx.db, ctx.settings);
+		const first = row();
+		expect(first.nodeId).toBe(machine.id);
+
+		// offline, but still there: maybe just unreachable, so it stays
+		await scale(ctx, machine.lastSeenAt!.getTime() + pools.RECLAIM_CHECK_MS + 1000);
+		expect(nodes.list(ctx).find((n) => n.id === machine.id)!.reclaimedAt).toBeNull();
+
+		// the provider takes it back
+		fake.machines.clear();
+		const at = machine.lastSeenAt!.getTime() + pools.RECLAIM_CHECK_MS + 60_000;
+		await scale(ctx, at);
+		const reclaimed = nodes.list(ctx).find((n) => n.id === machine.id)!;
+		expect(reclaimed).toMatchObject({
+			reclaimedAt: new Date(at).toISOString(),
+			cordoned: true,
+			cost: { monthly: 0 }
+		});
+		// the pool no longer counts it, so in the same pass it grows a replacement, within its maximum of 1
+		expect(pools.list(ctx)[0]).toMatchObject({
+			nodes: [],
+			provisioning: 1,
+			activity: expect.stringMatching(/^Adding web-[0-9a-f]{4} for 1 waiting deployment$/)
+		});
+		expect(created).toHaveLength(2);
+		expect(created[1]!.spot).toBe(true);
+		const moved = ctx.db
+			.select()
+			.from(deployment)
+			.where(eq(deployment.serviceId, svc.id))
+			.all()
+			.find((d) => d.id !== first.id)!;
+		expect(moved.status).toBe('queued');
+
+		// once nothing is left on it, the node goes
+		services.remove(ctx, svc.id);
+		reconcile(ctx.db, ctx.settings);
+		await scale(ctx, at + 60_000);
+		expect(ctx.db.select().from(node).where(eq(node.id, machine.id)).get()).toBeUndefined();
+		expect(pools.list(ctx)[0]!.id).toBe(pool.id);
+	});
+
+	it('needs a provider that makes spot machines and a spot price', async () => {
+		const { ctx, account } = setup();
+		await expect(createPool(ctx, account.id, { offer: 'gpu', spot: true })).rejects.toThrow(
+			'Lab has no spot price for GPU in fake-1'
+		);
 	});
 });
 
