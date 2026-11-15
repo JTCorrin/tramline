@@ -7,6 +7,7 @@ import { onChange } from '#lib/server/nodes/bus.js';
 import { reconcile } from '#lib/server/nodes/reconciler.js';
 import { autoUpdateAgents } from '#lib/server/nodes/auto-update.js';
 import { syncPrices } from '#lib/server/prices/catalog.js';
+import { accrueSpend, SPEND_INTERVAL_MS } from '#lib/server/prices/costs.js';
 import { ensureLocalNode } from '#lib/server/nodes/registry.js';
 import { ensureSetupToken } from '#lib/server/domain/admins.js';
 import { securityHeaders } from '#lib/server/security.js';
@@ -119,6 +120,18 @@ export const init: ServerInit = () => {
 			.finally(() => (pricing = false));
 	}, PRICE_SYNC_INTERVAL_MS);
 
+	// what nodes and services have cost, added up as time passes
+	let spendFrom = new Date();
+	const spend = setInterval(() => {
+		const now = new Date();
+		try {
+			accrueSpend(db, spendFrom, now);
+		} catch (error) {
+			console.error('[spend]', error);
+		}
+		spendFrom = now;
+	}, SPEND_INTERVAL_MS);
+
 	// agents on the latest image, one node at a time
 	const agentUpdates = setInterval(() => {
 		try {
@@ -147,6 +160,7 @@ export const init: ServerInit = () => {
 		clearInterval(asnRefresh);
 		clearInterval(agentUpdates);
 		clearInterval(prices);
+		clearInterval(spend);
 		unsubscribe();
 	};
 };

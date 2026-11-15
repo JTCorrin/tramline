@@ -23,7 +23,9 @@
 	});
 
 	const shown = $derived(
-		costs && costs.services.length && (costs.monthly > 0 || !costs.complete) ? costs : null
+		costs && (costs.spent > 0 || (costs.services.length && (costs.monthly > 0 || !costs.complete)))
+			? costs
+			: null
 	);
 </script>
 
@@ -52,10 +54,17 @@
 							{:else}
 								{money(s.monthly)}/mo
 							{/if}
+							{#if s.spent > 0}
+								<span class="block text-muted-foreground">{money(s.spent)} this month</span>
+							{/if}
 						</span>
 					</li>
 				{/each}
 			</ul>
+			<p class="mt-3 flex border-t pt-2 text-xs" data-testid="environment-spent">
+				<span>Spent this month</span>
+				<span class="ml-auto tabular-nums">{money(shown.spent)}</span>
+			</p>
 			{#if !shown.complete}
 				<p class="mt-2 text-xs text-muted-foreground">
 					Some nodes have no price. An install admin can enter what they cost on the Nodes page.

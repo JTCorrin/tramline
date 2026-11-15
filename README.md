@@ -472,6 +472,8 @@ The top of a project shows about what the environment's running services cost a 
 
 A machine a compute account created is priced from its provider's price for its size. For any other machine, like a box at home or a Proxmox VM, an install admin enters what it costs a month on **Nodes**. An entered cost also overrides a provider's list price, say for a discount.
 
+Tramline also adds up what each node and service has cost as time passes, every few minutes, and shows what's been spent this month (UTC) beside the estimate, and on each node. It counts only while Tramline runs, at each node's cost at the time, so it's a close estimate rather than your provider's bill. Services that have stopped still count toward their environment's month. Daily figures are kept for 400 days.
+
 ## Run on GPUs
 
 In a service's **Settings → Deploy**, set **GPUs** to how many each replica needs. Optionally add part of a **GPU model** (`A100`, `H100`) and the least **GPU memory** each must have. The service then runs only on a node with that many matching GPUs free. Each replica gets its own, and the container sees only those (check with `nvidia-smi` in its shell). Until a node has them free, the deployment waits and says what for.

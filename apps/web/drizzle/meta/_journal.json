@@ -281,6 +281,13 @@
       "when": 1794342890570,
       "tag": "0039_node_costs",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1794343589938,
+      "tag": "0040_spend",
+      "breakpoints": true
     }
   ]
 }
