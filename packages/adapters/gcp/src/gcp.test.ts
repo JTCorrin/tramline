@@ -505,7 +505,7 @@ describe('GCP adapter', () => {
 			arch: 'amd64',
 			gpu: null,
 			hourly: expect.any(Number),
-			spotHourly: null,
+			spotHourly: expect.any(Number),
 			egressPerGb: 0.12
 		});
 		await expect(adapter.listOffers(creds(), 'nowhere1')).rejects.toThrow(
@@ -563,6 +563,33 @@ describe('GCP adapter', () => {
 			status: 'provisioning',
 			address: '203.0.113.20'
 		});
+	});
+
+	it('makes a Spot VM that’s deleted when reclaimed, only when asked to', async () => {
+		expect(adapter.capabilities.spot).toBe(true);
+		await adapter.createNode(creds(), spec({ name: 'on-demand' }));
+		const onDemand = vms.find((v) => v.name === 'on-demand')!;
+		expect(onDemand.body).not.toHaveProperty('scheduling');
+		expect(onDemand.labels).toEqual({ tramline: 'node' });
+
+		const node = await adapter.createNode(creds(), spec({ name: 'cheap', spot: true }));
+		const spot = vms.find((v) => v.name === 'cheap')!;
+		expect(spot.body!.scheduling).toEqual({
+			provisioningModel: 'SPOT',
+			instanceTerminationAction: 'DELETE',
+			automaticRestart: false,
+			onHostMaintenance: 'TERMINATE'
+		});
+		expect(spot.labels).toEqual({ tramline: 'node', 'tramline-spot': 'true' });
+		// otherwise it's made like any other node
+		for (const field of ['machineType', 'tags', 'disks', 'networkInterfaces', 'serviceAccounts']) {
+			expect(spot.body![field]).toEqual(onDemand.body![field]);
+		}
+		expect((await adapter.listNodes(creds())).map((n) => n.id)).toContain(node.id);
+
+		// Google takes it back: the VM is deleted, so the node is gone
+		vms = vms.filter((v) => v !== spot);
+		expect(await adapter.getNode(creds(), node.id)).toBeNull();
 	});
 
 	it('tries the next zone when one has no room', async () => {
@@ -758,11 +785,20 @@ describe('GCP prices', () => {
 		expect(catalogRequests).toHaveLength(2);
 	});
 
-	it('lists spot prices as unknown, since spot VMs aren’t offered', async () => {
+	it('prices spot VMs from the Spot Preemptible SKUs, where the catalog has them', async () => {
 		const a = fresh();
-		expect(a.capabilities.spot).toBe(false);
 		const offers = await a.listOffers(creds(), 'us-central1');
-		expect(offers.every((o) => o.spotHourly === null)).toBe(true);
+		const spot = Object.fromEntries(offers.map((o) => [o.id, o.spotHourly] as const));
+		expect(spot['e2-standard-2']).toBeCloseTo(2 * 0.006543 + 8 * 0.000877, 9);
+		expect(spot['e2-micro']).toBeCloseTo(0.25 * 0.006543 + 1 * 0.000877, 9);
+		// the catalog has on-demand N2 rates but no spot ones, and nothing for n2d's RAM or c4
+		expect(spot['n2-standard-4']).toBeNull();
+		expect(spot['n2d-standard-2']).toBeNull();
+		expect(spot['c4-standard-2']).toBeNull();
+		// London has on-demand E2 rates only
+		const london = await a.listOffers(creds(), 'europe-west2');
+		expect(london.find((o) => o.id === 'e2-standard-2')!.hourly).not.toBeNull();
+		expect(london.every((o) => o.spotHourly === null)).toBe(true);
 		expect(offers.every((o) => o.egressPerGb === PREMIUM_EGRESS_PER_GB)).toBe(true);
 		// spot rates are read from Preemptible SKUs, and never taken for on-demand ones
 		const table: RateTable = new Map();
