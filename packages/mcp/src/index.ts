@@ -132,6 +132,41 @@ export function createTramlineServer(client: TramlineClient, version = '0.1.0') 
 	);
 
 	server.registerTool(
+		'list_templates',
+		{
+			description:
+				"Tramline's template gallery: whole stacks (e.g. Supabase, n8n) with their services, the questions they ask, and what they reserve.",
+			annotations: readOnly
+		},
+		() => run(() => client.templates.list())
+	);
+
+	server.registerTool(
+		'add_template',
+		{
+			description:
+				"Add a template's services to a project, wired up, with generated secrets (sealed, new in each environment). Staged until deployed, unless deploy names an environment to deploy it in now (needs the deploy scope; it also deploys that environment's other staged changes).",
+			inputSchema: {
+				projectId: z.string(),
+				template: z.string().describe('A template id from list_templates'),
+				answers: z
+					.record(z.string(), z.string())
+					.optional()
+					.describe("Answers to the template's questions, by key"),
+				deploy: z.string().optional().describe('An environment id to deploy it in now')
+			}
+		},
+		(input) =>
+			run(() =>
+				client.templates.install(input.projectId, {
+					template: input.template,
+					answers: input.answers ?? {},
+					deploy: input.deploy ?? null
+				})
+			)
+	);
+
+	server.registerTool(
 		'update_service_config',
 		{
 			description:

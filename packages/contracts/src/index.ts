@@ -14,5 +14,6 @@ export * from './projects';
 export * from './public-access';
 export * from './scan';
 export * from './services';
+export * from './templates';
 export * from './tokens';
 export * from './variables';

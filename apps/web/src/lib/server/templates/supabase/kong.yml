@@ -1,0 +1,308 @@
+# Kong declarative config for Tramline's Supabase template.
+#
+# Based on Supabase's docker/volumes/api/kong.yml as of the last release that
+# shipped kong:2.8.1 (supabase/supabase@a8ca6fed2c, March 2026), with:
+#
+# - `$VAR` placeholders (filled in by an `eval echo` entrypoint) replaced by
+#   Tramline references to the kong service's own variables, filled in when
+#   it deploys, so Kong runs with its stock entrypoint;
+# - upstream hosts (auth, rest, realtime-dev.supabase-realtime, storage) replaced
+#   by the services' private domains, through the *_HOST variables;
+# - Studio taken off the gateway: no dashboard catch-all route, no DASHBOARD
+#   basic-auth consumer, no /mcp routes. Studio is private;
+# - the /pg/ (postgres-meta) route removed: Studio talks to meta directly, and
+#   it would put SQL access to the database on the public domain;
+# - the Edge Functions and Analytics routes removed (not in the stack);
+# - from later Supabase releases: the open auth routes (JWKS, OpenID/OAuth
+#   discovery, SAML), Realtime's tenants/OpenAPI endpoints blocked, and the
+#   PostgREST OpenAPI root (/rest/v1/) limited to the service_role key.
+#   The opaque publishable/secret keys are left out: the legacy HS256 anon and
+#   service_role keys are the only API keys.
+_format_version: '2.1'
+_transform: true
+
+###
+### Consumers / Users
+###
+consumers:
+  - username: anon
+    keyauth_credentials:
+      - key: ${{ SUPABASE_ANON_KEY }}
+  - username: service_role
+    keyauth_credentials:
+      - key: ${{ SUPABASE_SERVICE_KEY }}
+
+###
+### Access Control List
+###
+acls:
+  - consumer: anon
+    group: anon
+  - consumer: service_role
+    group: admin
+
+###
+### API Routes
+###
+services:
+  ## Open Auth routes
+  - name: auth-v1-open
+    url: http://${{ AUTH_HOST }}:9999/verify
+    routes:
+      - name: auth-v1-open
+        strip_path: true
+        paths:
+          - /auth/v1/verify
+    plugins:
+      - name: cors
+  - name: auth-v1-open-callback
+    url: http://${{ AUTH_HOST }}:9999/callback
+    routes:
+      - name: auth-v1-open-callback
+        strip_path: true
+        paths:
+          - /auth/v1/callback
+    plugins:
+      - name: cors
+  - name: auth-v1-open-authorize
+    url: http://${{ AUTH_HOST }}:9999/authorize
+    routes:
+      - name: auth-v1-open-authorize
+        strip_path: true
+        paths:
+          - /auth/v1/authorize
+    plugins:
+      - name: cors
+  - name: auth-v1-open-jwks
+    url: http://${{ AUTH_HOST }}:9999/.well-known/jwks.json
+    routes:
+      - name: auth-v1-open-jwks
+        strip_path: true
+        paths:
+          - /auth/v1/.well-known/jwks.json
+    plugins:
+      - name: cors
+  - name: auth-v1-open-well-known-oauth
+    url: http://${{ AUTH_HOST }}:9999/.well-known/oauth-authorization-server
+    routes:
+      - name: auth-v1-open-well-known-oauth
+        strip_path: true
+        paths:
+          - /auth/v1/.well-known/oauth-authorization-server
+    plugins:
+      - name: cors
+  - name: auth-v1-open-well-known-openid
+    url: http://${{ AUTH_HOST }}:9999/.well-known/openid-configuration
+    routes:
+      - name: auth-v1-open-well-known-openid
+        strip_path: true
+        paths:
+          - /auth/v1/.well-known/openid-configuration
+    plugins:
+      - name: cors
+  - name: auth-v1-open-sso-acs
+    url: http://${{ AUTH_HOST }}:9999/sso/saml/acs
+    routes:
+      - name: auth-v1-open-sso-acs
+        strip_path: true
+        paths:
+          - /auth/v1/sso/saml/acs
+    plugins:
+      - name: cors
+  - name: auth-v1-open-sso-metadata
+    url: http://${{ AUTH_HOST }}:9999/sso/saml/metadata
+    routes:
+      - name: auth-v1-open-sso-metadata
+        strip_path: true
+        paths:
+          - /auth/v1/sso/saml/metadata
+    plugins:
+      - name: cors
+
+  ## Secure Auth routes
+  - name: auth-v1
+    _comment: 'GoTrue: /auth/v1/* -> http://auth:9999/*'
+    url: http://${{ AUTH_HOST }}:9999/
+    routes:
+      - name: auth-v1-all
+        strip_path: true
+        paths:
+          - /auth/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## OAuth 2.0 Authorization Server Metadata (RFC 8414)
+  - name: well-known-oauth
+    url: http://${{ AUTH_HOST }}:9999/.well-known/oauth-authorization-server
+    routes:
+      - name: well-known-oauth
+        strip_path: true
+        paths:
+          - /.well-known/oauth-authorization-server/auth/v1
+    plugins:
+      - name: cors
+
+  ## PostgREST OpenAPI root: service_role only, so the anon key can't list
+  ## the schema. Kong 2.x treats a path with regex characters as a regex.
+  - name: rest-v1-openapi
+    _comment: 'PostgREST OpenAPI root: /rest/v1/ -> http://rest:3000/ (admin only)'
+    url: http://${{ REST_HOST }}:3000/
+    routes:
+      - name: rest-v1-openapi-root
+        strip_path: true
+        paths:
+          - /rest/v1/$
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: true
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+
+  ## Secure REST routes
+  - name: rest-v1
+    _comment: 'PostgREST: /rest/v1/* -> http://rest:3000/*'
+    url: http://${{ REST_HOST }}:3000/
+    routes:
+      - name: rest-v1-all
+        strip_path: true
+        paths:
+          - /rest/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: true
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## Secure GraphQL routes
+  - name: graphql-v1
+    _comment: 'PostgREST: /graphql/v1/* -> http://rest:3000/rpc/graphql'
+    url: http://${{ REST_HOST }}:3000/rpc/graphql
+    routes:
+      - name: graphql-v1-all
+        strip_path: true
+        paths:
+          - /graphql/v1
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: true
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - Content-Profile:graphql_public
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## Secure Realtime routes. Realtime takes its tenant from the first label of
+  ## the Host header, which Kong sets to REALTIME_HOST: the realtime service's
+  ## private domain, whose first label is its name (SELF_HOST_TENANT_NAME).
+  - name: realtime-v1-ws
+    _comment: 'Realtime: /realtime/v1/* -> ws://realtime:4000/socket/*'
+    url: http://${{ REALTIME_HOST }}:4000/socket
+    protocol: ws
+    routes:
+      - name: realtime-v1-ws
+        strip_path: true
+        paths:
+          - /realtime/v1/
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  # Block access to /realtime/v1/api/openapi
+  - name: realtime-v1-rest-openapi
+    url: http://${{ REALTIME_HOST }}:4000/api/openapi
+    protocol: http
+    routes:
+      - name: realtime-v1-rest-openapi
+        strip_path: true
+        paths:
+          - /realtime/v1/api/openapi
+    plugins:
+      - name: request-termination
+        config:
+          status_code: 403
+          message: 'Access is forbidden.'
+
+  # Block access to /realtime/v1/api/tenants: its admin API takes any JWT
+  # signed with the JWT secret, the anon key's included
+  - name: realtime-v1-rest-tenants
+    url: http://${{ REALTIME_HOST }}:4000/api/tenants
+    protocol: http
+    routes:
+      - name: realtime-v1-rest-tenants
+        strip_path: true
+        paths:
+          - /realtime/v1/api/tenants
+    plugins:
+      - name: request-termination
+        config:
+          status_code: 403
+          message: 'Access is forbidden.'
+
+  - name: realtime-v1-rest
+    _comment: 'Realtime: /realtime/v1/api/* -> http://realtime:4000/api/*'
+    url: http://${{ REALTIME_HOST }}:4000/api
+    protocol: http
+    routes:
+      - name: realtime-v1-rest
+        strip_path: true
+        paths:
+          - /realtime/v1/api
+    plugins:
+      - name: cors
+      - name: key-auth
+        config:
+          hide_credentials: false
+      - name: acl
+        config:
+          hide_groups_header: true
+          allow:
+            - admin
+            - anon
+
+  ## Storage routes: the storage server manages its own auth
+  - name: storage-v1
+    _comment: 'Storage: /storage/v1/* -> http://storage:5000/*'
+    url: http://${{ STORAGE_HOST }}:5000/
+    routes:
+      - name: storage-v1-all
+        strip_path: true
+        paths:
+          - /storage/v1/
+    plugins:
+      - name: cors

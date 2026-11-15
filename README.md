@@ -117,6 +117,7 @@ claude mcp add tramline --transport http https://tramline.example.com/mcp \
 | **Deploys**    | Docker images or builds from Git (Railpack or Dockerfile), zero-downtime swaps, rollbacks, cron services              |
 | **Networking** | Automatic URLs through a Caddy ingress, custom domains with verified ownership and automatic HTTPS                    |
 | **Data**       | Postgres, MySQL, Redis and MongoDB templates, persistent volumes, a read-only Postgres data browser                   |
+| **Templates**  | Whole stacks in one go (Supabase, n8n, Uptime Kuma), wired up with generated, sealed secrets                          |
 | **Backups**    | Encrypted backups to any S3-compatible bucket with restore drills, including Tramline's own database                  |
 | **Security**   | Encrypted secrets, hardened containers, rootless builds, Trivy image scanning, CSP, 2FA and passkeys                  |
 | **Automation** | REST API, scoped API tokens, an audit log, an MCP server, and GitHub Actions deploys with no stored secrets (OIDC)    |
@@ -138,6 +139,27 @@ pnpm dev
 ```
 
 Open **http://localhost:5173**, create an account, right-click the canvas and deploy your first service. It'll be live at `http://<service>-<id>.localhost` within moments.
+
+## Start from a template
+
+A template is a whole stack: its services, volumes, references and generated secrets, wired up. Pick one and it lands on the canvas, ready to review and deploy.
+
+- **A new project:** on **Projects**, click **From a template**.
+- **An existing project:** right-click the canvas and choose **Template…**, or press <kbd>⌘K</kbd> and type the template's name. An empty canvas also offers **Start from a template**.
+
+Each template says what it adds (its services, which ones get a public domain or a volume, and about how much memory it reserves) and asks a few questions, like your site's URL. **Add to canvas** stages its services so you can look them over first. **Deploy** adds them and deploys straight away.
+
+The gallery today:
+
+| Template        | What it is                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| **Supabase**    | Postgres, Auth, the REST API, Realtime, Storage and Studio, behind its API gateway on one public domain |
+| **n8n**         | Workflow automation, with its own Postgres                                                              |
+| **Uptime Kuma** | Uptime monitoring with a status page                                                                    |
+
+Every image is pinned by digest and scanned like any other. Generated secrets (passwords, keys, signed JWTs) are new in each environment and sealed, so they're never shown, only used. A template can't ask for anything a service you build by hand couldn't: no host mounts and no privileges. Templates can also write config files into a container (Supabase's gateway config and its database setup, say), with `${{ KEY }}` in them filled in from the service's variables when it deploys.
+
+The API has `GET /templates` and `POST /projects/:id/templates`, and the MCP server has `list_templates` and `add_template`.
 
 ## Add machines
 

@@ -204,6 +204,31 @@ describe('Converger: TLS and TCP proxies', () => {
 		return { runtime, converger, certificates };
 	}
 
+	it("writes a service's config files, and keeps them beside a database's TLS files", async () => {
+		const { runtime, converger } = setup();
+		const files = [{ path: '/etc/app/config.yml', content: 'key: value\n' }];
+		const app = desiredContainer({ name: 'tl-dep_3-0', files });
+		const pg = desiredContainer({
+			name: 'tl-dep_4-0',
+			image: 'postgres:17',
+			files: [{ path: '/docker-entrypoint-initdb.d/99-roles.sql', content: 'select 1;' }],
+			tls: { kind: 'postgres', names: ['pg'] }
+		});
+		await converger.run(desiredState([app, pg]));
+		expect(runtime.containers.get(app.name)!.spec.files).toEqual([
+			{ path: '/etc/app/config.yml', content: Buffer.from('key: value\n'), mode: 0o644 }
+		]);
+		expect(runtime.containers.get(pg.name)!.spec.files!.map((f) => f.path)).toEqual([
+			'/docker-entrypoint-initdb.d/99-roles.sql',
+			`${TLS_DIR}/server.crt`,
+			`${TLS_DIR}/server.key`
+		]);
+		// a container without files has none
+		const plain = desiredContainer({ name: 'tl-dep_5-0' });
+		await converger.run(desiredState([plain]));
+		expect(runtime.containers.get(plain.name)!.spec.files).toBeUndefined();
+	});
+
 	it('starts a database with TLS on and its key readable by postgres alone', async () => {
 		const { runtime, converger, certificates } = setup();
 		const pg = desiredContainer({

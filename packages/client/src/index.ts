@@ -15,6 +15,7 @@ import { oidc } from './resources/oidc';
 import { projects } from './resources/projects';
 import { publicAccess } from './resources/public-access';
 import { services } from './resources/services';
+import { templates } from './resources/templates';
 import { tokens } from './resources/tokens';
 import { variables } from './resources/variables';
 
@@ -29,6 +30,7 @@ export function createClient(options: ClientOptions) {
 		projects: projects(http),
 		environments: environments(http),
 		services: services(http),
+		templates: templates(http),
 		variables: variables(http),
 		deployments: deployments(http),
 		nodes: nodes(http),

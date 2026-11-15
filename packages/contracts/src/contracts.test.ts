@@ -11,6 +11,8 @@ import {
 	DEFAULT_SERVICE_CONFIG,
 	ListCloudflareZones,
 	ServiceConfigPatch,
+	ServiceFile,
+	Template,
 	StageVariables,
 	UpdateProject,
 	UpdatePublicTunnel,
@@ -249,5 +251,75 @@ describe('public access', () => {
 		expect(UpdatePublicTunnel.parse({ originUrl: 'https://x.test/' })).toEqual({
 			originUrl: 'https://x.test'
 		});
+	});
+});
+
+describe('config files', () => {
+	const file = (path: string) => ServiceFile.safeParse({ path, content: 'x' }).success;
+
+	it('go at an absolute path to a file, outside the kernel’s directories', () => {
+		expect(file('/etc/kong/kong.yml')).toBe(true);
+		expect(file('etc/kong.yml')).toBe(false);
+		expect(file('/etc/kong/')).toBe(false);
+		expect(file('/etc/../root/x')).toBe(false);
+		expect(file('/proc/self/x')).toBe(false);
+		expect(file('/dev/x')).toBe(false);
+		expect(file('/sysadmin/notes')).toBe(true);
+		expect(ServiceFile.safeParse({ path: '/a', content: 'x'.repeat(65_537) }).success).toBe(false);
+	});
+
+	it("can't share a path", () => {
+		const files = [
+			{ path: '/a', content: '1' },
+			{ path: '/a', content: '2' }
+		];
+		expect(ServiceConfigPatch.safeParse({ deploy: { files } }).success).toBe(false);
+		expect(ServiceConfigPatch.safeParse({ deploy: { files: files.slice(1) } }).success).toBe(true);
+	});
+});
+
+describe('templates', () => {
+	const digest = `@sha256:${'0'.repeat(64)}`;
+	const base = {
+		id: 'stack',
+		version: 1,
+		name: 'Stack',
+		tagline: 'A stack',
+		description: '',
+		icon: 'box',
+		services: [{ key: 'api', name: 'api', image: `acme/api:1${digest}` }]
+	};
+
+	it('fills in defaults, and generated values say how they are made', () => {
+		const parsed = Template.parse({
+			...base,
+			services: [
+				{
+					...base.services[0],
+					variables: {
+						SECRET: { generate: 'secret' },
+						TOKEN: { generate: 'jwt', secret: 'SECRET', claims: { role: 'anon' }, sealed: false }
+					}
+				}
+			]
+		});
+		expect(parsed).toMatchObject({ questions: [], notes: [], tags: [] });
+		expect(parsed.services[0]).toMatchObject({
+			config: {},
+			position: { x: 0, y: 0 },
+			variables: {
+				SECRET: { generate: 'secret', length: 40, sealed: true },
+				TOKEN: { generate: 'jwt', years: 10, sealed: false }
+			}
+		});
+	});
+
+	it('needs images pinned by digest and keys that are names', () => {
+		expect(
+			Template.safeParse({ ...base, services: [{ ...base.services[0], image: 'acme/api:1' }] })
+				.success
+		).toBe(false);
+		expect(Template.safeParse({ ...base, id: 'Not An Id' }).success).toBe(false);
+		expect(Template.safeParse({ ...base, services: [] }).success).toBe(false);
 	});
 });

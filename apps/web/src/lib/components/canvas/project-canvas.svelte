@@ -19,6 +19,8 @@
 		type Edge
 	} from '@xyflow/svelte';
 	import { mode } from 'mode-watcher';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import LayoutTemplateIcon from '@lucide/svelte/icons/layout-template';
 	import { DATABASES, type AddServiceAction } from './add-service';
 	import ServiceNode, { type ServiceNodeType } from './service-node.svelte';
 
@@ -138,18 +140,33 @@
 			<ContextMenu.Item onSelect={() => add({ kind: 'empty' })}>
 				<SquareDashedIcon /> Empty Service
 			</ContextMenu.Item>
+			<ContextMenu.Separator />
+			<ContextMenu.Item onSelect={() => add({ kind: 'template' })}>
+				<LayoutTemplateIcon /> Template…
+			</ContextMenu.Item>
 		{/if}
 	</ContextMenu.Content>
 </ContextMenu.Root>
 
 {#if workspace.canvas.services.length === 0}
 	<div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-		<div class="rounded-lg border bg-background/80 px-4 py-3 text-center text-sm backdrop-blur">
+		<div
+			class="pointer-events-auto rounded-lg border bg-background/80 px-5 py-4 text-center text-sm backdrop-blur"
+			data-testid="empty-canvas"
+		>
 			<div class="font-medium">This project is empty</div>
 			<div class="text-muted-foreground">
 				Right-click anywhere, or press <kbd class="rounded border px-1 font-mono text-xs">⌘K</kbd>,
 				to add a service
 			</div>
+			<Button
+				class="mt-3"
+				variant="outline"
+				size="sm"
+				onclick={() => onadd({ kind: 'template' }, center())}
+			>
+				<LayoutTemplateIcon /> Start from a template
+			</Button>
 		</div>
 	</div>
 {/if}

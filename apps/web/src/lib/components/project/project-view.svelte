@@ -8,6 +8,7 @@
 	import NodeStatus from '#lib/components/canvas/node-status.svelte';
 	import ProjectCanvas from '#lib/components/canvas/project-canvas.svelte';
 	import SourceDialog from '#lib/components/canvas/source-dialog.svelte';
+	import TemplateDialog from '#lib/components/templates/template-dialog.svelte';
 	import ServicePanel from '#lib/components/service/service-panel.svelte';
 	import VariablesEditor from '#lib/components/service/variables-editor.svelte';
 	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
@@ -39,6 +40,9 @@
 	let sourceKind = $state<'image' | 'repo'>();
 	let sourcePosition: Position = { x: 0, y: 0 };
 	let deleting = $state<string | null>(null);
+	let templateOpen = $state(false);
+	let templateChosen = $state<string | null>(null);
+	let templatePosition = $state<Position>({ x: 0, y: 0 });
 
 	const select = (serviceId: string | null) => workspace.selectService(serviceId);
 
@@ -62,6 +66,12 @@
 
 	function add(action: AddServiceAction, at: Position) {
 		const position = freeSpot(at);
+		if (action.kind === 'template') {
+			templatePosition = position;
+			templateChosen = action.template ?? null;
+			templateOpen = true;
+			return;
+		}
 		if (action.kind === 'image' || action.kind === 'repo') {
 			sourcePosition = position;
 			sourceKind = action.kind;
@@ -142,6 +152,26 @@
 	{workspace}
 	onadd={(action) => add(action, canvas?.center() ?? { x: 0, y: 0 })}
 	onselect={select}
+/>
+
+<TemplateDialog
+	bind:open={templateOpen}
+	bind:chosen={templateChosen}
+	project={{
+		id: workspace.project.id,
+		environmentId: workspace.environmentId,
+		environmentName: workspace.environment.name,
+		staged: workspace.changes.count
+	}}
+	position={templatePosition}
+	oninstalled={async (result) => {
+		await workspace.refresh();
+		toast.success(
+			result.deployments.length
+				? `Deploying ${result.template.name}`
+				: `Added ${result.template.name}. Review it, then deploy.`
+		);
+	}}
 />
 
 <SourceDialog

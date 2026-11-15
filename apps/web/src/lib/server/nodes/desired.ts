@@ -1,6 +1,7 @@
 import {
 	DEFAULT_SERVICE_CONFIG,
 	mergeConfig,
+	replaceReferences,
 	type DesiredBuild,
 	type DesiredScan,
 	type DesiredContainer,
@@ -201,7 +202,8 @@ export function buildDesiredState(
 					volumes,
 					tls: null,
 					...gpusFor(dep, 0),
-					...privateFor(config)
+					...privateFor(config),
+					...filesFor(config, env)
 				});
 			}
 			continue;
@@ -229,7 +231,8 @@ export function buildDesiredState(
 				volumes,
 				tls,
 				...gpusFor(dep, replica),
-				...privateFor(config)
+				...privateFor(config),
+				...filesFor(config, env)
 			});
 		}
 
@@ -327,6 +330,22 @@ export function buildDesiredState(
 const gpusFor = (dep: { replicaGpus: string[][] | null }, replica: number) => {
 	const gpus = dep.replicaGpus?.[replica];
 	return gpus?.length ? { gpus } : {};
+};
+
+/**
+ * A service's config files, with `${{ KEY }}` in their content replaced by
+ * its own resolved variables; only when it has some, so other containers'
+ * spec hashes don't change.
+ */
+const filesFor = (
+	config: { deploy: { files?: { path: string; content: string }[] } },
+	env: Record<string, string>
+) => {
+	const files = (config.deploy.files ?? []).map((f) => ({
+		path: f.path,
+		content: replaceReferences(f.content, (ref) => (ref.namespace ? undefined : env[ref.key]))
+	}));
+	return files.length ? { files } : {};
 };
 
 /**

@@ -5,7 +5,9 @@ export type AddServiceAction =
 	| { kind: 'repo' }
 	| { kind: 'image' }
 	| { kind: 'database'; engine: DatabaseEngine }
-	| { kind: 'empty' };
+	| { kind: 'empty' }
+	/** The template gallery, or one template in it. */
+	| { kind: 'template'; template?: string };
 
 export const DATABASES: { engine: DatabaseEngine; label: string }[] = [
 	{ engine: 'postgres', label: 'PostgreSQL' },

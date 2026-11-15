@@ -807,7 +807,37 @@ A gallery of ready-to-go infrastructure: pick a template, and a whole stack land
   - **Contents:** services, images pinned by digest, volumes, ports, public domains, healthchecks and start order.
   - **Variables:** `${{Service.KEY}}` references, plus generated values: random secrets, and secrets derived from others, like JWTs signed with a generated key.
   - **Questions:** a few to ask on install, e.g. a site URL or an SMTP host.
-- **Supabase first:**
+- **Templates ✅** (unit-tested; the e2e test adds n8n as a new project and Uptime Kuma to an empty canvas):
+  - **The format** (`Template` in `@tramline/contracts`):
+    - **Services:** an image pinned by digest, deploy, networking and volume settings, and a canvas position. A service can be marked as a database, so it's backed up with the engine's dump and can have the TCP proxy.
+    - **Variables:** plain values, `${{ service.KEY }}` references to the stack's other services (renamed on install to match the canvas), and `${{ answers.KEY }}` for the answers.
+    - **Generated values:** random secrets, and HS256 JWTs signed with one of them. They're new in each environment and sealed unless marked public.
+    - **Questions:** each can be required, have a default, or be secret (a password field, and the answer is sealed).
+    - **Notes:** shown once it's installed.
+  - **Config files:** a service's deploy settings can carry files (up to 20 of 64 KB each). The agent writes them into the container before it starts, and `${{ KEY }}` in them is the service's own variable, resolved when it deploys.
+  - **Install:** its services are added staged in every environment, or deployed straight away in one. An API token needs the `deploy` scope for the second.
+  - **Where:**
+    - **Projects → From a template** makes a project for it.
+    - On a canvas: **Template…** in the right-click menu, each template by name in ⌘K, and **Start from a template** on an empty canvas.
+    - The dialog shows the services (which ones are public or have a volume), what they reserve, the questions, and **Add to canvas** or **Deploy**, warning when deploying also sends other staged changes.
+  - **API and MCP:** `GET /templates`, `POST /projects/:id/templates`, and the `list_templates` and `add_template` tools.
+  - **In the gallery:** Supabase, n8n (with its own Postgres) and Uptime Kuma.
+  - **Not yet:**
+    - a sign-in-gated route to Studio and other private dashboards;
+    - start order: services that need the database restart until it's ready;
+    - Mailcow and the AI sandbox;
+    - organization-private templates and exporting an environment as one.
+- **Supabase ✅** (not yet deployed end to end; that's the exit test):
+  - **The stack:** Supabase's Postgres, Auth, PostgREST, Realtime, Storage (files on a volume), postgres-meta, Studio and Kong 2.8.1, after Supabase's own Docker setup. Kong's config and the database's setup SQL are config files.
+  - **Kong:** routes Studio, the dashboard, `/pg/` and Realtime's tenant API nowhere, so only the Supabase API is on its public domain.
+  - **Generated per environment:**
+    - the JWT secret, with the anon and service_role keys signed with it;
+    - the database password;
+    - Realtime's keys and pg-meta's key;
+    - Storage's S3 keys;
+    - a seed for pgsodium's root key, which the database writes on each start, so Vault secrets survive a new container.
+  - **Left out:** imgproxy, Logflare and Vector, Supavisor and Edge Functions.
+- **Supabase (as planned):**
   - **The stack:** Postgres, Auth (GoTrue), the REST API (PostgREST), Realtime, Storage, the meta API and Studio, behind its Kong gateway.
   - **Generated values:** the JWT secret, and anon and service-role keys signed with it.
   - **Reaching it:** one public domain on the gateway, and Postgres through the TLS-only TCP proxy for outside tools.

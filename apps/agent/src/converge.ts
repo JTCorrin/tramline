@@ -388,6 +388,7 @@ export class Converger {
 				`ssl_key_file=${TLS_DIR}/server.key`
 			],
 			files: [
+				...(spec.files ?? []),
 				{ path: `${TLS_DIR}/server.crt`, content: Buffer.from(cert), mode: 0o644, ...owner },
 				{ path: `${TLS_DIR}/server.key`, content: Buffer.from(key), mode: 0o600, ...owner }
 			]
