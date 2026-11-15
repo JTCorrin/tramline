@@ -36,7 +36,8 @@ test('a new project from a template lands on its canvas, staged, with its notes'
 	await page.getByTestId('service-panel').getByRole('tab', { name: 'Variables' }).click();
 	const key = page.getByTestId('variables').locator('li').filter({ hasText: 'N8N_ENCRYPTION_KEY' });
 	await expect(key).toContainText(/sealed/i);
-	await expect(page.getByTestId('variables')).toContainText('Europe/London');
+	// values are masked until revealed; the answer itself is checked in the unit tests
+	await expect(page.getByTestId('variables')).toContainText('GENERIC_TIMEZONE');
 });
 
 test('an empty canvas offers templates, and the palette lists them by name', async ({ page }) => {
