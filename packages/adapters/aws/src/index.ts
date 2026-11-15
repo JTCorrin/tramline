@@ -8,7 +8,15 @@ import {
 } from '@tramline/adapter-sdk';
 import { z } from 'zod';
 import { AwsClient, AwsError, type ClientOptions } from './client';
-import { EGRESS_PER_GB, onDemandPrices, PriceCache } from './pricing';
+import {
+	EGRESS_PER_GB,
+	lowestSpot,
+	onDemandPrices,
+	PriceCache,
+	SPOT_PRICES_FOR_MS,
+	spotPrices,
+	type SpotPrices
+} from './pricing';
 import { items, text, type XmlNode } from './xml';
 
 /**
@@ -24,8 +32,12 @@ import { items, text, type XmlNode } from './xml';
  * (UDP 51820); an edge node also joins `tramline-edge`, which opens TCP 80
  * and 443. See docs/adapters/aws.md for the IAM policy.
  *
- * Offers carry on-demand Linux prices from the Price List API (see
- * pricing.ts), or null when the policy doesn't allow `pricing:GetProducts`.
+ * Offers carry on-demand Linux prices from the Price List API and the
+ * lowest current spot price across the region's zones (see pricing.ts), or
+ * null when the policy doesn't allow `pricing:GetProducts` or
+ * `ec2:DescribeSpotPriceHistory`. A spot node is a one-time spot request
+ * whose instance is terminated, not stopped, when AWS takes it back, so it
+ * goes the way a terminated instance does: `getNode` returns null.
  */
 
 export const TAG = 'tramline';
@@ -155,7 +167,7 @@ function toNode(instance: XmlNode, region: string): ProviderNode {
 				? 'running'
 				: state === 'pending'
 					? 'provisioning'
-					: state && ['stopping', 'stopped', 'shutting-down'].includes(state)
+					: state === 'stopping' || state === 'stopped'
 						? 'stopped'
 						: 'unknown',
 		address: text(instance, 'ipAddress'),
@@ -175,7 +187,12 @@ const NEXT_ZONE = new Set(['InsufficientInstanceCapacity', 'Unsupported']);
 
 export function awsAdapter(options: ClientOptions = {}) {
 	const client = (creds: AwsCredentials) => new AwsClient(creds, options);
-	const prices = new PriceCache(() => (options.now?.() ?? new Date()).getTime());
+	const now = () => options.now?.() ?? new Date();
+	const prices = new PriceCache(() => now().getTime());
+	const spotCache = new PriceCache<SpotPrices>(() => now().getTime(), {
+		forMs: SPOT_PRICES_FOR_MS,
+		shared: false
+	});
 
 	async function regions(api: AwsClient) {
 		const found = await api.call(HOME_REGION, 'DescribeRegions');
@@ -187,7 +204,9 @@ export function awsAdapter(options: ClientOptions = {}) {
 		try {
 			const found = await api.call(region, 'DescribeInstances', { 'InstanceId.1': instanceId });
 			const instance = items(items(found, 'reservationSet')[0], 'instancesSet')[0];
-			if (!instance || text(instance, 'instanceState', 'name') === 'terminated') return null;
+			const state = text(instance, 'instanceState', 'name');
+			// shutting-down only ever ends in terminated: a spot instance AWS took back, say
+			if (!instance || state === 'terminated' || state === 'shutting-down') return null;
 			return { region, instanceId, instance };
 		} catch (error) {
 			if (error instanceof AwsError && error.code === 'InvalidInstanceID.NotFound') return null;
@@ -199,7 +218,7 @@ export function awsAdapter(options: ClientOptions = {}) {
 		const reservations = await api.all(region, 'DescribeInstances', 'reservationSet', {
 			...filters({
 				[`tag:${TAG}`]: ['node'],
-				'instance-state-name': ['pending', 'running', 'stopping', 'stopped', 'shutting-down'],
+				'instance-state-name': ['pending', 'running', 'stopping', 'stopped'],
 				...extra
 			}),
 			MaxResults: '1000'
@@ -304,7 +323,7 @@ export function awsAdapter(options: ClientOptions = {}) {
 		},
 		credentials,
 		capabilities: {
-			spot: false,
+			spot: true,
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
@@ -348,14 +367,13 @@ export function awsAdapter(options: ClientOptions = {}) {
 				.sort(
 					(a, b) => a.vcpus - b.vcpus || a.memoryMb - b.memoryMb || a.name.localeCompare(b.name)
 				);
-			// never throws: without pricing:GetProducts the prices are just unknown
-			const hourly = await prices.get(region, creds.accessKeyId, () =>
-				onDemandPrices(
-					api,
-					region,
-					sizes.map((t) => t.name)
-				)
-			);
+			const names = sizes.map((t) => t.name);
+			// never throw: without pricing:GetProducts or ec2:DescribeSpotPriceHistory
+			// the prices are just unknown
+			const [hourly, spot] = await Promise.all([
+				prices.get(region, creds.accessKeyId, () => onDemandPrices(api, region, names)),
+				spotCache.get(region, creds.accessKeyId, () => spotPrices(api, region, names, now()))
+			]);
 			return sizes.map((t) => ({
 				id: t.name,
 				region,
@@ -366,8 +384,8 @@ export function awsAdapter(options: ClientOptions = {}) {
 				arch: 'amd64',
 				gpu: null,
 				hourly: hourly?.get(t.name) ?? null,
-				// the adapter only launches on-demand instances (capabilities.spot is false)
-				spotHourly: null,
+				// the cheapest zone's; a spot node tries that zone first
+				spotHourly: lowestSpot(spot, t.name),
 				egressPerGb: EGRESS_PER_GB
 			}));
 		},
@@ -381,6 +399,12 @@ export function awsAdapter(options: ClientOptions = {}) {
 			}
 			const { imageId, rootDevice } = await latestUbuntu(api, region);
 			const { vpcId, subnets } = await defaultSubnets(api, region);
+			if (spec.spot) {
+				// cheapest zone first, by the prices the offer was shown with; unpriced zones last
+				const zones = spotCache.peek(region, creds.accessKeyId)?.get(spec.offer);
+				const price = (zone: string) => zones?.get(zone) ?? Infinity;
+				subnets.sort((a, b) => price(a.zone) - price(b.zone) || 0);
+			}
 			const groupId = creds.openMeshPort ? await ensureSecurityGroup(api, region, vpcId) : null;
 			const userData = cloudInit({
 				url: spec.install.url,
@@ -396,6 +420,14 @@ export function awsAdapter(options: ClientOptions = {}) {
 						MinCount: '1',
 						MaxCount: '1',
 						UserData: Buffer.from(userData).toString('base64'),
+						// one-time, terminated when AWS takes it back; no max price, so up to on-demand
+						...(spec.spot
+							? {
+									'InstanceMarketOptions.MarketType': 'spot',
+									'InstanceMarketOptions.SpotOptions.SpotInstanceType': 'one-time',
+									'InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior': 'terminate'
+								}
+							: {}),
 						'NetworkInterface.1.DeviceIndex': '0',
 						'NetworkInterface.1.SubnetId': subnet.id,
 						'NetworkInterface.1.AssociatePublicIpAddress': 'true',
@@ -430,7 +462,7 @@ export function awsAdapter(options: ClientOptions = {}) {
 				}
 			}
 			throw new AdapterError(
-				`No availability zone in ${region} can run a ${spec.offer} right now (${lastError?.message}). Try another size or region.`
+				`No availability zone in ${region} can run a ${spec.spot ? 'spot ' : ''}${spec.offer} right now (${lastError?.message}). Try another size or region.`
 			);
 		},
 

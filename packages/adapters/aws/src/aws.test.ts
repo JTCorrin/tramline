@@ -8,7 +8,13 @@ import {
 	METADATA_ADDRESS,
 	type AwsCredentials
 } from './index';
-import { EGRESS_PER_GB, parseProduct, PRICING_URL } from './pricing';
+import {
+	EGRESS_PER_GB,
+	FAILURE_FOR_MS,
+	parseProduct,
+	PRICING_URL,
+	SPOT_PRICES_FOR_MS
+} from './pricing';
 import { parseXml, text } from './xml';
 
 /**
@@ -16,7 +22,8 @@ import { parseXml, text } from './xml';
  * its own, not with the client's code) and keeps instances, security groups
  * and their rules. Instances go pending → running, and shutting-down →
  * terminated, one describe at a time; terminated ones stay listed, as in EC2.
- * A fake Price List API answers GetProducts, checking its signature too.
+ * A fake Price List API answers GetProducts, checking its signature too, and
+ * DescribeSpotPriceHistory answers with two pages of current spot prices.
  */
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE';
@@ -50,6 +57,9 @@ let noDefaultVpc: boolean;
 let seq: number;
 let pricing: { body: Record<string, unknown>; target: string | null }[];
 let pricingReply: (() => Response | Promise<Response>) | null;
+let spotRequests: Record<string, string>[];
+let spotReply: (() => Response | Promise<Response>) | null;
+let spotQuota: boolean;
 
 function reset() {
 	instances = [
@@ -71,6 +81,9 @@ function reset() {
 	clock = NOW;
 	pricing = [];
 	pricingReply = null;
+	spotRequests = [];
+	spotReply = null;
+	spotQuota = false;
 }
 
 const xml = (action: string, body: string) =>
@@ -356,6 +369,32 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 			group.rules.push(rule);
 			return xml(action, '<return>true</return>');
 		}
+		case 'DescribeSpotPriceHistory': {
+			spotRequests.push(params);
+			if (spotReply) return spotReply();
+			const price = (type: string, zone: string, usd: string, at: string, os = 'Linux/UNIX') =>
+				`<instanceType>${type}</instanceType><productDescription>${os}</productDescription><spotPrice>${usd}</spotPrice><timestamp>${at}</timestamp><availabilityZone>${zone}</availabilityZone>`;
+			const page =
+				params.NextToken === 'spot-2'
+					? [price('m7i.large', 'us-east-1b', '0.035000', '2026-11-03T11:00:00.000Z')]
+					: [
+							price('t3.nano', 'us-east-1a', '0.001600', '2026-11-03T09:00:00.000Z'),
+							price('t3.nano', 'us-east-1b', '0.001900', '2026-11-03T10:00:00.000Z'),
+							price('t3.micro', 'us-east-1a', '0.003100', '2026-11-03T11:30:00.000Z'),
+							// an older change in the same zone, which the newer one replaced
+							price('t3.micro', 'us-east-1a', '0.005000', '2026-11-02T08:00:00.000Z'),
+							price('t3.micro', 'us-east-1b', '0.003500', '2026-11-03T07:00:00.000Z'),
+							price('t3.micro', 'us-east-1c', '0.000100', '2026-11-03T07:00:00.000Z', 'Windows'),
+							price('m7i.large', 'us-east-1a', '0.040000', '2026-11-03T06:00:00.000Z'),
+							// not one of the offered sizes
+							price('t3.2xlarge', 'us-east-1a', '0.010000', '2026-11-03T06:00:00.000Z')
+						];
+			return xml(
+				action,
+				`<spotPriceHistorySet>${items(page)}</spotPriceHistorySet>` +
+					(params.NextToken ? '<nextToken/>' : '<nextToken>spot-2</nextToken>')
+			);
+		}
 		case 'DescribeInstanceTypes': {
 			const all = [
 				['t3.micro', 2, 1024],
@@ -380,6 +419,9 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 					'InsufficientInstanceCapacity',
 					`We currently do not have sufficient ${params.InstanceType} capacity in the Availability Zone you requested`
 				);
+			}
+			if (spotQuota && params['InstanceMarketOptions.MarketType'] === 'spot') {
+				return awsError(400, 'MaxSpotInstanceCountExceeded', 'Max spot instance count exceeded');
 			}
 			const tags: Record<string, string> = {};
 			for (let n = 1; params[`TagSpecification.1.Tag.${n}.Key`]; n++) {
@@ -426,6 +468,9 @@ const hourly = async (a = fresh(), c = creds()) =>
 	Object.fromEntries((await a.listOffers(c, 'us-east-1')).map((o) => [o.id, o.hourly]));
 const PRICED = { 't3.nano': 0.0052, 't3.micro': 0.0104, 'm7i.large': 0.1008, 'c7i.xlarge': null };
 const UNPRICED = { 't3.nano': null, 't3.micro': null, 'm7i.large': null, 'c7i.xlarge': null };
+const SPOT = { 't3.nano': 0.0016, 't3.micro': 0.0031, 'm7i.large': 0.035, 'c7i.xlarge': null };
+const spotHourly = async (a = fresh(), c = creds()) =>
+	Object.fromEntries((await a.listOffers(c, 'us-east-1')).map((o) => [o.id, o.spotHourly]));
 
 const spec = (overrides: Partial<NodeSpec> = {}): NodeSpec => ({
 	name: 'aws-node',
@@ -532,11 +577,71 @@ describe('AWS adapter', () => {
 		});
 	});
 
-	it('has no spot prices, since it only launches on-demand instances', async () => {
-		expect(adapter.capabilities.spot).toBe(false);
-		const offers = await fresh().listOffers(creds(), 'us-east-1');
+	it('prices spot from the current Linux spot prices, the lowest across zones', async () => {
+		expect(adapter.capabilities.spot).toBe(true);
+		expect(await spotHourly()).toEqual(SPOT);
+		// both pages of one query in the region, for the offered sizes as of now
+		expect(spotRequests).toHaveLength(2);
+		const [first, second] = spotRequests;
+		expect(first).toMatchObject({
+			'ProductDescription.1': 'Linux/UNIX',
+			StartTime: NOW.toISOString(),
+			MaxResults: '1000',
+			'InstanceType.1': 't3.nano',
+			'InstanceType.2': 't3.micro',
+			'InstanceType.3': 'm7i.large',
+			'InstanceType.4': 'c7i.xlarge'
+		});
+		expect(first!.NextToken).toBeUndefined();
+		expect(second).toEqual({ ...first, NextToken: 'spot-2' });
+		expect(actions.filter((a) => a.endsWith('DescribeSpotPriceHistory'))).toEqual([
+			'us-east-1 DescribeSpotPriceHistory',
+			'us-east-1 DescribeSpotPriceHistory'
+		]);
+	});
+
+	it('keeps spot prices for an hour', async () => {
+		const priced = fresh();
+		expect(await spotHourly(priced)).toEqual(SPOT);
+		later(SPOT_PRICES_FOR_MS - MINUTE);
+		expect(await spotHourly(priced)).toEqual(SPOT);
+		expect(spotRequests).toHaveLength(2);
+		later(2 * MINUTE);
+		expect(await spotHourly(priced)).toEqual(SPOT);
+		expect(spotRequests).toHaveLength(4);
+		// on-demand prices are still a day old at most, so they weren't asked for again
+		expect(pricing).toHaveLength(2);
+	});
+
+	it('leaves spot prices unknown without ec2:DescribeSpotPriceHistory, and asks again after 10 minutes', async () => {
+		const priced = fresh();
+		denied.add('DescribeSpotPriceHistory');
+		const offers = await priced.listOffers(creds(), 'us-east-1');
 		expect(offers.map((o) => o.spotHourly)).toEqual([null, null, null, null]);
-		expect(actions.some((a) => a.endsWith('DescribeSpotPriceHistory'))).toBe(false);
+		expect(Object.fromEntries(offers.map((o) => [o.id, o.hourly]))).toEqual(PRICED);
+		denied.clear();
+		later(FAILURE_FOR_MS - MINUTE);
+		expect(await spotHourly(priced)).toEqual(UNPRICED);
+		expect(spotRequests).toHaveLength(0);
+		later(2 * MINUTE);
+		expect(await spotHourly(priced)).toEqual(SPOT);
+	});
+
+	it('leaves spot prices unknown on a timeout or junk, and keeps the last ones when a refresh fails', async () => {
+		for (const reply of [
+			() => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
+			() => new Response('<html>busy</html>', { status: 503 }),
+			() => new Response('not xml')
+		]) {
+			spotReply = reply;
+			expect(await spotHourly()).toEqual(UNPRICED);
+		}
+		spotReply = null;
+		const priced = fresh();
+		expect(await spotHourly(priced)).toEqual(SPOT);
+		later(SPOT_PRICES_FOR_MS + MINUTE);
+		spotReply = () => awsError(503, 'RequestLimitExceeded', 'Request limit exceeded.');
+		expect(await spotHourly(priced)).toEqual(SPOT);
 	});
 
 	it('reads only hourly, non-zero on-demand USD prices from a product', () => {
@@ -679,6 +784,65 @@ describe('AWS adapter', () => {
 		await expect(adapter.createNode(creds(), spec({ name: 'next' }))).rejects.toThrow(
 			/No availability zone in us-east-1 can run a t3\.micro.*Try another size or region/
 		);
+	});
+
+	it('runs a one-time spot instance, terminated when AWS takes it back, in the cheapest zone first', async () => {
+		const priced = fresh();
+		// nothing priced yet: zones in order
+		await priced.createNode(creds(), spec({ name: 'early', spot: true }));
+		expect(instances.at(-1)!.params['NetworkInterface.1.SubnetId']).toBe('subnet-a');
+
+		await priced.listOffers(creds(), 'us-east-1');
+		const node = await priced.createNode(creds(), spec({ spot: true, offer: 'm7i.large' }));
+		const { params, tags } = instances.at(-1)!;
+		expect(params).toMatchObject({
+			InstanceType: 'm7i.large',
+			'InstanceMarketOptions.MarketType': 'spot',
+			'InstanceMarketOptions.SpotOptions.SpotInstanceType': 'one-time',
+			'InstanceMarketOptions.SpotOptions.InstanceInterruptionBehavior': 'terminate',
+			// m7i.large is cheaper in us-east-1b
+			'NetworkInterface.1.SubnetId': 'subnet-b',
+			'MetadataOptions.HttpTokens': 'required'
+		});
+		// no max price: it pays the spot price, up to on-demand
+		expect(Object.keys(params).some((k) => k.includes('MaxPrice'))).toBe(false);
+		expect(tags).toEqual({ tramline: 'node', Name: 'aws-node' });
+
+		// still the next zone when that one is full
+		full.add('subnet-b');
+		await priced.createNode(creds(), spec({ name: 'full', spot: true, offer: 'm7i.large' }));
+		expect(instances.at(-1)!.params['NetworkInterface.1.SubnetId']).toBe('subnet-a');
+		full.add('subnet-a');
+		await expect(
+			priced.createNode(creds(), spec({ name: 'none', spot: true, offer: 'm7i.large' }))
+		).rejects.toThrow(/can run a spot m7i\.large/);
+		full.clear();
+
+		// AWS takes it back: shutting down, then terminated, and gone either way
+		expect(await priced.getNode(creds(), node.id)).toMatchObject({ status: 'provisioning' });
+		instances.find((i) => node.id.endsWith(i.id))!.state = 'shutting-down';
+		expect(await priced.getNode(creds(), node.id)).toBeNull();
+		expect(await priced.getNode(creds(), node.id)).toBeNull();
+		expect((await priced.listNodes(creds())).map((n) => n.id)).not.toContain(node.id);
+		await expect(priced.destroyNode(creds(), node.id)).resolves.toBeUndefined();
+		// its name is free for the replacement
+		await priced.createNode(creds(), spec({ spot: true }));
+	});
+
+	it('runs an on-demand instance without market options', async () => {
+		await adapter.createNode(creds(), spec());
+		await adapter.createNode(creds(), spec({ name: 'off', spot: false }));
+		for (const { params } of instances.slice(-2)) {
+			expect(Object.keys(params).some((k) => k.startsWith('InstanceMarketOptions'))).toBe(false);
+		}
+	});
+
+	it('explains the spot quota, which is separate from the on-demand one', async () => {
+		spotQuota = true;
+		await expect(adapter.createNode(creds(), spec({ spot: true }))).rejects.toThrow(
+			/spot vCPU quota in us-east-1.*separate from the on-demand one/
+		);
+		await adapter.createNode(creds(), spec());
 	});
 
 	it('won’t reuse a name, needs a default VPC, and can leave the mesh port alone', async () => {

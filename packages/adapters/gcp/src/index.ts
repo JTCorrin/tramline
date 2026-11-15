@@ -16,7 +16,8 @@ import { loadRates, PREMIUM_EGRESS_PER_GB, priceOf, type RateTable } from './pri
  * no service account of their own, and the `tramline` label and network
  * tag; the adapter only ever deletes VMs with the label. A firewall rule
  * opens the mesh port (UDP 51820) to VMs with the tag. An edge node also gets
- * the `tramline-edge` tag, which another rule opens TCP 80 and 443 to.
+ * the `tramline-edge` tag, which another rule opens TCP 80 and 443 to. A spot
+ * node is a Spot VM, which Google deletes rather than stops when it takes it back.
  *
  * A region is offered as a whole; the VM goes in its first zone that has
  * the machine type and room for it. See docs/adapters/gcp.md for the roles.
@@ -31,6 +32,18 @@ export const MESH_PORT = 51820;
 /** The network tag of VMs that serve public domains, and the ports it opens. */
 export const EDGE_TAG = 'tramline-edge';
 export const EDGE_PORTS = ['80', '443'];
+/** The label a Spot VM also gets, so it can be told apart in the console. */
+export const SPOT_LABEL = 'tramline-spot';
+/**
+ * Makes a Spot VM. Google only allows TERMINATE and no automatic restart for
+ * one; DELETE means a reclaimed VM is gone, so getNode returns null.
+ */
+export const SPOT_SCHEDULING = {
+	provisioningModel: 'SPOT',
+	instanceTerminationAction: 'DELETE',
+	automaticRestart: false,
+	onHostMaintenance: 'TERMINATE'
+};
 export const DEFAULT_IMAGE = 'projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64';
 /** The address Google's metadata server gives the VM's first public interface. */
 export const METADATA_ADDRESS =
@@ -357,7 +370,7 @@ export function gcpAdapter(options: GcpOptions = {}) {
 		},
 		credentials,
 		capabilities: {
-			spot: false,
+			spot: true,
 			arch: ['amd64'],
 			autoProvision: true,
 			gpus: false,
@@ -419,9 +432,8 @@ export function gcpAdapter(options: GcpOptions = {}) {
 					arch: 'amd64',
 					gpu: null,
 					hourly: prices && priceOf(prices, m, region, 'OnDemand'),
-					// Spot VMs aren't offered (capabilities.spot is false), so neither is their price
-					spotHourly:
-						prices && adapter.capabilities.spot ? priceOf(prices, m, region, 'Preemptible') : null,
+					// from the "Spot Preemptible" SKUs; null when the catalog has none for the family
+					spotHourly: prices && priceOf(prices, m, region, 'Preemptible'),
 					// a published constant, so known even when the catalog isn't
 					egressPerGb: PREMIUM_EGRESS_PER_GB
 				}));
@@ -453,7 +465,7 @@ export function gcpAdapter(options: GcpOptions = {}) {
 					name,
 					description: `Tramline node ${spec.name}`,
 					machineType: `zones/${zone}/machineTypes/${spec.offer}`,
-					labels: { [LABEL]: 'node' },
+					labels: { [LABEL]: 'node', ...(spec.spot ? { [SPOT_LABEL]: 'true' } : {}) },
 					tags: { items: [LABEL] },
 					disks: [
 						{
@@ -475,7 +487,9 @@ export function gcpAdapter(options: GcpOptions = {}) {
 					metadata: { items: [{ key: 'user-data', value: userData }] },
 					// the VM needs no Google Cloud access of its own
 					serviceAccounts: [],
-					shieldedInstanceConfig: { enableSecureBoot: true, enableVtpm: true }
+					shieldedInstanceConfig: { enableSecureBoot: true, enableVtpm: true },
+					// a Spot VM Google takes back is deleted, disk and all, rather than stopped
+					...(spec.spot ? { scheduling: SPOT_SCHEDULING } : {})
 				};
 				try {
 					await api.wait(await api.call('POST', `zones/${zone}/instances`, body));

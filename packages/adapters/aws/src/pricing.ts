@@ -1,15 +1,17 @@
 import { z } from 'zod';
 import type { AwsClient } from './client';
+import { items, text } from './xml';
 
 /**
  * On-demand prices from the AWS Price List Query API. It only lives in a few
  * regions; us-east-1 is the one every account can call, and it answers for
- * every region. Spot prices aren't fetched: the adapter doesn't launch spot
- * instances (its `capabilities.spot` is false).
+ * every region. Spot prices come from EC2's DescribeSpotPriceHistory in the
+ * region itself: the current price of each size in each availability zone.
  *
  * Prices are a nice-to-have: anything that goes wrong (a policy without
- * `pricing:GetProducts`, a timeout, a response that doesn't parse) leaves
- * them unknown rather than failing `listOffers`.
+ * `pricing:GetProducts` or `ec2:DescribeSpotPriceHistory`, a timeout, a
+ * response that doesn't parse) leaves them unknown rather than failing
+ * `listOffers`.
  */
 
 export const PRICING_URL = 'https://api.pricing.us-east-1.amazonaws.com/';
@@ -29,6 +31,8 @@ const MAX_PAGES = 10;
 export const EGRESS_PER_GB = 0.09;
 
 export const PRICES_FOR_MS = 24 * 60 * 60_000;
+/** Spot prices move with demand, so they're asked for again within the hour. */
+export const SPOT_PRICES_FOR_MS = 60 * 60_000;
 export const FAILURE_FOR_MS = 10 * 60_000;
 
 const Page = z.object({
@@ -128,32 +132,99 @@ export async function onDemandPrices(api: AwsClient, region: string, types: stri
 	return prices;
 }
 
+/** EC2's name for Linux in the spot price history; VPC-only accounts are priced under it too. */
+export const SPOT_PRODUCT = 'Linux/UNIX';
+/** 1,000 a page is a few pages for the curated sizes in every zone; it stops a runaway nextToken. */
+const MAX_SPOT_PAGES = 10;
+
+/** Spot prices by instance type, then availability zone, in $/hour. */
+export type SpotPrices = Map<string, Map<string, number>>;
+
+/**
+ * The current Linux spot price of the given instance types in each of the
+ * region's availability zones. A start time of now gives each size and
+ * zone's latest price change, the price in effect now; should a later one
+ * also come back, the latest wins.
+ */
+export async function spotPrices(
+	api: AwsClient,
+	region: string,
+	types: string[],
+	now: Date
+): Promise<SpotPrices> {
+	const prices: SpotPrices = new Map();
+	if (!types.length) return prices;
+	const wanted = new Set(types);
+	const seen = new Map<string, string>();
+	let token: string | null = null;
+	let pages = 0;
+	do {
+		const page = await api.call(region, 'DescribeSpotPriceHistory', {
+			'ProductDescription.1': SPOT_PRODUCT,
+			StartTime: now.toISOString(),
+			MaxResults: '1000',
+			...Object.fromEntries(types.map((type, i) => [`InstanceType.${i + 1}`, type])),
+			...(token ? { NextToken: token } : {})
+		});
+		for (const entry of items(page, 'spotPriceHistorySet')) {
+			const type = text(entry, 'instanceType');
+			const zone = text(entry, 'availabilityZone');
+			const hourly = Number(text(entry, 'spotPrice'));
+			const at = text(entry, 'timestamp') ?? '';
+			if (!type || !zone || !wanted.has(type)) continue;
+			if (text(entry, 'productDescription') !== SPOT_PRODUCT) continue;
+			if (!Number.isFinite(hourly) || hourly <= 0) continue;
+			const key = `${type} ${zone}`;
+			if ((seen.get(key) ?? '') > at) continue;
+			seen.set(key, at);
+			const zones = prices.get(type) ?? new Map<string, number>();
+			zones.set(zone, hourly);
+			prices.set(type, zones);
+		}
+		token = text(page, 'nextToken');
+	} while (token && ++pages < MAX_SPOT_PAGES);
+	return prices;
+}
+
+/** A size's lowest spot price across the zones, or null when none has one. */
+export function lowestSpot(prices: SpotPrices | null, type: string) {
+	const zones = prices?.get(type);
+	return zones?.size ? Math.min(...zones.values()) : null;
+}
+
 /**
  * Prices by region, kept in the process. List prices are the same for every
  * account, so a success is shared; a failure is usually one account's
- * policy, so it's kept per access key, and for less time.
+ * policy, so it's kept per access key, and for less time. Spot prices are
+ * kept per account (`shared: false`): zone names like us-east-1a map to
+ * different zones in different accounts.
  */
-export class PriceCache {
-	readonly #ok = new Map<string, { at: number; prices: Map<string, number> }>();
+export class PriceCache<T = Map<string, number>> {
+	readonly #ok = new Map<string, { at: number; prices: T }>();
 	readonly #failed = new Map<string, number>();
+	readonly #forMs: number;
+	readonly #shared: boolean;
 
-	constructor(private now: () => number = Date.now) {}
+	constructor(
+		private now: () => number = Date.now,
+		{ forMs = PRICES_FOR_MS, shared = true }: { forMs?: number; shared?: boolean } = {}
+	) {
+		this.#forMs = forMs;
+		this.#shared = shared;
+	}
 
 	/** The region's prices, fetched when they're missing or stale; null when they can't be had. */
-	async get(
-		region: string,
-		account: string,
-		fetchPrices: () => Promise<Map<string, number>>
-	): Promise<Map<string, number> | null> {
+	async get(region: string, account: string, fetchPrices: () => Promise<T>): Promise<T | null> {
 		const now = this.now();
-		const ok = this.#ok.get(region);
-		if (ok && now - ok.at < PRICES_FOR_MS) return ok.prices;
 		const key = `${region}\n${account}`;
+		const okKey = this.#shared ? region : key;
+		const ok = this.#ok.get(okKey);
+		if (ok && now - ok.at < this.#forMs) return ok.prices;
 		const failed = this.#failed.get(key);
 		if (failed !== undefined && now - failed < FAILURE_FOR_MS) return ok?.prices ?? null;
 		try {
 			const prices = await fetchPrices();
-			this.#ok.set(region, { at: this.now(), prices });
+			this.#ok.set(okKey, { at: this.now(), prices });
 			this.#failed.delete(key);
 			return prices;
 		} catch {
@@ -161,5 +232,10 @@ export class PriceCache {
 			// stale prices beat none
 			return ok?.prices ?? null;
 		}
+	}
+
+	/** What's kept for the region, however old, without asking AWS. */
+	peek(region: string, account: string): T | null {
+		return this.#ok.get(this.#shared ? region : `${region}\n${account}`)?.prices ?? null;
 	}
 }

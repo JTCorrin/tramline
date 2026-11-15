@@ -226,6 +226,8 @@ function explain(code: string | null, message: string, region: string) {
 			return 'AWS is still verifying this account; it can create instances once that finishes (usually within minutes, sometimes hours).';
 		case 'VcpuLimitExceeded':
 			return `The account’s vCPU quota in ${region} doesn’t allow this: ${message} Request more under Service Quotas → EC2, or pick a smaller size.`;
+		case 'MaxSpotInstanceCountExceeded':
+			return `The account’s spot vCPU quota in ${region} doesn’t allow this: ${message} It’s separate from the on-demand one; request more under Service Quotas → EC2 (“All Standard … Spot Instance Requests”), or use on-demand.`;
 		default:
 			return `AWS: ${message}`;
 	}
