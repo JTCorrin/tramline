@@ -8,7 +8,7 @@ test('a new project from a template lands on its canvas, staged, with its notes'
 	page
 }) => {
 	await signUp(page);
-	await page.getByRole('button', { name: 'From a template' }).click();
+	await page.getByRole('button', { name: 'From a template', exact: true }).click();
 	const dialog = page.getByTestId('template-dialog');
 	const gallery = dialog.getByTestId('template-gallery');
 	await expect(gallery.getByTestId('template-card')).toHaveCount(3);
