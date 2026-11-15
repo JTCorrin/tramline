@@ -82,8 +82,10 @@ export function fakeAdapter(
 		},
 		async createNode(creds, spec) {
 			await check(creds);
-			if (!(await adapter.listOffers(creds, spec.region)).some((o) => o.id === spec.offer)) {
-				throw new AdapterError(`No size ${spec.offer} in ${spec.region}`);
+			const offer = (await adapter.listOffers(creds, spec.region)).find((o) => o.id === spec.offer);
+			if (!offer) throw new AdapterError(`No size ${spec.offer} in ${spec.region}`);
+			if (spec.spot && offer.spotHourly === null) {
+				throw new AdapterError(`${offer.name} has no spot machines`);
 			}
 			const machine = {
 				id: `fake-${++seq}`,

@@ -77,9 +77,17 @@ export interface NodeSpec {
 	 * (`ds=nocloud;s=<seedUrl>`). It works until the machine enrolls.
 	 */
 	seedUrl: string;
+	/**
+	 * Make a spot (preemptible) machine, at the offer's `spotHourly`. Only
+	 * asked of adapters whose `capabilities.spot` is true. When the provider
+	 * takes a spot machine back, it's deleted rather than stopped, so
+	 * `getNode` returns null and the control plane replaces it.
+	 */
+	spot?: boolean;
 }
 
 export interface AdapterCapabilities {
+	/** `createNode` makes spot machines when `spec.spot` is set, and offers carry spot prices. */
 	spot: boolean;
 	arch: Arch[];
 	/** Machines can be created through the provider's API, without a person. */
