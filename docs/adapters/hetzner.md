@@ -12,7 +12,7 @@ You need two things: a project API token with Read & Write, and a Tramline URL t
 Enter it under Nodes → Compute accounts → Hetzner Cloud. Tramline stores it encrypted and never shows it again. Testing the account checks the token with a read; whether it can write only shows when the first server is created, so pick Read & Write.
 
 - **Limits:** new accounts can only run a few servers at once. Hetzner raises the limit on request.
-- **Prices:** offers show Hetzner's hourly price without VAT, in your account's currency (usually euros). Tramline shows the number as it is, without converting it.
+- **Prices:** offers show Hetzner's hourly price without VAT, converted from your account's currency (usually euros) to US dollars at the European Central Bank's daily reference rate, so they compare with other providers'. Hetzner bills you in your own currency, so what you pay moves with the rate. The rates are kept for a day; if they can't be fetched (`www.ecb.europa.eu`), sizes are still offered, without prices.
 
 ## 2. Reaching Tramline
 

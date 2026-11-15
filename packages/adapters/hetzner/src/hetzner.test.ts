@@ -1,6 +1,7 @@
 import { conformance, type NodeSpec } from '@tramline/adapter-sdk';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { API } from './client';
+import { RATES_URL } from './currency';
 import { hetznerAdapter, serverName, type HetznerCredentials } from './index';
 
 /**
@@ -67,6 +68,9 @@ let requests: string[];
 let readOnly: boolean;
 let unavailable: Set<string>;
 let failing: Set<string>;
+/** The account's currency, as `GET /pricing` gives it; and whether the ECB's rates can be had. */
+let currency: string;
+let ratesDown: boolean;
 let seq: number;
 
 const LOCATIONS = [
@@ -165,6 +169,8 @@ function reset() {
 	keys = new Map();
 	actions = new Map();
 	requests = [];
+	currency = 'EUR';
+	ratesDown = false;
 	readOnly = false;
 	unavailable = new Set();
 	failing = new Set();
@@ -226,6 +232,7 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 	const body = init.body ? JSON.parse(String(init.body)) : null;
 	let m: RegExpMatchArray | null;
 
+	if (path === 'pricing') return json({ pricing: { currency, vat_rate: '19.00' } });
 	if (path === 'locations') return page(url, 'locations', byName(url, LOCATIONS));
 	if (path === 'server_types') return page(url, 'server_types', byName(url, SERVER_TYPES));
 	if (path === 'images') {
@@ -400,8 +407,17 @@ async function handle(url: URL, init: RequestInit): Promise<Response> {
 	return apiError(405, 'method_not_allowed', `unexpected ${method} ${path}`);
 }
 
-const fetcher = (async (input: string | URL, init: RequestInit = {}) =>
-	handle(new URL(String(input)), init)) as typeof fetch;
+// a dollar is worth less than a euro: 1.1 to 1, and 160 yen to the euro
+const RATES = `<gesmes:Envelope><Cube><Cube time='2026-11-10'>
+	<Cube currency='USD' rate='1.1000'/><Cube currency='JPY' rate='160.00'/>
+</Cube></Cube></gesmes:Envelope>`;
+
+const fetcher = (async (input: string | URL, init: RequestInit = {}) => {
+	if (String(input) === RATES_URL) {
+		return ratesDown ? new Response('down', { status: 503 }) : new Response(RATES);
+	}
+	return handle(new URL(String(input)), init);
+}) as typeof fetch;
 
 const adapter = hetznerAdapter({ fetch: fetcher, pollMs: 1 });
 
@@ -473,7 +489,7 @@ describe('Hetzner adapter', () => {
 		]);
 	});
 
-	it('offers the location’s current sizes up to 16 vCPUs, x86 and Arm, with net hourly prices', async () => {
+	it('offers the location’s current sizes up to 16 vCPUs, x86 and Arm, with net hourly prices in dollars', async () => {
 		const offers = await adapter.listOffers(creds(), 'fsn1');
 		expect(offers.map((o) => o.id)).toEqual(['cpx12', 'cpx22', 'cx22', 'cx23', 'cax11', 'cx53']);
 		expect(offers.find((o) => o.id === 'cx23')).toEqual({
@@ -485,17 +501,36 @@ describe('Hetzner adapter', () => {
 			diskGb: 40,
 			arch: 'amd64',
 			gpu: null,
-			hourly: 0.0059,
+			// €0.0059 at $1.10 a euro
+			hourly: 0.00649,
 			spotHourly: null,
 			egressPerGb: null
 		});
-		expect(offers.find((o) => o.id === 'cax11')).toMatchObject({ arch: 'arm64', hourly: 0.0062 });
+		expect(offers.find((o) => o.id === 'cax11')).toMatchObject({ arch: 'arm64', hourly: 0.00682 });
 		expect(offers[0]).toMatchObject({ memoryMb: 512 });
 
 		// deprecated in fsn1 only; a location only gets the sizes sold there
 		expect((await adapter.listOffers(creds(), 'ash')).map((o) => o.id)).toEqual(['cpx11', 'cpx22']);
 		expect((await adapter.listOffers(creds(), 'sin')).map((o) => o.id)).toEqual(['cpx22']);
 		await expect(adapter.listOffers(creds(), 'moon')).rejects.toThrow(/no region called moon/);
+	});
+
+	it('leaves prices out rather than passing euros off as dollars', async () => {
+		const price = async (a = hetznerAdapter({ fetch: fetcher, pollMs: 1 })) =>
+			(await a.listOffers(creds(), 'fsn1')).find((o) => o.id === 'cx23')?.hourly;
+		// an account billed in dollars needs no rate
+		currency = 'USD';
+		ratesDown = true;
+		expect(await price()).toBe(0.0059);
+		// no rate: no price, and the sizes are still listed
+		currency = 'EUR';
+		expect(await price()).toBeNull();
+		ratesDown = false;
+		currency = 'JPY';
+		expect(await price()).toBeCloseTo((0.0059 * 1.1) / 160, 6);
+		// a currency the ECB doesn't list
+		currency = 'XYZ';
+		expect(await price()).toBeNull();
 	});
 
 	it('creates a labelled server with its address in cloud-init, behind the mesh firewall, with no password', async () => {
