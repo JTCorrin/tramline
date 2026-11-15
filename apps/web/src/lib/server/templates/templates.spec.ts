@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { deployment } from '../db/schema';
 import * as changes from '../domain/changes';
 import * as environments from '../domain/environments';
 import { getStaged } from '../domain/staging';
@@ -211,7 +212,35 @@ describe('installing a template', () => {
 			memoryMb: 8192,
 			docker: { version: '27.0.0' }
 		};
+		// an agent from before config files can't take a service that has them
 		recordHello(ctx.db, local.id, hello);
+		recordReport(ctx.db, local.id, { containers: [], revision: null });
+		const early = install(ctx, project.id);
+		for (const s of early.services) {
+			services.stageConfig(ctx, s.id, env.id, { build: { scan: 'off' } });
+		}
+		changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		const waiting = ctx.db
+			.select()
+			.from(deployment)
+			.all()
+			.find((d) => d.serviceId === early.services[1]!.id)!;
+		expect(waiting).toMatchObject({
+			status: 'queued',
+			message:
+				"Waiting for a node whose agent can write this service's config files: update the agent on local"
+		});
+		// the database has no files, so it runs
+		expect(
+			ctx.db
+				.select()
+				.from(deployment)
+				.all()
+				.find((d) => d.serviceId === early.services[0]!.id)!.nodeId
+		).toBe(local.id);
+
+		recordHello(ctx.db, local.id, { ...hello, features: ['files'] });
 		recordReport(ctx.db, local.id, { containers: [], revision: null });
 		// deployed straight away (scanned first, as every image is)
 		const scanned = install(ctx, project.id, { deploy: env.id });
@@ -231,10 +260,10 @@ describe('installing a template', () => {
 		const [file] = api.files!;
 		expect(file!.path).toBe('/etc/api/config.yml');
 		expect(file!.content).toMatch(
-			/^site: https:\/\/shop\.example\nkey: [\w-]+\.[\w-]+\.[\w-]+\ndb: db-2\.production\.tramline\.internal\n$/
+			/^site: https:\/\/shop\.example\nkey: [\w-]+\.[\w-]+\.[\w-]+\ndb: db-3\.production\.tramline\.internal\n$/
 		);
 		expect(api.env.DATABASE_URL).toMatch(
-			/^postgres:\/\/postgres:[A-Za-z0-9]{24}@db-2\.production\.tramline\.internal:5432\/postgres$/
+			/^postgres:\/\/postgres:[A-Za-z0-9]{24}@db-3\.production\.tramline\.internal:5432\/postgres$/
 		);
 		// a container without files doesn't carry the field
 		expect(containers.find((c) => c.serviceId === result.services[0]!.id)!.files).toBeUndefined();
