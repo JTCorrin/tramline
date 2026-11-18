@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from '#lib/clipboard.js';
 	import { invalidateAll } from '$app/navigation';
 	import { api } from '#lib/api.js';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -467,13 +468,8 @@
 								<code class="flex-1 overflow-x-auto rounded bg-muted px-2 py-1.5 font-mono"
 									>{updateCommand()}</code
 								>
-								<Button
-									size="sm"
-									variant="outline"
-									onclick={() =>
-										navigator.clipboard
-											.writeText(updateCommand())
-											.then(() => toast.success('Copied'))}>Copy</Button
+								<Button size="sm" variant="outline" onclick={() => copyText(updateCommand())}
+									>Copy</Button
 								>
 							</div>
 						</div>

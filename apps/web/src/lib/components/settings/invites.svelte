@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from '#lib/clipboard.js';
 	import { api } from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -7,7 +8,6 @@
 	import { reportError } from '#lib/forms.js';
 	import { timeAgo } from '#lib/format.js';
 	import type { Invite } from '@tramline/client';
-	import { toast } from 'svelte-sonner';
 
 	let { invites: initial }: { invites: Invite[] } = $props();
 
@@ -50,12 +50,7 @@
 				<p class="font-medium">Send this link; it won't be shown again.</p>
 				<div class="flex gap-2">
 					<Input readonly value={created} class="font-mono text-xs" data-testid="invite-link" />
-					<Button
-						variant="outline"
-						onclick={() =>
-							navigator.clipboard.writeText(created!).then(() => toast.success('Copied'))}
-						>Copy</Button
-					>
+					<Button variant="outline" onclick={() => copyText(created!)}>Copy</Button>
 				</div>
 				<Button variant="ghost" size="sm" onclick={() => (created = null)}>Done</Button>
 			</div>

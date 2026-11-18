@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from '#lib/clipboard.js';
 	import { api } from '#lib/api.js';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
 	import { Badge } from '#lib/components/ui/badge/index.js';
@@ -190,12 +191,7 @@
 						class="font-mono text-xs"
 						data-testid="join-command"
 					/>
-					<Button
-						variant="outline"
-						onclick={() =>
-							navigator.clipboard.writeText(joining!.command).then(() => toast.success('Copied'))}
-						>Copy</Button
-					>
+					<Button variant="outline" onclick={() => copyText(joining!.command)}>Copy</Button>
 				</div>
 				<p class="text-xs text-muted-foreground">
 					It installs nothing but the agent, which runs as a container with access to the Docker
