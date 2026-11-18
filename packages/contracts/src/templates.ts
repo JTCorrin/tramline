@@ -73,22 +73,36 @@ export const TemplateService = z.object({
 });
 export type TemplateService = z.input<typeof TemplateService>;
 
-export const Template = z.object({
-	id: KEY,
-	/** Bumped whenever what it installs changes. */
-	version: z.number().int().positive(),
-	name: z.string().min(1).max(60),
-	/** One line for the gallery. */
-	tagline: z.string().min(1).max(120),
-	description: z.string().max(2000),
-	icon: z.string().max(40),
-	tags: z.array(z.string().max(30)).max(8).default([]),
-	docsUrl: z.url().optional(),
-	questions: z.array(TemplateQuestion).max(10).default([]),
-	services: z.array(TemplateService).min(1).max(20),
-	/** What to know once it's added, e.g. where Studio is. Shown after install. */
-	notes: z.array(z.string().max(500)).max(10).default([])
-});
+export const Template = z
+	.object({
+		id: KEY,
+		/** Bumped whenever what it installs changes. */
+		version: z.number().int().positive(),
+		name: z.string().min(1).max(60),
+		/** One line for the gallery. */
+		tagline: z.string().min(1).max(120),
+		description: z.string().max(2000),
+		icon: z.string().max(40),
+		tags: z.array(z.string().max(30)).max(8).default([]),
+		docsUrl: z.url().optional(),
+		questions: z.array(TemplateQuestion).max(10).default([]),
+		services: z.array(TemplateService).min(1).max(20),
+		/** What to know once it's added, e.g. where Studio is. Shown after install. */
+		notes: z.array(z.string().max(500)).max(10).default([])
+	})
+	.superRefine((template, ctx) => {
+		const keys = new Set(template.services.map((s) => s.key));
+		for (const s of template.services) {
+			for (const key of s.config.deploy?.dependsOn ?? []) {
+				if (!keys.has(key) || key === s.key) {
+					ctx.addIssue({
+						code: 'custom',
+						message: `${s.key} starts after ${key}, which isn't another of the template's services`
+					});
+				}
+			}
+		}
+	});
 export type Template = z.infer<typeof Template>;
 export type TemplateInput = z.input<typeof Template>;
 
@@ -125,6 +139,8 @@ export const InstallTemplate = z.object({
 	answers: z.record(z.string(), z.string().max(500)).default({}),
 	/** Where on the canvas its first service goes. */
 	position: z.object({ x: z.number(), y: z.number() }).optional(),
+	/** Run all its services on this node (its id); null lets Tramline choose one with room for each. */
+	node: z.string().nullable().default(null),
 	/** Deploy it in this environment straight away, instead of leaving it staged. */
 	deploy: z.string().nullable().default(null)
 });

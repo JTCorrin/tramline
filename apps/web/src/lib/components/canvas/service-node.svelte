@@ -9,6 +9,7 @@
 	import { cn } from '#lib/utils.js';
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+	import ServerIcon from '@lucide/svelte/icons/server';
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import ServiceIcon from './service-icon.svelte';
 	import StatusBadge from './status-badge.svelte';
@@ -44,6 +45,16 @@
 	<div class="mt-4 flex items-center justify-between gap-2">
 		<div class="flex items-center gap-2">
 			<StatusBadge status={service.status} />
+			{#if service.nodes.length}
+				<span
+					class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+					title="Runs on {service.nodes.join(', ')}"
+					data-testid="service-nodes"
+				>
+					<ServerIcon class="size-3.5 shrink-0" />
+					<span class="truncate">{service.nodes.join(', ')}</span>
+				</span>
+			{/if}
 			{#if service.volumeMountPath}
 				<span
 					class="flex items-center gap-1 text-xs text-muted-foreground"

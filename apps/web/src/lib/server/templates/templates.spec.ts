@@ -5,12 +5,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as changes from '../domain/changes';
+import { deployment } from '../db/schema';
+import * as canvas from '../domain/canvas';
 import * as environments from '../domain/environments';
 import { getStaged } from '../domain/staging';
 import * as projects from '../domain/projects';
 import * as services from '../domain/services';
 import * as variables from '../domain/variables';
 import { buildDesiredState } from '../nodes/desired';
+import { containerName } from '../nodes/names';
 import { reconcile } from '../nodes/reconciler';
 import { ensureLocalNode, recordHello, recordReport } from '../nodes/registry';
 import { seedCtx, testSecrets } from '../testing';
@@ -46,6 +49,7 @@ const stack: TemplateInput = {
 			config: {
 				networking: { port: 8080, publicDomain: true },
 				deploy: {
+					dependsOn: ['db'],
 					memoryRequestMb: 128,
 					cpuRequest: 0.5,
 					files: [
@@ -187,6 +191,40 @@ describe('installing a template', () => {
 		expect(second.notes).toEqual([
 			'Open ${{ api-2.TRAMLINE_PUBLIC_DOMAIN }} once it has deployed.'
 		]);
+		// and its start order follows the rename
+		expect(
+			services.getConfig(ctx, second.services[1]!.id, env.id).effective.deploy.dependsOn
+		).toEqual(['db-2']);
+	});
+
+	it('runs every service on the node chosen, and the canvas says where each one is', () => {
+		const { ctx, project, env } = setup();
+		const { node: local } = ensureLocalNode(ctx.db, ctx.settings.dataDir);
+		expect(() => install(ctx, project.id, { node: 'node_nope' })).toThrow();
+		const result = install(ctx, project.id, { node: local.id });
+		for (const s of result.services) {
+			expect(services.getConfig(ctx, s.id, env.id).effective.deploy.node).toBe(local.id);
+		}
+		expect(canvas.get(ctx, env.id).services.map((s) => s.nodes)).toEqual([[], []]);
+		recordHello(ctx.db, local.id, {
+			protocol: 1,
+			agentVersion: 'test',
+			hostname: 'box',
+			os: 'linux',
+			arch: 'amd64',
+			cpus: 4,
+			memoryMb: 8192,
+			docker: { version: '27.0.0' },
+			features: ['files']
+		});
+		recordReport(ctx.db, local.id, { containers: [], revision: null });
+		for (const s of result.services) {
+			services.stageConfig(ctx, s.id, env.id, { build: { scan: 'off' } });
+		}
+		changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		// the database is placed; the api waits for it to be online
+		expect(canvas.get(ctx, env.id).services.map((s) => s.nodes)).toEqual([['local'], []]);
 	});
 
 	it('asks for required answers, and takes none that smuggle in a reference', () => {
@@ -224,6 +262,30 @@ describe('installing a template', () => {
 			services.stageConfig(ctx, s.id, env.id, { build: { scan: 'off' } });
 		}
 		changes.deploy(ctx, env.id);
+		reconcile(ctx.db, ctx.settings);
+		// the api starts after the database: once it's online
+		const dbDeployment = ctx.db
+			.select()
+			.from(deployment)
+			.all()
+			.find((d) => d.serviceId === result.services[0]!.id)!;
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [
+				{
+					name: containerName(dbDeployment.id, 0),
+					deploymentId: dbDeployment.id,
+					replica: 0,
+					state: 'running',
+					healthy: null,
+					exitCode: null,
+					restartCount: 0,
+					error: null,
+					startedAt: new Date(Date.now() - 10_000).toISOString()
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
 		reconcile(ctx.db, ctx.settings);
 
 		const containers = buildDesiredState(ctx.db, testSecrets, ctx.settings, local.id).containers;

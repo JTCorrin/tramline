@@ -36,7 +36,9 @@ export const CanvasService = z.object({
 	/** Public URL once a domain has been generated. */
 	url: z.string().nullable(),
 	/** `host:port` of its TCP proxy, once deployed with one. */
-	tcpProxy: z.string().nullable()
+	tcpProxy: z.string().nullable(),
+	/** The nodes its latest deployment runs on (or was placed on), by name. */
+	nodes: z.array(z.string())
 });
 
 export type CanvasService = z.infer<typeof CanvasService>;

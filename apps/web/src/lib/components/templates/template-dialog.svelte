@@ -11,7 +11,13 @@
 	import GlobeIcon from '@lucide/svelte/icons/globe';
 	import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
 	import Loader2Icon from '@lucide/svelte/icons/loader-2';
-	import type { InstalledTemplate, Position, TemplateSummary } from '@tramline/contracts';
+	import * as Select from '#lib/components/ui/select/index.js';
+	import type {
+		InstalledTemplate,
+		NodeSummary,
+		Position,
+		TemplateSummary
+	} from '@tramline/contracts';
 	import TemplateIcon from './template-icon.svelte';
 
 	/**
@@ -41,6 +47,9 @@
 
 	const client = api();
 	let templates = $state<TemplateSummary[] | null>(null);
+	let nodes = $state<NodeSummary[]>([]);
+	const ANY = 'any';
+	let runOn = $state(ANY);
 	let answers = $state<Record<string, string>>({});
 	let projectName = $state('');
 	let pending = $state<'add' | 'deploy' | null>(null);
@@ -53,6 +62,22 @@
 		if (!open || templates) return;
 		client.templates.list().then((list) => (templates = list), reportError);
 	});
+
+	$effect(() => {
+		if (!open) return;
+		// what's online now, to say where it can run
+		client.nodes.getAll().then(
+			(list) => (nodes = list.filter((n) => n.status === 'online' && !n.cordoned)),
+			() => (nodes = [])
+		);
+	});
+
+	const free = (n: NodeSummary) => (n.memoryMb ?? 0) - n.allocatedMemoryMb;
+	/** Nodes with room for the whole template at once. */
+	const roomy = $derived(
+		template ? nodes.filter((n) => free(n) >= template.requests.memoryMb) : []
+	);
+	const chosenNode = $derived(nodes.find((n) => n.id === runOn));
 
 	// a fresh form for each template
 	$effect(() => {
@@ -91,6 +116,7 @@
 				template: template.id,
 				answers,
 				position,
+				node: runOn === ANY ? null : runOn,
 				deploy: deploy ? target.environmentId : null
 			});
 			done = result;
@@ -164,6 +190,41 @@
 							<Input id="template-project" required maxlength={64} bind:value={projectName} />
 						</Field.Field>
 					{/if}
+					<Field.Field>
+						<Field.Label for="template-node">Run on</Field.Label>
+						<Select.Root type="single" value={runOn} onValueChange={(v) => (runOn = v)}>
+							<Select.Trigger id="template-node" class="w-full" aria-label="Run on"
+								>{chosenNode
+									? `${chosenNode.name} · ${memory(free(chosenNode))} free`
+									: 'Any node with room'}</Select.Trigger
+							>
+							<Select.Content>
+								<Select.Item value={ANY}>Any node with room</Select.Item>
+								{#each nodes as n (n.id)}
+									<Select.Item value={n.id}>{n.name} · {memory(free(n))} free</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						<Field.Description data-testid="template-placement">
+							{#if chosenNode}
+								Every service runs on {chosenNode.name}{free(chosenNode) <
+								template.requests.memoryMb
+									? `, which has ${memory(free(chosenNode))} free of the ${memory(template.requests.memoryMb)} they reserve: some will wait for room`
+									: ''}.
+							{:else if !nodes.length}
+								No node is online, so its services will wait for one.
+							{:else if roomy.length}
+								Tramline puts each service on a node with room. {roomy
+									.map((n) => n.name)
+									.join(', ')}
+								{roomy.length === 1 ? 'has' : 'have'} room for all of them.
+							{:else}
+								No single node has {memory(template.requests.memoryMb)} free, so its services will be
+								spread out, and some may wait for room.
+							{/if}
+							The canvas shows where each one lands.
+						</Field.Description>
+					</Field.Field>
 					{#each template.questions as q (q.key)}
 						<Field.Field>
 							<Field.Label for="template-{q.key}">

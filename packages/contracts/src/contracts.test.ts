@@ -314,6 +314,17 @@ describe('templates', () => {
 		});
 	});
 
+	it('starts a service only after others of its own services', () => {
+		const db = { key: 'db', name: 'db', image: `postgres:17${digest}` };
+		const api = (dependsOn: string[]) => ({
+			...base.services[0],
+			config: { deploy: { dependsOn } }
+		});
+		expect(Template.safeParse({ ...base, services: [db, api(['db'])] }).success).toBe(true);
+		expect(Template.safeParse({ ...base, services: [db, api(['cache'])] }).success).toBe(false);
+		expect(Template.safeParse({ ...base, services: [db, api(['api'])] }).success).toBe(false);
+	});
+
 	it('needs images pinned by digest and keys that are names', () => {
 		expect(
 			Template.safeParse({ ...base, services: [{ ...base.services[0], image: 'acme/api:1' }] })

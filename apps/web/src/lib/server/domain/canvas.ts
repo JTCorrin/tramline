@@ -1,4 +1,7 @@
 import type { Canvas } from '@tramline/contracts';
+import { desc, eq } from 'drizzle-orm';
+import { deployment, node } from '../db/schema';
+import { nodesOf } from '../nodes/placement';
 import { publicUrl, tcpProxyHost } from '../settings';
 import { requireEnvironment } from './access';
 import type { Ctx } from './context';
@@ -13,6 +16,31 @@ export function get(ctx: Ctx, environmentId: string): Canvas {
 	const state = loadEnvironmentState(ctx.db, ctx.secrets, env);
 	const statuses = latestStatuses(ctx.db, environmentId);
 	const idByName = new Map(state.services.map((svc) => [svc.service.name, svc.service.id]));
+	const nodeNames = new Map(
+		ctx.db
+			.select({ id: node.id, name: node.name })
+			.from(node)
+			.all()
+			.map((n) => [n.id, n.name])
+	);
+	// where each service's latest deployment runs, or was placed
+	const placedOn = new Map<string, string[]>();
+	for (const row of ctx.db
+		.select({
+			serviceId: deployment.serviceId,
+			nodeId: deployment.nodeId,
+			replicaNodes: deployment.replicaNodes
+		})
+		.from(deployment)
+		.where(eq(deployment.environmentId, environmentId))
+		.orderBy(desc(deployment.createdAt), desc(deployment.id))
+		.all()) {
+		if (placedOn.has(row.serviceId)) continue;
+		placedOn.set(
+			row.serviceId,
+			nodesOf(row).flatMap((id) => (nodeNames.has(id) ? [nodeNames.get(id)!] : []))
+		);
+	}
 
 	const edges: Canvas['edges'] = [];
 	for (const svc of state.services) {
@@ -40,7 +68,8 @@ export function get(ctx: Ctx, environmentId: string): Canvas {
 			tcpProxy:
 				svc.tcpPort && svc.applied?.networking.tcpProxy
 					? `${tcpProxyHost(ctx.settings, svc.domain)}:${svc.tcpPort}`
-					: null
+					: null,
+			nodes: placedOn.get(svc.service.id) ?? []
 		})),
 		edges
 	};
