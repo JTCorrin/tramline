@@ -793,6 +793,27 @@ What a hostile workload tries, from a published account of one on another platfo
     - The cheapest plans can be IPv6-only or limited to a few regions. The mesh and edge nodes need IPv4, so sizes say which they have.
     - 512 MB to 1 GB of memory leaves little room once Docker and the agent are running, so placement counts that overhead.
     - Included transfer: most plans include some traffic out each month, so the egress estimate charges only what's past it.
+- **Agent37 (planned; reviewed from [its docs](https://www.agent37.com/docs) in November 2026):** persistent Linux sandboxes and full VMs, billed by the minute from a prepaid wallet.
+  - **Price:**
+    - Compute is $0.80 per vCPU-month and $0.70 per GB of memory a month, and disk is $0.09 per GB-month.
+    - VMs cost 2.5× the sandbox rate: 2 vCPU / 4 GB is $11.36 a month, 4 / 16 GB $37.08, and 4 / 32 GB $66.16.
+    - So it's cheaper than DigitalOcean, Linode or Vultr for the same memory, and very cheap for memory-heavy sizes. It's not cheaper than Hetzner for small machines.
+    - A stopped or sleeping machine pays only for its disk.
+    - Egress isn't priced in the docs, so it's unknown until checked.
+  - **What a node needs:** the VM type, since sandboxes have no Docker or kernel of their own.
+    - The `agent37-ubuntu` image has Docker running, and VMs have `/dev/kvm`.
+    - Regions: `us`, `eu` (France or the UK) and `ap-south` (Mumbai). Outside the US, VMs are the only type.
+  - **The adapter:**
+    - **API:** REST at `api.agent37.com/v1`, with a bearer key. Machines are created with `POST /v1/instances` (template, `type: "vm"`, CPU, memory and disk) and deleted with `DELETE /v1/instances/{id}`.
+    - **Sizes:** five fixed shapes, priced from the published rates.
+    - **Enrolling:** there's no cloud-init or user data, so the adapter runs the install command through the exec API (`POST /v1/instances/{id}/exec`) once the machine is up. A post-restart hook (`~/.agent37/hooks/post-restart.sh`) brings the agent back, since a cold boot loses the running containers and custom images have no init system.
+    - **Errors:** a create without a day's balance in the wallet fails with `402 insufficient_balance`, which should come back as a message to top up.
+  - **To check before building:**
+    - **Mesh:** machines have no public IP or inbound UDP; they're reached through `{id}-{port}.agent37.app` over HTTPS. So a node can only join from behind NAT, which needs outbound UDP to another node (unknown) or a relay over TCP.
+    - **Edge nodes:** none, since TCP 80 and 443 can't be opened.
+    - **Egress price and rate limits.**
+    - **Sleep:** auto-sleep (`idle_timeout_seconds`) stays off, since a sleeping node looks offline.
+  - **Later:** sandboxes could back Phase 8.5's AI sandbox or a "runtime adapter" for providers that run the container for you, not nodes.
 - **As planned:**
   - Catalog sync jobs call each adapter's `listOffers`, GPU offers included, so the same card can be compared across providers. Behind them: AWS Price List Query API (already in the AWS adapter), GCP Cloud Billing Catalog API, Azure Retail Prices API (public), Hetzner API, and a Proxmox cost entered by the user. Results are cached in `price_offer` (vcpu, mem, arch, on-demand/spot $/hr, egress $/GB, fetchedAt).
   - Placement engine: requirements (cpu/mem/arch/region constraints) → use existing capacity first (zero marginal cost) → otherwise ranked offers, including an egress estimate for cross-group traffic.
