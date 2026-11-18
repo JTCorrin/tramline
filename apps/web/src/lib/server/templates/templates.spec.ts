@@ -6,7 +6,6 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { deployment } from '../db/schema';
 import * as changes from '../domain/changes';
-import { deployment } from '../db/schema';
 import * as canvas from '../domain/canvas';
 import * as environments from '../domain/environments';
 import { getStaged } from '../domain/staging';
@@ -259,24 +258,43 @@ describe('installing a template', () => {
 		}
 		changes.deploy(ctx, env.id);
 		reconcile(ctx.db, ctx.settings);
-		const waiting = ctx.db
-			.select()
-			.from(deployment)
-			.all()
-			.find((d) => d.serviceId === early.services[1]!.id)!;
-		expect(waiting).toMatchObject({
-			status: 'queued',
-			message:
-				"Waiting for a node whose agent can write this service's config files: update the agent on local"
-		});
-		// the database has no files, so it runs
-		expect(
+		const latest = (serviceId: string) =>
 			ctx.db
 				.select()
 				.from(deployment)
 				.all()
-				.find((d) => d.serviceId === early.services[0]!.id)!.nodeId
-		).toBe(local.id);
+				.filter((d) => d.serviceId === serviceId)
+				.at(-1)!;
+		// the database has no files, so it runs; the api starts after it
+		const earlyDb = latest(early.services[0]!.id);
+		expect(earlyDb.nodeId).toBe(local.id);
+		expect(latest(early.services[1]!.id).message).toBe(
+			'Waiting for db to be online, which it starts after'
+		);
+		recordReport(ctx.db, local.id, {
+			revision: null,
+			containers: [
+				{
+					name: containerName(earlyDb.id, 0),
+					deploymentId: earlyDb.id,
+					replica: 0,
+					state: 'running',
+					healthy: null,
+					exitCode: null,
+					restartCount: 0,
+					error: null,
+					startedAt: new Date(Date.now() - 10_000).toISOString()
+				}
+			]
+		});
+		reconcile(ctx.db, ctx.settings);
+		reconcile(ctx.db, ctx.settings);
+		// once it's online, the api still waits: this agent can't write its config files
+		expect(latest(early.services[1]!.id)).toMatchObject({
+			status: 'queued',
+			message:
+				"Waiting for a node whose agent can write this service's config files: update the agent on local"
+		});
 
 		recordHello(ctx.db, local.id, { ...hello, features: ['files'] });
 		recordReport(ctx.db, local.id, { containers: [], revision: null });
