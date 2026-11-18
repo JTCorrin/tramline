@@ -16,7 +16,13 @@ import { buildDesiredState, containerName } from './desired';
 import { RUN_TIMEOUT_MS, runContainerName } from './cron';
 import { readLogs } from './logs';
 import { volumeFor, volumeName } from './volumes';
-import { BUILD_TIMEOUT_MS, DEPLOY_TIMEOUT_MS, reconcile, STABLE_AFTER_MS } from './reconciler';
+import {
+	BUILD_TIMEOUT_MS,
+	DEPLOY_TIMEOUT_MS,
+	reconcile,
+	STABLE_AFTER_MS,
+	STARTUP_GRACE_MS
+} from './reconciler';
 import {
 	authenticate,
 	ensureLocalNode,
@@ -526,6 +532,62 @@ describe('reconciler and desired state', () => {
 		expect(() => changes.deploy(ctx, env.id)).toThrow(
 			'Set a port on whoami to give it a public domain'
 		);
+	});
+});
+
+describe('start order', () => {
+	it('waits for the services it starts after, then gives them time to finish starting', () => {
+		const { ctx, local, env, svc: db } = setup();
+		recordHello(ctx.db, local.id, hello);
+		const api = services.create(ctx, {
+			projectId: services.get(ctx, db.id).projectId,
+			kind: 'image',
+			source: { type: 'image', image: 'acme/api:1' },
+			name: 'api'
+		});
+		services.stageConfig(ctx, api.id, env.id, {
+			build: { scan: 'off' },
+			deploy: { dependsOn: [db.name, 'not-a-service'] }
+		});
+		changes.deploy(ctx, env.id);
+		recordReport(ctx.db, local.id, { revision: null, containers: [] });
+		reconcile(ctx.db, ctx.settings);
+		const latest = (serviceId: string) =>
+			ctx.db
+				.select()
+				.from(deployment)
+				.all()
+				.filter((d) => d.serviceId === serviceId)
+				.at(-1)!;
+		// a name that matches no service doesn't hold it up; the database does
+		expect(latest(api.id)).toMatchObject({
+			status: 'queued',
+			message: `Waiting for ${db.name} to be online, which it starts after`
+		});
+		expect(latest(db.id).nodeId).toBe(local.id);
+
+		recordReport(ctx.db, local.id, { revision: null, containers: [report(latest(db.id).id)] });
+		reconcile(ctx.db, ctx.settings);
+		expect(latest(db.id).status).toBe('active');
+		reconcile(ctx.db, ctx.settings);
+		expect(latest(api.id)).toMatchObject({ status: 'deploying', nodeId: local.id });
+
+		// crash-looping while the database finishes starting isn't a failure, for a while
+		const restarting = [
+			report(latest(db.id).id),
+			report(latest(api.id).id, { state: 'restarting', restartCount: 5, exitCode: 1 })
+		];
+		recordReport(ctx.db, local.id, { revision: null, containers: restarting });
+		reconcile(ctx.db, ctx.settings);
+		expect(latest(api.id)).toMatchObject({
+			status: 'deploying',
+			message: `Restarting while ${db.name}, not-a-service finish starting`
+		});
+		reconcile(ctx.db, ctx.settings, Date.now() + STARTUP_GRACE_MS + 1000);
+		expect(latest(api.id)).toMatchObject({
+			status: 'failed',
+			message: 'Crashed during startup (exit code 1)'
+		});
 	});
 });
 

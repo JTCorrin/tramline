@@ -133,6 +133,7 @@ export const supabase: TemplateInput = {
 				'supabase/gotrue:v2.197.0@sha256:1736a63078f5922b198c4cbe50f80ab9a2d3b54fe8b7b6cfb2e9dc5dbbc12c6b',
 			config: {
 				deploy: {
+					dependsOn: ['db'],
 					restartPolicy: 'always',
 					memoryRequestMb: 64,
 					cpuRequest: 0.05,
@@ -194,7 +195,12 @@ export const supabase: TemplateInput = {
 			image:
 				'postgrest/postgrest:v14.18@sha256:c7cd7e265a85b05248abf53f4473fcec7e327c282d0bd0cf60f1551996d09fcf',
 			config: {
-				deploy: { restartPolicy: 'always', memoryRequestMb: 64, cpuRequest: 0.1 },
+				deploy: {
+					dependsOn: ['db'],
+					restartPolicy: 'always',
+					memoryRequestMb: 64,
+					cpuRequest: 0.1
+				},
 				networking: { port: 3000 }
 			},
 			variables: {
@@ -219,6 +225,7 @@ export const supabase: TemplateInput = {
 				'supabase/realtime:v2.148.3@sha256:25cf375b9b7cb71d90cdf6e04a1a30996e39a8df866ebd0525bba1d959edc8d6',
 			config: {
 				deploy: {
+					dependsOn: ['db'],
 					restartPolicy: 'always',
 					memoryRequestMb: 256,
 					cpuRequest: 0.1,
@@ -260,6 +267,7 @@ export const supabase: TemplateInput = {
 				'supabase/storage-api:v1.89.12@sha256:8526956cb462e9f7d392e9848ec77133b2769982ed614e9753cc687e8e4339a6',
 			config: {
 				deploy: {
+					dependsOn: ['db', 'rest'],
 					restartPolicy: 'always',
 					memoryRequestMb: 128,
 					cpuRequest: 0.1,
@@ -341,6 +349,7 @@ export const supabase: TemplateInput = {
 				'supabase/postgres-meta:v0.100.0@sha256:145325b7e39f8ef4931d6e8cfd3f6f4d655de09d72a2ccc96d9513542c2202bd',
 			config: {
 				deploy: {
+					dependsOn: ['db'],
 					restartPolicy: 'always',
 					memoryRequestMb: 96,
 					cpuRequest: 0.05,
@@ -367,6 +376,7 @@ export const supabase: TemplateInput = {
 				'supabase/studio:2026.11.02-sha-a05e7ec@sha256:727a7f37b15f4c76c44e0d765e6be231d8d71c67f2933b2df8c6cbcc9b04c5d0',
 			config: {
 				deploy: {
+					dependsOn: ['meta'],
 					restartPolicy: 'always',
 					memoryRequestMb: 256,
 					cpuRequest: 0.1,

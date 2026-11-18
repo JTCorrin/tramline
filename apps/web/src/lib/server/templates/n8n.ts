@@ -28,7 +28,12 @@ export const n8n: TemplateInput = {
 			image:
 				'n8nio/n8n:2.47.7@sha256:b4b90747b81fcda7e76550c0d3aa7f0f64917a1e9573cff40d6834eaf2e0f8ea',
 			config: {
-				deploy: { restartPolicy: 'always', memoryRequestMb: 384, cpuRequest: 0.25 },
+				deploy: {
+					dependsOn: ['postgres'],
+					restartPolicy: 'always',
+					memoryRequestMb: 384,
+					cpuRequest: 0.25
+				},
 				networking: { port: 5678, publicDomain: true },
 				volume: { mountPath: '/home/node/.n8n' }
 			},

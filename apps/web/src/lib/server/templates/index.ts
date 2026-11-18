@@ -14,7 +14,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { createHmac, randomInt } from 'node:crypto';
 import { AppError, notFound } from '../api/errors';
-import { environment, sealedVariable, service, serviceInstance } from '../db/schema';
+import { environment, node, sealedVariable, service, serviceInstance } from '../db/schema';
 import { requireEnvironment, requireProject } from '../domain/access';
 import * as changes from '../domain/changes';
 import type { Ctx } from '../domain/context';
@@ -211,6 +211,12 @@ export function installTemplate(
 		const env = requireEnvironment(ctx, parsed.deploy);
 		if (env.projectId !== projectId) throw notFound('Environment');
 	}
+	if (
+		parsed.node &&
+		!ctx.db.select({ id: node.id }).from(node).where(eq(node.id, parsed.node)).get()
+	) {
+		throw notFound('Node');
+	}
 	const answers = answersFor(template, parsed.answers);
 
 	// names the services get: their own, made unique in the project
@@ -247,10 +253,17 @@ export function installTemplate(
 				path: f.path,
 				content: rewrite(f.content, names, answers)
 			}));
+			// start order names the services by what they're called on the canvas
+			const dependsOn = s.config.deploy?.dependsOn?.map((key) => names.get(key) ?? key);
 			const config = mergeConfig(DEFAULT_SERVICE_CONFIG, {
 				...s.config,
 				source: { type: 'image', image: s.image },
-				...(files ? { deploy: { ...s.config.deploy, files } } : {})
+				deploy: {
+					...s.config.deploy,
+					...(files ? { files } : {}),
+					...(dependsOn ? { dependsOn } : {}),
+					...(parsed.node ? { node: parsed.node } : {})
+				}
 			});
 			const row = tx
 				.insert(service)

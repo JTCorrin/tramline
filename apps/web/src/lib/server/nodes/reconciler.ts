@@ -1,5 +1,5 @@
 import type { GpuRequest } from '@tramline/contracts';
-import { and, asc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { build, container, deployment, node, nodePool, service } from '../db/schema';
 import { publish } from '../events';
@@ -20,6 +20,12 @@ export const DEPLOY_TIMEOUT_MS = 10 * 60_000;
 export const BUILD_TIMEOUT_MS = 30 * 60_000;
 /** Restarts tolerated while deploying before it counts as failed. */
 export const STARTUP_RESTARTS = 3;
+/**
+ * A service that starts after others (`deploy.dependsOn`) may crash-loop this
+ * long while they finish starting (a database setting itself up, say) before
+ * it counts as failed.
+ */
+export const STARTUP_GRACE_MS = 3 * 60_000;
 
 type DeploymentRow = typeof deployment.$inferSelect;
 type ContainerRow = typeof container.$inferSelect;
@@ -235,6 +241,14 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 	}
 	if (pin && !all.some((n) => n.id === pin)) {
 		return { message: 'Pinned to a node that no longer exists. Choose another in Settings.' };
+	}
+
+	// start order: wait for the services this one starts after to be online
+	const before = notOnline(db, dep);
+	if (before.length) {
+		return {
+			message: `Waiting for ${before.join(', ')} to be online, which ${before.length === 1 ? 'it starts' : 'they start'} after`
+		};
 	}
 
 	// spot machines take only work that allows them (and has no volume)
@@ -561,10 +575,14 @@ function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Tr
 	const failed = replicas.find((c) => c.state === 'error');
 	if (failed) return { status: 'failed', message: failed.error, log: `Failed: ${failed.error}` };
 
+	// one that starts after others gets a few minutes of restarts while they finish starting
+	const grace =
+		!!dep.config.deploy.dependsOn?.length &&
+		now - (dep.startedAt ?? dep.createdAt).getTime() < STARTUP_GRACE_MS;
 	const exited = replicas.find(
 		(c) =>
 			(c.state === 'exited' && dep.config.deploy.restartPolicy === 'never') ||
-			c.restartCount >= STARTUP_RESTARTS
+			(c.restartCount >= STARTUP_RESTARTS && !grace)
 	);
 	if (exited) {
 		const message = `Crashed during startup (exit code ${exited.exitCode ?? 'unknown'})`;
@@ -590,6 +608,11 @@ function progress(dep: DeploymentRow, replicas: ContainerRow[], now: number): Tr
 	}
 	if (replicas.length < wanted || replicas.some((c) => c.state === 'pulling')) {
 		return { message: 'Pulling image' };
+	}
+	if (grace && replicas.some((c) => c.restartCount >= STARTUP_RESTARTS)) {
+		return {
+			message: `Restarting while ${dep.config.deploy.dependsOn!.join(', ')} ${dep.config.deploy.dependsOn!.length === 1 ? 'finishes' : 'finish'} starting`
+		};
 	}
 	if (healthcheck && replicas.some((c) => c.state === 'running')) {
 		return { message: `Waiting for ${healthcheck} to return 200` };
@@ -646,4 +669,42 @@ function announce(db: Db, rows: DeploymentRow[]) {
 	for (const { projectId } of new Map(projects.map((p) => [p.projectId, p])).values()) {
 		publish({ type: 'deployments', projectId });
 	}
+}
+
+/**
+ * The services a deployment starts after (`deploy.dependsOn`, by name, in its
+ * environment) whose latest deployment isn't online yet. A name that matches
+ * no service doesn't hold it up.
+ */
+function notOnline(db: Db, dep: DeploymentRow): string[] {
+	const names = dep.config.deploy.dependsOn ?? [];
+	if (!names.length) return [];
+	const own = db
+		.select({ projectId: service.projectId })
+		.from(service)
+		.where(eq(service.id, dep.serviceId))
+		.get();
+	if (!own) return [];
+	const named = db
+		.select({ id: service.id, name: service.name })
+		.from(service)
+		.where(and(eq(service.projectId, own.projectId), inArray(service.name, names)))
+		.all();
+	return named
+		.filter((svc) => {
+			const latest = db
+				.select({ status: deployment.status })
+				.from(deployment)
+				.where(
+					and(
+						eq(deployment.serviceId, svc.id),
+						eq(deployment.environmentId, dep.environmentId),
+						ne(deployment.status, 'removed')
+					)
+				)
+				.orderBy(desc(deployment.createdAt))
+				.get();
+			return latest?.status !== 'active';
+		})
+		.map((svc) => svc.name);
 }

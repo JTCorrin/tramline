@@ -132,6 +132,12 @@ export const DeployConfig = z.object({
 	 */
 	spot: z.boolean().optional(),
 	/**
+	 * Services (by name, in the same environment) this one starts after: it
+	 * waits to be placed until each is online, and gets a few minutes of
+	 * restarts while they finish starting. Missing means none.
+	 */
+	dependsOn: z.array(z.string().min(1).max(64)).max(20).optional(),
+	/**
 	 * Config files written into the container before it starts. Not with a
 	 * read-only filesystem. Missing on services saved before files, which means none.
 	 */
