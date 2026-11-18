@@ -256,6 +256,18 @@ function schedule(db: Db, dep: DeploymentRow, cluster: Cluster, now: number): Tr
 		);
 	}
 
+	// config files: an agent from before them would start the container without its files
+	if (dep.config.deploy.files?.length && candidates.length) {
+		const capable = candidates.filter((n) => n.info?.features?.includes('files'));
+		if (!capable.length) {
+			const names = candidates.map((n) => n.name).join(', ');
+			return {
+				message: `Waiting for a node whose agent can write this service's config files: update the agent on ${names}`
+			};
+		}
+		candidates = capable;
+	}
+
 	// GPUs: only nodes that have enough of the right ones, and can hand them to containers
 	const gpus = gpuRequest(dep.config);
 	if (gpus && candidates.length) {

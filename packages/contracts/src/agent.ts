@@ -16,7 +16,8 @@ export const AGENT_PROTOCOL_VERSION = 1;
  * control plane can tell an old agent from a new one. Agents installed
  * before features were reported send none.
  */
-export const AGENT_FEATURES = ['tunnel', 'tunnel-routes', 'self-update'] as const;
+/** `files`: it writes a service's config files (`DesiredContainer.files`) into its containers. */
+export const AGENT_FEATURES = ['tunnel', 'tunnel-routes', 'self-update', 'files'] as const;
 export type AgentFeature = (typeof AGENT_FEATURES)[number];
 
 /** Sent when an agent starts, and whenever its environment changes. */
