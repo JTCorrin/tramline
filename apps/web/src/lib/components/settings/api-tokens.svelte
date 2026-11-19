@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { copyText } from '#lib/clipboard.js';
 	import { api } from '#lib/api.js';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Card from '#lib/components/ui/card/index.js';
@@ -74,12 +75,7 @@
 				<p class="font-medium">Copy your token now; it won't be shown again.</p>
 				<div class="flex gap-2">
 					<Input readonly value={created} class="font-mono text-xs" data-testid="new-token" />
-					<Button
-						variant="outline"
-						onclick={() =>
-							navigator.clipboard.writeText(created!).then(() => toast.success('Copied'))}
-						>Copy</Button
-					>
+					<Button variant="outline" onclick={() => copyText(created!)}>Copy</Button>
 				</div>
 				<Button variant="ghost" size="sm" onclick={() => (created = null)}>Done</Button>
 			</div>
